@@ -70,6 +70,24 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
 
     for i in 0..remotes.len() {
         if let Some(remote_name) = remotes.get(i) {
+            // Check if default fetch refspec exists, if not add it
+            let fetch_output = std::process::Command::new("git")
+                .args(["config", "--get", &format!("remote.{}.fetch", remote_name)])
+                .output()?;
+
+            if fetch_output.stdout.is_empty() {
+                // No fetch refspec exists, add the default one first
+                std::process::Command::new("git")
+                    .args([
+                        "config",
+                        "--add",
+                        &format!("remote.{}.fetch", remote_name),
+                        "+refs/heads/*:refs/remotes/{}/*",
+                    ])
+                    .status()?;
+            }
+
+            // Add AI fetch refspec
             let fetch_status = std::process::Command::new("git")
                 .args([
                     "config",
@@ -78,6 +96,25 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
                     "refs/ai/*:refs/ai/*",
                 ])
                 .status()?;
+
+            // Check if default push refspec exists, if not add it
+            let push_output = std::process::Command::new("git")
+                .args(["config", "--get", &format!("remote.{}.push", remote_name)])
+                .output()?;
+
+            if push_output.stdout.is_empty() {
+                // No push refspec exists, add the default one first
+                std::process::Command::new("git")
+                    .args([
+                        "config",
+                        "--add",
+                        &format!("remote.{}.push", remote_name),
+                        "refs/heads/*:refs/heads/*",
+                    ])
+                    .status()?;
+            }
+
+            // Add AI push refspec
             let push_status = std::process::Command::new("git")
                 .args([
                     "config",
