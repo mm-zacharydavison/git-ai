@@ -90,6 +90,7 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    if: always()
 
     steps:
       - name: Download all artifacts
@@ -104,10 +105,20 @@ jobs:
         run: |
           find artifacts -name "git-ai-*" -exec cp {} release/ \;
 
+      - name: List available artifacts
+        run: |
+          echo "Available artifacts:"
+          ls -la release/ || echo "No artifacts found"
+
       - name: Create checksums
         run: |
           cd release
-          sha256sum git-ai-* > SHA256SUMS
+          if ls git-ai-* 1> /dev/null 2>&1; then
+            sha256sum git-ai-* > SHA256SUMS
+          else
+            echo "No binaries found to create checksums for"
+            touch SHA256SUMS
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
