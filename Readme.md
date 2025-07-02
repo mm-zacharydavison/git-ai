@@ -43,7 +43,7 @@ curl -sSL https://gitai.run/install | bash
 git-ai init
 ```
 
-| If you are not using Claude Code, you'll need to manually mark AI contributions by running `git-ai checkpoint --author 'Cursor'` after approving generated code. Automatic support for Cursor, Codex, Copilot support coming soon!
+> If you are not using Claude Code, you'll need to manually mark AI contributions by running `git-ai checkpoint --author 'Cursor'` after approving generated code. Automatic support for Cursor, Codex, Copilot support coming soon!
 
 3. Add hooks to Claude Code
 
