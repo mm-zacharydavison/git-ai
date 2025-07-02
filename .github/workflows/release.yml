@@ -73,14 +73,29 @@ jobs:
           mkdir -p release
 
       - name: Copy binary to release directory
+        if: matrix.os == 'windows-latest'
         run: |
-          cp target/${{ matrix.target }}/release/git-ai${{ matrix.os == 'windows-latest' && '.exe' || '' }} release/${{ matrix.artifact_name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          cp target/${{ matrix.target }}/release/git-ai.exe release/${{ matrix.artifact_name }}.exe
 
-      - name: Upload artifact
+      - name: Copy binary to release directory (non-Windows)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/git-ai release/${{ matrix.artifact_name }}
+
+      - name: Upload artifact (Windows)
+        if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: release/${{ matrix.artifact_name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          path: release/${{ matrix.artifact_name }}.exe
+          retention-days: 30
+
+      - name: Upload artifact (non-Windows)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release/${{ matrix.artifact_name }}
           retention-days: 30
 
   build-macos-intel:
