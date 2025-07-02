@@ -19,7 +19,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: git-ai-windows-x64
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
             artifact_name: git-ai-macos-x64
           - os: macos-latest
