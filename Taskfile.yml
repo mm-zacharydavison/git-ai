@@ -1,6 +1,3 @@
-# Bob
-# Wrote
-# This
 version: "3"
 tasks:
   build:
@@ -17,31 +14,26 @@ tasks:
     cmds:
       - cargo clean
 
-  # Validates code compilation without producing binaries (faster than build)
   check:
     desc: Check code without building
     cmds:
       - cargo check
 
-  # Runs static analysis to catch common mistakes and improve code quality
   clippy:
     desc: Run clippy linter
     cmds:
       - cargo clippy -- -D warnings
 
-  # Automatically formats code according to Rust style guidelines
   fmt:
     desc: Format code
     cmds:
       - cargo fmt
 
-  # Verifies that code follows proper formatting without making changes
   fmt:check:
     desc: Check code formatting
     cmds:
       - cargo fmt -- --check
 
-  # Builds and installs the binary to user's local bin directory for system-wide use
   release:local:
     desc: Build release and install to user bin directory
     deps: [build]
