@@ -76,12 +76,12 @@ jobs:
         run: |
           cp target/${{ matrix.target }}/release/git-ai${{ matrix.os == 'windows-latest' && '.exe' || '' }} release/${{ matrix.artifact_name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
 
-                - name: Upload artifact
-            uses: actions/upload-artifact@v4
-            with:
-              name: ${{ matrix.artifact_name }}
-              path: release/${{ matrix.artifact_name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
-              retention-days: 30
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release/${{ matrix.artifact_name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          retention-days: 30
 
   build-macos-intel:
     name: Build for macOS Intel
