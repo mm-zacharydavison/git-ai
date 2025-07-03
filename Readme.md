@@ -55,7 +55,7 @@ git-ai init
 
 3. Add hooks to Claude Code [`.claude/settings.local.json`](https://docs.anthropic.com/en/docs/claude-code/hooks)
 
-```json file=".claude/settings.local.json"
+```json
 {
   "hooks": {
     "PreToolUse": [
