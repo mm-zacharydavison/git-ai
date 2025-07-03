@@ -9,9 +9,17 @@ git-ai blame src/log_fmt_authorship.rs
 
 <img src="blame-cmd.jpg" />
 
+### How it works
+
+`git-ai` uses checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system they call `checkpoint --author 'Claude Code' --model 'claude-4-sonnet'` to mark their contribution as AI-generated. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine.
+
+When you commit code, the base commit's checkpoints are compacted into a much smaller authorship log that is linked to your commit.
+
+<img src="diagram.svg" />
+
 ### Status - Preview Release
 
-_July 2 2025_ - **Seeking Feedback.** First version of the spec and Rust implimentation released
+_July 2 2025_ - **Seeking Feedback.** First version of the spec and Rust implementation released
 
 Next: **Finalize specification and start making PRs into Coding Agents**
 
@@ -21,17 +29,17 @@ Next: **Finalize specification and start making PRs into Coding Agents**
 
 **⭐️Git-native** - enhanced authorship is stored in Git and linked to commit hashes.
 
-**🫡Simple and explicit** - no file system monitors, keyloggers or batch-write hueristics. Supported Agents call `git-ai checkpoint --author "Claude Code " --model claude-4-sonnet` after
+**🫡Simple and explicit** - no file system monitors, keyloggers or batch-write heuristics. Supported Agents call `git-ai checkpoint --author "Claude Code" --model claude-4-sonnet` after writing code.
 
 **🤞Emerging Standard** - developers have tool choice, and they're likely using a mix of Claude Code, Codex, Cursor, etc.
 
-**⚡️Fast + Cross Platform** - implimented in Rust, as fast as `git status`, and built on [`libgit2`](https://github.com/libgit2/libgit2)
+**⚡️Fast + Cross Platform** - implemented in Rust, as fast as `git status`, and built on [`libgit2`](https://github.com/libgit2/libgit2)
 
 ---
 
-## Quickstart
+## Installation
 
-1. Install
+### Quick Install (Recommended)
 
 ```bash
 curl -sSL https://gitai.run/install | bash
@@ -76,19 +84,102 @@ git-ai init
 }
 ```
 
-4. Just work and commit, like you already do! Claude Code will mark its contributions after writing to the file system and the precommit hooks will mark your contributions.
+3. **Work and commit** - Claude Code will automatically mark its contributions after writing to the file system, and the pre-commit hooks will mark your contributions.
 
-5. After your first join commit, run `git-ai blame path/to/file` to see which lines were written by the AI.
+4. **View authorship** - after your first commit, run:
+
+```bash
+git-ai blame path/to/file
+```
+
+### For Other AI Tools
+
+> **Note**: If you're not using Claude Code, you'll need to manually mark AI contributions by running `git-ai checkpoint --author 'Your AI Tool'` after approving generated code. Automatic support for Cursor, Codex, Copilot coming soon!
 
 ---
 
-### The standard (draft)
+### The Standard (draft-1)
 
-stand by. pushing soon...
+Authorship logs, attached to commits, pushed to the `refs/ai/authorship` as blob objects.
 
-### Adding support to your agents
+- Authorship logs MUST be named `refs/ai/authorship/{commit-sha}`. MUST be the full SHA
+- Authorship logs SHOULD be saved for every commit, but implementations MUST not fail if they are not provided.
+- Authorship logs MUST be a valid JSON object with the following properties:
+  - `schema_version` MUST use semantic versioning. Options: `authorship/0.0.1`
+  - `files` MUST be a map of git file names -> `authors[]`
+    - `author` MUST be a string. Agents SHOULD use their full name. Human developers SHOULD use their `git.config.name`
+    - `lines` MUST be an array of added lines. Items MUST be an integer or a range tuple `[start-int, end-int]`. Range MUST be inclusive.
+    - `agent_metadata`
+      - SHOULD be `null` for humans
+      - SHOULD be an object for agents
+        - MUST have `model` (a string), that SHOULD be the model's name as it is provided to the API (ie `claude-4-sonnet`, not `Claude 4, Sonnet`).
+        - MAY have any other properties of any other type.
 
-stand by. pushing soon...
+```json file="refs/ai/authorship/f46b403b4f269bd2530b2d91a676449787886d02"
+{
+  "schema_version": "authorship/0.0.1",
+  "files": {
+    "src/main.rs": {
+      "file": "src/main.rs",
+      "authors": [
+        {
+          "author": "Claude Code",
+          "lines": [12, [91, 101]],
+          "agent_metadata": {
+            "model": "claude-4-sonnet"
+          }
+        },
+        {
+          "author": "Aidan Cunniffe",
+          "lines": [57],
+          "agent_metadata": null
+        }
+      ]
+    }
+  }
+}
+```
+
+**Coming next**: Prompt saving that maintains pointers to specific lines of code, across files.
+
+### Adding Support to Your Agents
+
+#### Via User-Installed CLI (Recommended)
+
+Adding `git-ai` support to a coding agent is easy. You just have to call `git-ai checkpoint` once before writing to the file system and once immediately after your writes have completed. The `checkpoint` command has similar performance to `git status` and will not noticeably slow down your Agent's performance (we're talking ~100ms).
+
+**Requirements:**
+
+- Agents SHOULD check if `git-ai` is installed when they start and only try to log checkpoints if the user has it installed.
+- Agents SHOULD write checkpoints to every git repo if the user has git-ai installed, no opt-in needed.
+- Agents MUST only call `git-ai checkpoint` command from within a git repo. At the root or any sub directory will work.
+- Agents MUST call `git-ai checkpoint` and wait for the command to finish before writing to the file system.
+- Agents MUST call `git-ai checkpoint` immediately after writing generated code to the file system.
+- Agents SHOULD not try to handle errors from the checkpoint command. Log them to the user to encourage them to fix or uninstall tool if it persists.
+
+#### Via Rust Library
+
+If you want to call `git-ai checkpoint` using a packaged rust binary and bindings, open an issue with runtime, language, and other details so we can provide the exact bindings you need. We'll provide a function like this that will run checkpoint without the CLI overhead.
+
+**Note**: We suggest you adopt the CLI approach first, help make this a standard by providing great feedback, and then set up the deeper integration.
+
+```rust
+pub fn checkpoint_internal(
+    repo_path: &str,
+    author: &str,
+    model: Option<&str>,
+    human_author: Option<&str>,
+) -> Result<(usize, usize, usize), GitAiError>
+```
+
+### Development Setup
+
+```bash
+git clone https://github.com/acunniffe/git-ai.git
+cd git-ai
+cargo build
+cargo test
+```
 
 ### License
 
