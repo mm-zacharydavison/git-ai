@@ -53,9 +53,9 @@ git-ai init
 
 > If you are not using Claude Code, you'll need to manually mark AI contributions by running `git-ai checkpoint --author 'Cursor'` after approving generated code. Automatic support for Cursor, Codex, Copilot support coming soon!
 
-3. Add hooks to Claude Code
+3. Add hooks to Claude Code [`.claude/settings.local.json`](https://docs.anthropic.com/en/docs/claude-code/hooks)
 
-```json file=".claude/settings.local.json"
+```json
 {
   "hooks": {
     "PreToolUse": [
