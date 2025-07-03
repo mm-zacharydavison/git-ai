@@ -70,23 +70,6 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
 
     for i in 0..remotes.len() {
         if let Some(remote_name) = remotes.get(i) {
-            // Check if default fetch refspec exists, if not add it
-            let fetch_output = std::process::Command::new("git")
-                .args(["config", "--get", &format!("remote.{}.fetch", remote_name)])
-                .output()?;
-
-            if fetch_output.stdout.is_empty() {
-                // No fetch refspec exists, add the default one first
-                std::process::Command::new("git")
-                    .args([
-                        "config",
-                        "--add",
-                        &format!("remote.{}.fetch", remote_name),
-                        "+refs/heads/*:refs/remotes/{}/*",
-                    ])
-                    .status()?;
-            }
-
             // Check if AI fetch refspec already exists
             let ai_fetch_output = std::process::Command::new("git")
                 .args([
@@ -119,35 +102,6 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
                     "AI fetch refspec already exists for remote: {}",
                     remote_name
                 );
-            }
-
-            // Check if default push refspec exists, if not add it
-            let push_output = std::process::Command::new("git")
-                .args([
-                    "config",
-                    "--get-all",
-                    &format!("remote.{}.push", remote_name),
-                ])
-                .output()?;
-
-            let default_push_exists = String::from_utf8_lossy(&push_output.stdout)
-                .lines()
-                .any(|line| line.trim() == "refs/heads/*:refs/heads/*");
-
-            if !default_push_exists {
-                // No default push refspec exists, add it first
-                let default_push_status = std::process::Command::new("git")
-                    .args([
-                        "config",
-                        "--add",
-                        &format!("remote.{}.push", remote_name),
-                        "refs/heads/*:refs/heads/*",
-                    ])
-                    .status()?;
-
-                if default_push_status.success() {
-                    println!("Added default push refspec for remote: {}", remote_name);
-                }
             }
 
             // Check if AI push refspec already exists
