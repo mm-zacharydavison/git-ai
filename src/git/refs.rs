@@ -117,6 +117,35 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
                 .lines()
                 .any(|line| line.trim() == "refs/ai/*:refs/ai/*");
 
+            // Check if default push refspec exists, if not add it
+            let default_push_output = std::process::Command::new("git")
+                .args([
+                    "config",
+                    "--get-all",
+                    &format!("remote.{}.push", remote_name),
+                ])
+                .output()?;
+
+            let default_push_exists = String::from_utf8_lossy(&default_push_output.stdout)
+                .lines()
+                .any(|line| line.trim() == "refs/heads/*:refs/heads/*");
+
+            if !default_push_exists {
+                // Add default push refspec first
+                let default_push_status = std::process::Command::new("git")
+                    .args([
+                        "config",
+                        "--add",
+                        &format!("remote.{}.push", remote_name),
+                        "refs/heads/*:refs/heads/*",
+                    ])
+                    .status()?;
+
+                if default_push_status.success() {
+                    println!("Added default push refspec for remote: {}", remote_name);
+                }
+            }
+
             // Add AI push refspec only if it doesn't exist
             if !ai_push_exists {
                 let push_status = std::process::Command::new("git")
