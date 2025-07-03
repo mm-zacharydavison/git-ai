@@ -87,15 +87,39 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
                     .status()?;
             }
 
-            // Add AI fetch refspec
-            let fetch_status = std::process::Command::new("git")
+            // Check if AI fetch refspec already exists
+            let ai_fetch_output = std::process::Command::new("git")
                 .args([
                     "config",
-                    "--add",
+                    "--get-all",
                     &format!("remote.{}.fetch", remote_name),
-                    "refs/ai/*:refs/ai/*",
                 ])
-                .status()?;
+                .output()?;
+
+            let ai_fetch_exists = String::from_utf8_lossy(&ai_fetch_output.stdout)
+                .lines()
+                .any(|line| line.trim() == "refs/ai/*:refs/ai/*");
+
+            // Add AI fetch refspec only if it doesn't exist
+            if !ai_fetch_exists {
+                let fetch_status = std::process::Command::new("git")
+                    .args([
+                        "config",
+                        "--add",
+                        &format!("remote.{}.fetch", remote_name),
+                        "refs/ai/*:refs/ai/*",
+                    ])
+                    .status()?;
+
+                if fetch_status.success() {
+                    println!("Added AI fetch refspec for remote: {}", remote_name);
+                }
+            } else {
+                println!(
+                    "AI fetch refspec already exists for remote: {}",
+                    remote_name
+                );
+            }
 
             // Check if default push refspec exists, if not add it
             let push_output = std::process::Command::new("git")
@@ -114,18 +138,35 @@ pub fn setup_ai_refspecs(repo: &Repository) -> Result<(), GitAiError> {
                     .status()?;
             }
 
-            // Add AI push refspec
-            let push_status = std::process::Command::new("git")
+            // Check if AI push refspec already exists
+            let ai_push_output = std::process::Command::new("git")
                 .args([
                     "config",
-                    "--add",
+                    "--get-all",
                     &format!("remote.{}.push", remote_name),
-                    "refs/ai/*:refs/ai/*",
                 ])
-                .status()?;
+                .output()?;
 
-            if push_status.success() && fetch_status.success() {
-                println!("Added AI refspecs for remote: {}", remote_name);
+            let ai_push_exists = String::from_utf8_lossy(&ai_push_output.stdout)
+                .lines()
+                .any(|line| line.trim() == "refs/ai/*:refs/ai/*");
+
+            // Add AI push refspec only if it doesn't exist
+            if !ai_push_exists {
+                let push_status = std::process::Command::new("git")
+                    .args([
+                        "config",
+                        "--add",
+                        &format!("remote.{}.push", remote_name),
+                        "refs/ai/*:refs/ai/*",
+                    ])
+                    .status()?;
+
+                if push_status.success() {
+                    println!("Added AI push refspec for remote: {}", remote_name);
+                }
+            } else {
+                println!("AI push refspec already exists for remote: {}", remote_name);
             }
         }
     }
