@@ -80,7 +80,7 @@ git-ai init
 
 5. After your first join commit, run `git-ai blame path/to/file` to see which lines were written by the AI.
 
---
+---
 
 ### The standard (draft)
 

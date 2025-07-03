@@ -5,6 +5,9 @@ use serde::{Deserializer, Serializer, ser::SerializeSeq};
 use std::collections::BTreeMap;
 use std::fmt;
 
+/// Semantic version for the authorship log format
+pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.1";
+
 /// Represents either a single line or a range of lines
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LineRange {
@@ -422,12 +425,14 @@ impl fmt::Display for FileAuthorship {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorshipLog {
     pub files: BTreeMap<String, FileAuthorship>,
+    pub schema_version: String,
 }
 
 impl AuthorshipLog {
     pub fn new() -> Self {
         Self {
             files: BTreeMap::new(),
+            schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
         }
     }
 
