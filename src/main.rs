@@ -99,10 +99,14 @@ fn main() {
         Commands::Blame { file } => {
             // Parse file argument for line range (e.g., "file.rs:10-20" or "file.rs:10")
             let (file_path, line_range) = parse_file_with_line_range(&file);
-            commands::blame(&repo, &file_path, line_range)
+            // Convert the blame result to unit result to match other commands
+            commands::blame(&repo, &file_path, line_range).map(|_| ())
         }
         Commands::PreCommit => commands::pre_commit(&repo, default_user_name),
-        Commands::PostCommit { force } => commands::post_commit(&repo, *force),
+        Commands::PostCommit { force } => {
+            commands::post_commit(&repo, *force).unwrap();
+            Ok(())
+        }
     } {
         eprintln!("Command failed: {}", e);
     }

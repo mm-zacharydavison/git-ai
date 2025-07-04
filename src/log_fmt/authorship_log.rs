@@ -445,7 +445,7 @@ impl AuthorshipLog {
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
         let mut authorship_log = AuthorshipLog::new();
-        for checkpoint in checkpoints {
+        for checkpoint in checkpoints.iter() {
             for entry in &checkpoint.entries {
                 let file_auth = authorship_log.get_or_create_file(&entry.file);
 

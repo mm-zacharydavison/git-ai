@@ -5,7 +5,7 @@ use crate::log_fmt::working_log::Checkpoint;
 use git2::Repository;
 use serde_json;
 
-pub fn run(repo: &Repository, force: bool) -> Result<(), GitAiError> {
+pub fn run(repo: &Repository, force: bool) -> Result<(String, AuthorshipLog), GitAiError> {
     let quiet = cfg!(debug_assertions);
 
     // Get the current commit SHA (the commit that was just made)
@@ -39,14 +39,10 @@ pub fn run(repo: &Repository, force: bool) -> Result<(), GitAiError> {
     let current_commit = repo.find_commit(head.target().unwrap())?;
 
     // Get the parent commit (base commit this was made on top of)
-    let parent_commit = match current_commit.parent(0) {
-        Ok(parent) => parent,
-        Err(_) => {
-            return Ok(());
-        }
+    let parent_sha = match current_commit.parent(0) {
+        Ok(parent) => parent.id().to_string(),
+        Err(_) => "initial".to_string(), // No parent commit found, use "initial" like in checkpoint.rs
     };
-
-    let parent_sha = parent_commit.id().to_string();
 
     // Pull all working log entries from the parent commit
     let parent_working_log = get_working_log(repo, &parent_sha)?;
@@ -83,7 +79,7 @@ pub fn run(repo: &Repository, force: bool) -> Result<(), GitAiError> {
         );
     }
 
-    Ok(())
+    Ok((ref_name, authorship_log))
 }
 
 /// Filter out working log entries for untracked files
