@@ -16,9 +16,16 @@ pub fn run(
     model: Option<&str>,
     human_author: Option<&str>,
 ) -> Result<(usize, usize, usize), GitAiError> {
-    let base_commit = match repo.head()?.target() {
-        Some(oid) => oid.to_string(),
-        None => "initial".to_string(),
+    // Robustly handle zero-commit repos
+    let base_commit = match repo.head() {
+        Ok(head) => {
+            if let Some(oid) = head.target() {
+                oid.to_string()
+            } else {
+                "initial".to_string()
+            }
+        }
+        Err(_) => "initial".to_string(),
     };
 
     // aidan
@@ -291,18 +298,16 @@ fn get_initial_checkpoint_entries(
 
     for file_path in files {
         let current_content = if Path::new(file_path).exists() {
-            // Read file as bytes first, then convert to string with UTF-8 lossy conversion
             match std::fs::read(file_path) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                Err(_) => String::new(), // If we can't read the file, treat as empty
+                Err(_) => String::new(),
             }
         } else {
             String::new()
         };
 
-        // Get the content from the base commit for comparison
         let base_content = if base_commit == "initial" {
-            String::new() // No base commit (initial commit)
+            String::new()
         } else {
             match git2::Oid::from_str(base_commit) {
                 Ok(oid) => {
@@ -313,14 +318,13 @@ fn get_initial_checkpoint_entries(
                             let blob = repo.find_blob(entry.id())?;
                             String::from_utf8_lossy(blob.content()).to_string()
                         }
-                        Err(_) => String::new(), // File doesn't exist in base commit
+                        Err(_) => String::new(),
                     }
                 }
-                Err(_) => String::new(), // Invalid commit hash
+                Err(_) => String::new(),
             }
         };
 
-        // Only create an entry if there are actual changes
         if current_content != base_content {
             let (added_lines, deleted_lines) = get_changed_lines(&base_content, &current_content)?;
             if !added_lines.is_empty() || !deleted_lines.is_empty() {

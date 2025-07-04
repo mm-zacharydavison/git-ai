@@ -102,7 +102,10 @@ fn main() {
             commands::blame(&repo, &file_path, line_range)
         }
         Commands::PreCommit => commands::pre_commit(&repo, default_user_name),
-        Commands::PostCommit { force } => commands::post_commit(&repo, *force),
+        Commands::PostCommit { force } => {
+            commands::post_commit(&repo, *force).unwrap();
+            Ok(())
+        }
     } {
         eprintln!("Command failed: {}", e);
     }

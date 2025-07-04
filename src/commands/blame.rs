@@ -22,17 +22,22 @@ pub fn run(
     file_path: &str,
     line_range: Option<(u32, u32)>,
 ) -> Result<(), GitAiError> {
+    // Use repo root for file system operations
+    let repo_root = repo
+        .workdir()
+        .ok_or_else(|| GitAiError::Generic("Repository has no working directory".to_string()))?;
+    let abs_file_path = repo_root.join(file_path);
+
     // Validate that the file exists
-    let file_path_obj = Path::new(file_path);
-    if !file_path_obj.exists() {
+    if !abs_file_path.exists() {
         return Err(GitAiError::Generic(format!(
             "File not found: {}",
-            file_path
+            abs_file_path.display()
         )));
     }
 
     // Read the current file content
-    let file_content = fs::read_to_string(file_path)?;
+    let file_content = fs::read_to_string(&abs_file_path)?;
     let lines: Vec<&str> = file_content.lines().collect();
     let total_lines = lines.len() as u32;
 
@@ -50,7 +55,7 @@ pub fn run(
         None => (1, total_lines),
     };
 
-    // Step 1: Get Git's native blame
+    // Step 1: Get Git's native blame (still use relative path)
     let blame_hunks = get_git_blame_hunks(repo, file_path, start_line, end_line)?;
 
     // Step 2: Overlay AI authorship information
