@@ -247,9 +247,11 @@ fn save_current_file_states(
     let mut file_hashes = HashMap::new();
 
     for file_path in files {
-        let content = if Path::new(file_path).exists() {
+        let repo_workdir = repo.workdir().unwrap_or_else(|| Path::new("."));
+        let abs_path = repo_workdir.join(file_path);
+        let content = if abs_path.exists() {
             // Read file as bytes first, then convert to string with UTF-8 lossy conversion
-            match std::fs::read(file_path) {
+            match std::fs::read(&abs_path) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
                 Err(_) => String::new(), // If we can't read the file, treat as empty
             }
@@ -297,8 +299,11 @@ fn get_initial_checkpoint_entries(
     let mut entries = Vec::new();
 
     for file_path in files {
-        let current_content = if Path::new(file_path).exists() {
-            match std::fs::read(file_path) {
+        let repo_workdir = repo.workdir().unwrap_or_else(|| Path::new("."));
+        let abs_path = repo_workdir.join(file_path);
+
+        let current_content = if abs_path.exists() {
+            match std::fs::read(&abs_path) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
                 Err(_) => String::new(),
             }
@@ -306,6 +311,7 @@ fn get_initial_checkpoint_entries(
             String::new()
         };
 
+        println!("base_commit: {}", base_commit);
         let base_content = if base_commit == "initial" {
             String::new()
         } else {
@@ -350,9 +356,11 @@ fn get_subsequent_checkpoint_entries(
     let mut entries = Vec::new();
 
     for file_path in files {
-        let current_content = if Path::new(file_path).exists() {
+        let repo_workdir = repo.workdir().unwrap_or_else(|| Path::new("."));
+        let abs_path = repo_workdir.join(file_path);
+        let current_content = if abs_path.exists() {
             // Read file as bytes first, then convert to string with UTF-8 lossy conversion
-            match std::fs::read(file_path) {
+            match std::fs::read(&abs_path) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
                 Err(_) => String::new(), // If we can't read the file, treat as empty
             }

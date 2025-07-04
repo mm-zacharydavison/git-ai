@@ -6,22 +6,22 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 #[derive(Debug, Clone)]
-struct BlameHunk {
+pub struct BlameHunk {
     /// Line range [start, end] (inclusive)
-    range: (u32, u32),
+    pub range: (u32, u32),
     /// Commit SHA that introduced this hunk
-    commit_sha: String,
+    pub commit_sha: String,
     /// Original author from Git blame
-    original_author: String,
+    pub original_author: String,
     /// Author from our authorship log (if available)
-    ai_author: Option<String>,
+    pub ai_author: Option<String>,
 }
 
 pub fn run(
     repo: &Repository,
     file_path: &str,
     line_range: Option<(u32, u32)>,
-) -> Result<(), GitAiError> {
+) -> Result<HashMap<u32, String>, GitAiError> {
     // Use repo root for file system operations
     let repo_root = repo
         .workdir()
@@ -59,21 +59,15 @@ pub fn run(
     let blame_hunks = get_git_blame_hunks(repo, file_path, start_line, end_line)?;
 
     // Step 2: Overlay AI authorship information
-    let enhanced_hunks = overlay_ai_authorship(repo, &blame_hunks, file_path)?;
+    let line_authors = overlay_ai_authorship(repo, &blame_hunks, file_path)?;
 
     // Calculate the maximum author name length for dynamic column width
     let mut max_author_len = 0;
     for line_num in start_line..=end_line {
-        let hunk = enhanced_hunks
-            .iter()
-            .find(|h| line_num >= h.range.0 && line_num <= h.range.1);
-
-        let author = if let Some(h) = hunk {
-            h.ai_author.as_ref().unwrap_or(&h.original_author)
-        } else {
-            "unknown"
-        };
-
+        let author = line_authors
+            .get(&line_num)
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
         max_author_len = max_author_len.max(author.len());
     }
 
@@ -92,17 +86,11 @@ pub fn run(
             ""
         };
 
-        // Find the hunk that contains this line
-        let hunk = enhanced_hunks
-            .iter()
-            .find(|h| line_num >= h.range.0 && line_num <= h.range.1);
-
-        let author = if let Some(h) = hunk {
-            // Prefer AI author if available, otherwise fall back to original author
-            h.ai_author.as_ref().unwrap_or(&h.original_author)
-        } else {
-            "unknown"
-        };
+        // Get the author for this specific line
+        let author = line_authors
+            .get(&line_num)
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
 
         // Format: author line_number line_content
         println!(
@@ -115,9 +103,9 @@ pub fn run(
     }
 
     // Print summary
-    print_blame_summary(&enhanced_hunks, start_line, end_line);
+    print_blame_summary(&line_authors, start_line, end_line);
 
-    Ok(())
+    Ok(line_authors)
 }
 
 fn get_git_blame_hunks(
@@ -167,13 +155,13 @@ fn overlay_ai_authorship(
     repo: &Repository,
     blame_hunks: &[BlameHunk],
     file_path: &str,
-) -> Result<Vec<BlameHunk>, GitAiError> {
-    let mut enhanced_hunks = blame_hunks.to_vec();
+) -> Result<HashMap<u32, String>, GitAiError> {
+    let mut line_authors: HashMap<u32, String> = HashMap::new();
 
     // Group hunks by commit SHA to avoid repeated lookups
     let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLog>> = HashMap::new();
 
-    for hunk in &mut enhanced_hunks {
+    for hunk in blame_hunks {
         // Check if we've already looked up this commit's authorship
         let authorship_log = if let Some(cached) = commit_authorship_cache.get(&hunk.commit_sha) {
             cached.clone()
@@ -191,48 +179,46 @@ fn overlay_ai_authorship(
         // If we have AI authorship data, look up the author for lines in this hunk
         if let Some(authorship_log) = authorship_log {
             if let Some(file_authorship) = authorship_log.files.get(file_path) {
-                // Check if any lines in this hunk have AI authorship
-                let mut ai_authors = Vec::new();
+                // Check each line in this hunk for AI authorship
                 for line_num in hunk.range.0..=hunk.range.1 {
                     if let Some(author) = file_authorship.get_author(line_num) {
-                        ai_authors.push(author.to_string());
+                        line_authors.insert(line_num, author.to_string());
+                    } else {
+                        // Fall back to original author if no AI authorship
+                        line_authors.insert(line_num, hunk.original_author.clone());
                     }
                 }
-
-                // If we found AI authorship for any lines in this hunk, use the most common one
-                if !ai_authors.is_empty() {
-                    // Count occurrences of each author
-                    let mut author_counts: HashMap<String, usize> = HashMap::new();
-                    for author in ai_authors {
-                        *author_counts.entry(author).or_insert(0) += 1;
-                    }
-
-                    // Find the most common author
-                    if let Some((most_common_author, _)) =
-                        author_counts.iter().max_by_key(|(_, count)| **count)
-                    {
-                        hunk.ai_author = Some(most_common_author.clone());
-                    }
+            } else {
+                // No file authorship data, use original author for all lines in hunk
+                for line_num in hunk.range.0..=hunk.range.1 {
+                    line_authors.insert(line_num, hunk.original_author.clone());
                 }
+            }
+        } else {
+            // No authorship log, use original author for all lines in hunk
+            for line_num in hunk.range.0..=hunk.range.1 {
+                line_authors.insert(line_num, hunk.original_author.clone());
             }
         }
     }
 
-    Ok(enhanced_hunks)
+    Ok(line_authors)
 }
 
 #[allow(unused_variables)]
-fn print_blame_summary(hunks: &[BlameHunk], start_line: u32, end_line: u32) {
+fn print_blame_summary(line_authors: &HashMap<u32, String>, start_line: u32, end_line: u32) {
     println!("{}", "=".repeat(80));
 
     let mut author_stats: HashMap<String, u32> = HashMap::new();
     let mut total_lines = 0;
 
-    for hunk in hunks {
-        let lines_in_hunk = hunk.range.1 - hunk.range.0 + 1;
-        let author = hunk.ai_author.as_ref().unwrap_or(&hunk.original_author);
-        *author_stats.entry(author.clone()).or_insert(0) += lines_in_hunk;
-        total_lines += lines_in_hunk;
+    for line_num in start_line..=end_line {
+        let author = line_authors
+            .get(&line_num)
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+        *author_stats.entry(author.to_string()).or_insert(0) += 1;
+        total_lines += 1;
     }
 
     // Find the longest author name for column width

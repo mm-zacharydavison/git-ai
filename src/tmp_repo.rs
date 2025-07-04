@@ -1,6 +1,7 @@
-use crate::commands::{blame, checkpoint, post_commit};
+use crate::commands::{BlameHunk, blame, checkpoint, post_commit};
 use crate::error::GitAiError;
 use git2::{Repository, Signature};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -14,13 +15,15 @@ impl TmpFile {
     /// Updates the entire contents of the file
     pub fn update(&mut self, new_contents: &str) -> Result<(), GitAiError> {
         self.contents = new_contents.to_string();
-        self.write_to_disk()
+        self.write_to_disk()?;
+        self.flush_to_disk()
     }
 
     /// Appends content to the end of the file
     pub fn append(&mut self, content: &str) -> Result<(), GitAiError> {
         self.contents.push_str(content);
-        self.write_to_disk()
+        self.write_to_disk()?;
+        self.flush_to_disk()
     }
 
     /// Inserts content at a specific position
@@ -39,26 +42,24 @@ impl TmpFile {
         new_contents.push_str(&self.contents[position..]);
 
         self.contents = new_contents;
-        self.write_to_disk()
+        self.write_to_disk()?;
+        self.flush_to_disk()
     }
 
     /// Replaces content at a specific position with new content
     pub fn replace_at(&mut self, position: usize, new_content: &str) -> Result<(), GitAiError> {
-        if position >= self.contents.len() {
+        if position > self.contents.len() {
             return Err(GitAiError::Generic(format!(
                 "Position {} is out of bounds for file with {} characters",
                 position,
                 self.contents.len()
             )));
         }
-
-        let mut new_contents = String::new();
-        new_contents.push_str(&self.contents[..position]);
-        new_contents.push_str(new_content);
-        new_contents.push_str(&self.contents[position + 1..]);
-
+        let mut new_contents = self.contents.clone();
+        new_contents.replace_range(position..position + new_content.len(), new_content);
         self.contents = new_contents;
-        self.write_to_disk()
+        self.write_to_disk()?;
+        self.flush_to_disk()
     }
 
     /// Replaces a range of content with new content
@@ -114,7 +115,8 @@ impl TmpFile {
     /// Clears all contents from the file
     pub fn clear(&mut self) -> Result<(), GitAiError> {
         self.contents.clear();
-        self.write_to_disk()
+        self.write_to_disk()?;
+        self.flush_to_disk()
     }
 
     /// Writes the current contents to disk
@@ -134,6 +136,17 @@ impl TmpFile {
         index.add_path(&std::path::Path::new(&self.filename))?;
         index.write()?;
 
+        Ok(())
+    }
+
+    /// Flushes the file to disk to ensure all changes are written
+    fn flush_to_disk(&self) -> Result<(), GitAiError> {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let file_path = self.repo.path.join(&self.filename);
+        if let Ok(mut file) = OpenOptions::new().write(true).open(&file_path) {
+            file.flush()?;
+        }
         Ok(())
     }
 }
@@ -225,7 +238,7 @@ impl TmpRepo {
         let signature = Signature::now("Test User", "test@example.com")?;
 
         // Check if there's a parent commit before we use it
-        let has_parent = if let Ok(head) = self.repo.head() {
+        let _has_parent = if let Ok(head) = self.repo.head() {
             if let Some(target) = head.target() {
                 self.repo.find_commit(target).is_ok()
             } else {
@@ -262,10 +275,8 @@ impl TmpRepo {
 
         println!("Commit ID: {}", _commit_id);
 
-        // Run the post-commit hook only if this isn't the initial commit
-        if has_parent {
-            post_commit(&self.repo, false)?; // false = not force
-        }
+        // Run the post-commit hook for all commits (including initial commit)
+        post_commit(&self.repo, false)?; // false = not force
 
         Ok(())
     }
@@ -285,8 +296,9 @@ impl TmpRepo {
         &self,
         tmp_file: &TmpFile,
         line_range: Option<(u32, u32)>,
-    ) -> Result<(), GitAiError> {
+    ) -> Result<HashMap<u32, String>, GitAiError> {
         // Use the filename (relative path) instead of the absolute path
+        // Convert the blame result to unit result to match the expected return type
         blame(&self.repo, &tmp_file.filename, line_range)
     }
 }
