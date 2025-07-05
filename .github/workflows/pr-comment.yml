@@ -53,10 +53,10 @@ jobs:
 
             if (eventName === 'push') {
               title = '🚀 **Code Pushed!**';
-              body = statsOutput;
+              body = '```\n' + statsOutput + '\n```';
             } else {
               title = '📝 **PR Commit Analysis**';
-              body = statsOutput;
+              body = '```\n' + statsOutput + '\n```';
             }
 
             const comment = title + '\n\n' + body;
