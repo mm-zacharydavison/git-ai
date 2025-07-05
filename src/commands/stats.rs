@@ -151,13 +151,13 @@ fn print_stats(
     // Print totals
     println!("\nTotal Additions:");
     for (author, count) in total_additions_by_author.iter() {
-        println!("    {} {}", author, count);
+        println!("    {} +{}", author, count);
     }
 
-    println!("\nTotal Deletions: {}", total_deletions);
+    println!("\nTotal Deletions: -{}", total_deletions);
 }
 
-fn print_file_stats(file_path: &str, stats: &FileStats, scale_factor: f64) {
+fn print_file_stats(file_path: &str, stats: &FileStats) {
     // Calculate total changes for the file
     let total_additions = stats.total_additions;
     let total_deletions = stats.deletions;
