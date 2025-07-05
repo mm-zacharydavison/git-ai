@@ -63,26 +63,48 @@ impl TmpFile {
         self.flush_to_disk()
     }
 
-    /// Replaces a range of content with new content
+    /// Replaces a range of lines with new content
     pub fn replace_range(
         &mut self,
-        start: usize,
-        end: usize,
+        start_line: usize,
+        end_line: usize,
         new_content: &str,
     ) -> Result<(), GitAiError> {
-        if start >= self.contents.len() || end > self.contents.len() || start >= end {
+        let file_lines = self.contents.lines().collect::<Vec<&str>>();
+
+        if start_line > file_lines.len() || end_line > file_lines.len() || start_line >= end_line {
             return Err(GitAiError::Generic(format!(
-                "Invalid range [{}, {}) for file with {} characters",
-                start,
-                end,
-                self.contents.len()
+                "Invalid line range [{}, {}) for file with {} lines",
+                start_line,
+                end_line,
+                file_lines.len()
             )));
         }
 
         let mut new_contents = String::new();
-        new_contents.push_str(&self.contents[..start]);
-        new_contents.push_str(new_content);
-        new_contents.push_str(&self.contents[end..]);
+
+        // Add lines before the range (1-indexed to 0-indexed conversion)
+        for line in file_lines[..(start_line - 1)].iter() {
+            new_contents.push_str(line);
+            new_contents.push('\n');
+        }
+
+        // Add the new content (split into lines and add each line)
+        for line in new_content.lines() {
+            new_contents.push_str(line);
+            new_contents.push('\n');
+        }
+
+        // Add lines after the range (1-indexed to 0-indexed conversion)
+        for line in file_lines[(end_line - 1)..].iter() {
+            new_contents.push_str(line);
+            new_contents.push('\n');
+        }
+
+        // Remove trailing newline if the original didn't have one
+        if !self.contents.ends_with('\n') && !new_contents.is_empty() {
+            new_contents.pop();
+        }
 
         self.contents = new_contents;
         self.write_to_disk()
@@ -176,6 +198,15 @@ impl TmpRepo {
             path: tmp_dir,
             repo,
         })
+    }
+
+    pub fn new_with_base_commit(tmp_dir: PathBuf) -> Result<(Self, TmpFile, TmpFile), GitAiError> {
+        let repo = TmpRepo::new(tmp_dir)?;
+        let mut lines_file = repo.write_file("lines.md", lines, true)?;
+        let mut alphabet_file = repo.write_file("alphabet.md", alphabet, true)?;
+        repo.trigger_checkpoint_with_author("test_user")?;
+        repo.commit_with_message("initial commit")?;
+        Ok((repo, lines_file, alphabet_file))
     }
 
     /// Writes a file with the given filename and contents, returns a TmpFile for further updates
@@ -304,3 +335,64 @@ impl TmpRepo {
         Ok(blame_map.into_iter().collect())
     }
 }
+
+const alphabet: &str = "A
+B
+C
+D
+E
+F
+G
+H
+I
+J
+K
+L
+M
+N
+O
+P
+Q
+R
+S
+T
+U
+V
+W
+X
+Y
+Z";
+
+const lines: &str = "1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33";
