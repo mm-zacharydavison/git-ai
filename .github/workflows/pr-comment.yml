@@ -3,7 +3,7 @@ name: PR Comment on Merge
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  # push:
+  push:
 
 permissions:
   pull-requests: write
@@ -41,7 +41,6 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const { owner, repo, number } = context.issue;
             const commitSha = '${{ steps.git-ai-stats.outputs.commit_sha }}';
             const eventName = '${{ github.event_name }}';
 
@@ -54,16 +53,24 @@ jobs:
             if (eventName === 'push') {
               title = '🚀 **Code Pushed!**';
               body = '```\n' + statsOutput + '\n```';
+              
+              // For push events, create a commit comment
+              await github.rest.repos.createCommitComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: commitSha,
+                body: title + '\n\n' + body
+              });
             } else {
               title = '📝 **PR Commit Analysis**';
               body = '```\n' + statsOutput + '\n```';
+              
+              // For PR events, create a PR comment
+              const { owner, repo, number } = context.issue;
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: number,
+                body: title + '\n\n' + body
+              });
             }
-
-            const comment = title + '\n\n' + body;
-
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: number,
-              body: comment
-            });
