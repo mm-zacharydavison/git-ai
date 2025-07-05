@@ -19,6 +19,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Grab the refs since actions shallow clones by default
       - name: Fetch AI refs
         run: |
           git fetch origin refs/ai/*:refs/ai/*
