@@ -130,22 +130,12 @@ fn print_stats(
     total_additions_by_author: &HashMap<String, u32>,
     total_deletions: u32,
 ) {
-    // Find the maximum changes for scaling
-    let max_changes = file_stats
-        .values()
-        .map(|stats| stats.total_additions.max(stats.deletions))
-        .max()
-        .unwrap_or(1);
-
-    // Calculate scale factor (minimum 1, maximum 20 characters)
-    let scale_factor = (20.0 / max_changes as f64).min(1.0);
-
     println!("Statistics for commit:");
     println!("{}", "=".repeat(50));
 
     // Print per-file statistics
     for (file_path, stats) in file_stats.iter() {
-        print_file_stats(file_path, stats, scale_factor);
+        print_file_stats(file_path, stats);
     }
 
     // Print totals
