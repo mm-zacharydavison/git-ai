@@ -19,6 +19,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch AI refs
+        run: |
+          git fetch origin refs/ai/*:refs/ai/*
+          git fetch origin refs/ai/*:refs/remotes/origin/ai/*
+
       - name: Install git-ai
         run: |
           curl -sSL https://gitai.run/install.sh | bash
