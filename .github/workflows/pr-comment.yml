@@ -1,0 +1,42 @@
+name: PR Comment on Merge
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  comment-on-merge:
+    name: Comment on Merged PR
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+
+    steps:
+      - name: Comment on merged PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo, number } = context.issue;
+
+            const comment = `🎉 **PR Merged Successfully!**
+
+            This pull request has been merged into the main branch. Thank you for your contribution!
+
+            **Merge Commit:** \`${context.payload.pull_request.merge_commit_sha}\`
+
+            **Merge Details:**
+            - Merged by: @${context.payload.pull_request.merged_by.login}
+            - Merged at: ${new Date(context.payload.pull_request.merged_at).toLocaleString()}
+
+            **Next Steps:**
+            - The changes are now live in the main branch
+            - If this was a feature or bug fix, consider updating the documentation
+            - If you have any follow-up tasks, please create new issues or PRs
+
+            Thanks again for contributing to the project! 🚀`;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: comment
+            });
