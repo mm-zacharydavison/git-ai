@@ -1,7 +1,5 @@
 use crate::commands::blame::{get_git_blame_hunks, overlay_ai_authorship};
 use crate::error::GitAiError;
-use crate::git::refs::get_reference_as_authorship_log;
-use crate::log_fmt::authorship_log::AuthorshipLog;
 use git2::{DiffOptions, Repository};
 use std::collections::HashMap;
 
@@ -166,7 +164,7 @@ fn print_file_stats(file_path: &str, stats: &FileStats, scale_factor: f64) {
     for (author, count) in stats.additions.iter() {
         let bar_length = ((*count as f64 * scale_factor).round() as usize).max(1);
         let bar = "+".repeat(bar_length);
-        println!("    {} {:>3} {}", bar, count, author);
+        println!("    {} {} {:>3}", author, bar, count);
     }
 
     // Print deletions
