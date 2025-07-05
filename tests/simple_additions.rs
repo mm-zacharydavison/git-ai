@@ -1,5 +1,6 @@
 use git_ai::tmp_repo::TmpRepo;
 use insta::assert_debug_snapshot;
+use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]

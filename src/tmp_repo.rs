@@ -1,6 +1,7 @@
-use crate::commands::{BlameHunk, blame, checkpoint, post_commit};
+use crate::commands::{blame, checkpoint, post_commit};
 use crate::error::GitAiError;
 use git2::{Repository, Signature};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -296,9 +297,10 @@ impl TmpRepo {
         &self,
         tmp_file: &TmpFile,
         line_range: Option<(u32, u32)>,
-    ) -> Result<HashMap<u32, String>, GitAiError> {
+    ) -> Result<BTreeMap<u32, String>, GitAiError> {
         // Use the filename (relative path) instead of the absolute path
-        // Convert the blame result to unit result to match the expected return type
-        blame(&self.repo, &tmp_file.filename, line_range)
+        // Convert the blame result to BTreeMap for deterministic order
+        let blame_map = blame(&self.repo, &tmp_file.filename, line_range)?;
+        Ok(blame_map.into_iter().collect())
     }
 }
