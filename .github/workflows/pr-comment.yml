@@ -1,0 +1,60 @@
+name: PR Comment on Merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  comment-on-merge:
+    name: Comment on Merged PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Grab the refs since actions shallow clones by default
+      - name: Fetch AI refs
+        run: |
+          git fetch origin refs/ai/*:refs/ai/*
+          git fetch origin refs/ai/*:refs/remotes/origin/ai/*
+
+      - name: Install git-ai
+        run: |
+          curl -sSL https://gitai.run/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Get git-ai stats
+        id: git-ai-stats
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          git-ai stats $COMMIT_SHA > git_ai_stats.txt
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Comment on merged PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo, number } = context.issue;
+            const commitSha = '${{ steps.git-ai-stats.outputs.commit_sha }}';
+
+            // Read stats from file to avoid YAML escaping issues
+            const fs = require('fs');
+            const statsOutput = fs.readFileSync('git_ai_stats.txt', 'utf8');
+
+            const title = '📝 **PR Commit Analysis**';
+            const body = '```\n' + statsOutput + '\n```';
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: title + '\n\n' + body
+            });

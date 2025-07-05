@@ -107,7 +107,7 @@ pub fn run(
     Ok(line_authors)
 }
 
-fn get_git_blame_hunks(
+pub fn get_git_blame_hunks(
     repo: &Repository,
     file_path: &str,
     start_line: u32,
@@ -149,7 +149,7 @@ fn get_git_blame_hunks(
     Ok(hunks)
 }
 
-fn overlay_ai_authorship(
+pub fn overlay_ai_authorship(
     repo: &Repository,
     blame_hunks: &[BlameHunk],
     file_path: &str,

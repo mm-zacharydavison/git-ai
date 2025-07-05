@@ -39,6 +39,11 @@ enum Commands {
         /// file to blame (can include line range like "file.rs:10-20")
         file: String,
     },
+    /// show authorship statistics for a commit
+    Stats {
+        /// commit SHA to analyze (defaults to HEAD)
+        sha: Option<String>,
+    },
     PreCommit,
     PostCommit {
         /// force execution even if working directory is not clean
@@ -101,6 +106,10 @@ fn main() {
             let (file_path, line_range) = parse_file_with_line_range(&file);
             // Convert the blame result to unit result to match other commands
             commands::blame(&repo, &file_path, line_range).map(|_| ())
+        }
+        Commands::Stats { sha } => {
+            let sha = sha.as_deref().unwrap_or("HEAD");
+            commands::stats(&repo, sha)
         }
         Commands::PreCommit => commands::pre_commit(&repo, default_user_name),
         Commands::PostCommit { force } => {
