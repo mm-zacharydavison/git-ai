@@ -31,8 +31,10 @@ jobs:
             COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
           fi
           git-ai stats $COMMIT_SHA > git_ai_stats.txt
-          echo "stats_output<<EOF" >> $GITHUB_OUTPUT
-          cat git_ai_stats.txt >> $GITHUB_OUTPUT
+          # Base64 encode the output to avoid issues with special characters
+          base64 git_ai_stats.txt > git_ai_stats_base64.txt
+          echo "stats_output_base64<<EOF" >> $GITHUB_OUTPUT
+          cat git_ai_stats_base64.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
 
@@ -42,8 +44,11 @@ jobs:
           script: |
             const { owner, repo, number } = context.issue;
             const commitSha = '${{ steps.git-ai-stats.outputs.commit_sha }}';
-            const statsOutput = '${{ steps.git-ai-stats.outputs.stats_output }}';
+            const statsOutputBase64 = '${{ steps.git-ai-stats.outputs.stats_output_base64 }}';
             const eventName = '${{ github.event_name }}';
+
+            // Decode the base64 stats output
+            const statsOutput = Buffer.from(statsOutputBase64, 'base64').toString('utf8');
 
             let title, body;
 
