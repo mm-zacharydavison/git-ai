@@ -35,22 +35,35 @@ jobs:
             COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
           fi
           git-ai stats $COMMIT_SHA > git_ai_stats.txt
-          echo "stats_output<<EOF" >> $GITHUB_OUTPUT
-          cat git_ai_stats.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
 
       - name: Comment on merged PR
         uses: actions/github-script@v7
         with:
           script: |
+            const { owner, repo, number } = context.issue;
+            const commitSha = '${{ steps.git-ai-stats.outputs.commit_sha }}';
+            const eventName = '${{ github.event_name }}';
+
+            // Read stats from file to avoid YAML escaping issues
             const fs = require('fs');
-            const script = fs.readFileSync('.github/scripts/comment-pr.js', 'utf8');
+            const statsOutput = fs.readFileSync('git_ai_stats.txt', 'utf8');
 
-            // Set environment variables for the script
-            process.env.COMMIT_SHA = '${{ steps.git-ai-stats.outputs.commit_sha }}';
-            process.env.STATS_OUTPUT = '${{ steps.git-ai-stats.outputs.stats_output }}';
-            process.env.EVENT_NAME = '${{ github.event_name }}';
+            let title, body;
 
-            // Execute the script
-            eval(script);
+            if (eventName === 'push') {
+              title = '🚀 **Code Pushed!**';
+              body = statsOutput;
+            } else {
+              title = '📝 **PR Commit Analysis**';
+              body = statsOutput;
+            }
+
+            const comment = title + '\n\n' + body;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: comment
+            });
