@@ -158,19 +158,23 @@ fn print_stats(
 }
 
 fn print_file_stats(file_path: &str, stats: &FileStats, scale_factor: f64) {
-    println!("\n{}", file_path);
+    // Calculate total changes for the file
+    let total_additions = stats.total_additions;
+    let total_deletions = stats.deletions;
+
+    // Print file header with total changes
+    println!(
+        "\n{} (+{} -{})",
+        file_path, total_additions, total_deletions
+    );
 
     // Print additions by author
     for (author, count) in stats.additions.iter() {
-        let bar_length = ((*count as f64 * scale_factor).round() as usize).max(1);
-        let bar = "+".repeat(bar_length);
-        println!("    {} {} {:>3}", author, bar, count);
+        println!("   {} (+{})", author, count);
     }
 
-    // Print deletions
+    // Print deletions (no author attribution)
     if stats.deletions > 0 {
-        let bar_length = ((stats.deletions as f64 * scale_factor).round() as usize).max(1);
-        let bar = "-".repeat(bar_length);
-        println!("    {} {:>3}", bar, stats.deletions);
+        println!("   -{}", stats.deletions);
     }
 }

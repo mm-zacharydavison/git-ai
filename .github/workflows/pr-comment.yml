@@ -2,37 +2,88 @@ name: PR Comment on Merge
 
 on:
   pull_request:
-    types: [closed]
+    types: [opened, synchronize, reopened]
+  # push:
 
 jobs:
   comment-on-merge:
     name: Comment on Merged PR
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-ai
+        run: |
+          curl -sSL https://gitai.run/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Get git-ai stats
+        id: git-ai-stats
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            COMMIT_SHA="${{ github.sha }}"
+          else
+            COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          fi
+          git-ai stats $COMMIT_SHA > git_ai_stats.txt
+          echo "stats_output<<EOF" >> $GITHUB_OUTPUT
+          cat git_ai_stats.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+
       - name: Comment on merged PR
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo, number } = context.issue;
+            const commitSha = '${{ steps.git-ai-stats.outputs.commit_sha }}';
+            const statsOutput = '${{ steps.git-ai-stats.outputs.stats_output }}';
+            const eventName = '${{ github.event_name }}';
 
-            const comment = `🎉 **PR Merged Successfully!**
+            let title, body;
 
-            This pull request has been merged into the main branch. Thank you for your contribution!
+            if (eventName === 'push') {
+              title = '🚀 **Code Pushed!**';
+              body = `New code has been pushed to the repository.
 
-            **Merge Commit:** \`${context.payload.pull_request.merge_commit_sha}\`
+              **Commit:** \`${commitSha}\`
 
-            **Merge Details:**
-            - Merged by: @${context.payload.pull_request.merged_by.login}
-            - Merged at: ${new Date(context.payload.pull_request.merged_at).toLocaleString()}
+              **Git-AI Stats for Commit:**
+              \`\`\`
+              ${statsOutput}
+              \`\`\`
 
-            **Next Steps:**
-            - The changes are now live in the main branch
-            - If this was a feature or bug fix, consider updating the documentation
-            - If you have any follow-up tasks, please create new issues or PRs
+              **Next Steps:**
+              - The changes are now live in the branch
+              - If this was a feature or bug fix, consider updating the documentation
+              - If you have any follow-up tasks, please create new issues or PRs
 
-            Thanks again for contributing to the project! 🚀`;
+              Thanks for contributing to the project! 🚀`;
+            } else {
+              title = '📝 **PR Commit Analysis**';
+              body = `Git-AI analysis for this pull request commit.
+
+              **Commit:** \`${commitSha}\`
+
+              **Git-AI Stats for Commit:**
+              \`\`\`
+              ${statsOutput}
+              \`\`\`
+
+              **Next Steps:**
+              - Review the AI contribution analysis above
+              - Consider any suggestions for improvement
+              - Continue with your development workflow
+
+              Thanks for contributing to the project! 🚀`;
+            }
+
+            const comment = `${title}\n\n${body}`;
 
             await github.rest.issues.createComment({
               owner,
