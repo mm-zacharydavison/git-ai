@@ -179,6 +179,7 @@ pub fn setup_git_hooks(repo: &Repository) -> Result<(), GitAiError> {
 
     let pre_commit_hook = hooks_dir.join("pre-commit");
     let post_commit_hook = hooks_dir.join("post-commit");
+    let post_rewrite_hook = hooks_dir.join("post-rewrite");
     let pre_commit_content = r#"#!/bin/sh
 # git-ai pre-commit hook
 git-ai pre-commit
@@ -187,14 +188,20 @@ git-ai pre-commit
 # git-ai post-commit hook
 git-ai post-commit
 "#;
+    let post_rewrite_content = r#"#!/bin/sh
+# git-ai post-rewrite hook
+git-ai post-rewrite
+"#;
 
     let pre_commit_exists = pre_commit_hook.exists();
     let post_commit_exists = post_commit_hook.exists();
+    let post_rewrite_exists = post_rewrite_hook.exists();
 
-    if !pre_commit_exists && !post_commit_exists {
-        // Neither hook exists, write both
+    if !pre_commit_exists && !post_commit_exists && !post_rewrite_exists {
+        // None of the hooks exist, write all three
         fs::write(&pre_commit_hook, pre_commit_content)?;
         fs::write(&post_commit_hook, post_commit_content)?;
+        fs::write(&post_rewrite_hook, post_rewrite_content)?;
         // Make executable
         #[cfg(unix)]
         {
@@ -205,9 +212,12 @@ git-ai post-commit
             let mut perms = fs::metadata(&post_commit_hook)?.permissions();
             perms.set_mode(0o755);
             fs::set_permissions(&post_commit_hook, perms)?;
+            let mut perms = fs::metadata(&post_rewrite_hook)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&post_rewrite_hook, perms)?;
         }
         println!(
-            "Git hooks set up successfully:\n  - pre-commit: git-ai pre-commit\n  - post-commit: git-ai post-commit"
+            "Git hooks set up successfully:\n  - pre-commit: git-ai pre-commit\n  - post-commit: git-ai post-commit\n  - post-rewrite: git-ai post-rewrite"
         );
         return Ok(());
     }
@@ -217,6 +227,7 @@ git-ai post-commit
     println!("To enable git-ai, add the following lines to your hooks (if not already present):\n");
     println!("# In .git/hooks/pre-commit:\ngit-ai pre-commit\n");
     println!("# In .git/hooks/post-commit:\ngit-ai post-commit\n");
+    println!("# In .git/hooks/post-rewrite:\ngit-ai post-rewrite\n");
     println!(
         "Press 'a' to append these lines to the end of your hooks (risky), or any other key to exit."
     );
@@ -241,6 +252,15 @@ git-ai post-commit
         } else {
             fs::write(&post_commit_hook, post_commit_content)?;
         }
+        // Append to post-rewrite
+        if post_rewrite_exists {
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(&post_rewrite_hook)?;
+            writeln!(file, "\ngit-ai post-rewrite")?;
+        } else {
+            fs::write(&post_rewrite_hook, post_rewrite_content)?;
+        }
         // Make executable
         #[cfg(unix)]
         {
@@ -251,6 +271,9 @@ git-ai post-commit
             let mut perms = fs::metadata(&post_commit_hook)?.permissions();
             perms.set_mode(0o755);
             fs::set_permissions(&post_commit_hook, perms)?;
+            let mut perms = fs::metadata(&post_rewrite_hook)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&post_rewrite_hook, perms)?;
         }
         println!("Appended git-ai commands to hooks.");
     } else {

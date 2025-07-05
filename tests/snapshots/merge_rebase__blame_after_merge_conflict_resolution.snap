@@ -1,0 +1,17 @@
+---
+source: tests/merge-rebase.rs
+expression: blame
+---
+{
+    10: "test_user",
+    11: "test_user",
+    12: "test_user",
+    13: "test_user",
+    14: "test_user",
+    15: "Claude",
+    16: "test_user",
+    17: "test_user",
+    18: "test_user",
+    19: "test_user",
+    20: "test_user",
+}

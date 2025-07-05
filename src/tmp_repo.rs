@@ -2,9 +2,9 @@ use crate::commands::{blame, checkpoint, post_commit};
 use crate::error::GitAiError;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 pub struct TmpFile {
     repo: TmpRepo,
@@ -22,6 +22,16 @@ impl TmpFile {
 
     /// Appends content to the end of the file
     pub fn append(&mut self, content: &str) -> Result<(), GitAiError> {
+        // Refresh from disk first – the file may have changed due to a branch checkout
+        if let Ok(disk_contents) = fs::read_to_string(self.repo.path.join(&self.filename)) {
+            self.contents = disk_contents;
+        }
+
+        // Guarantee we have a newline separator before appending
+        if !self.contents.ends_with('\n') {
+            self.contents.push('\n');
+        }
+
         self.contents.push_str(content);
         self.write_to_disk()?;
         self.flush_to_disk()
@@ -70,6 +80,11 @@ impl TmpFile {
         end_line: usize,
         new_content: &str,
     ) -> Result<(), GitAiError> {
+        // Refresh from disk first to stay in sync with the current branch version
+        if let Ok(disk_contents) = fs::read_to_string(self.repo.path.join(&self.filename)) {
+            self.contents = disk_contents;
+        }
+
         let file_lines = self.contents.lines().collect::<Vec<&str>>();
 
         if start_line > file_lines.len() || end_line > file_lines.len() || start_line >= end_line {
@@ -107,7 +122,8 @@ impl TmpFile {
         }
 
         self.contents = new_contents;
-        self.write_to_disk()
+        self.write_to_disk()?;
+        self.flush_to_disk()
     }
 
     /// Gets the current contents of the file
@@ -311,6 +327,163 @@ impl TmpRepo {
         post_commit(&self.repo, false)?; // false = not force
 
         Ok(())
+    }
+
+    /// Creates a new branch and switches to it
+    pub fn create_branch(&self, branch_name: &str) -> Result<(), GitAiError> {
+        let head = self.repo.head()?;
+        let commit = self.repo.find_commit(head.target().unwrap())?;
+        let _branch = self.repo.branch(branch_name, &commit, false)?;
+
+        // Switch to the new branch
+        let branch_ref = self
+            .repo
+            .find_reference(&format!("refs/heads/{}", branch_name))?;
+        self.repo.set_head(branch_ref.name().unwrap())?;
+
+        // Update the working directory
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        self.repo.checkout_head(Some(&mut checkout_opts))?;
+
+        Ok(())
+    }
+
+    /// Switches to an existing branch
+    pub fn switch_branch(&self, branch_name: &str) -> Result<(), GitAiError> {
+        let branch_ref = self
+            .repo
+            .find_reference(&format!("refs/heads/{}", branch_name))?;
+        self.repo.set_head(branch_ref.name().unwrap())?;
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        self.repo.checkout_head(Some(&mut checkout_opts))?;
+
+        Ok(())
+    }
+
+    /// Merges a branch into the current branch using real git CLI, always picking 'theirs' in conflicts
+    pub fn merge_branch(&self, branch_name: &str, message: &str) -> Result<(), GitAiError> {
+        let output = Command::new("git")
+            .current_dir(&self.path)
+            .args(&["merge", branch_name, "-m", message, "-X", "theirs"])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git merge: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git merge failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        // Run post-commit hook
+        post_commit(&self.repo, false)?;
+
+        Ok(())
+    }
+
+    /// Rebases the current branch onto another branch using real git CLI, always picking 'theirs' in conflicts
+    pub fn rebase_onto(&self, _base_branch: &str, onto_branch: &str) -> Result<(), GitAiError> {
+        // First, get the current commit SHA before rebase
+        let old_sha = self.head_commit_sha()?;
+
+        let mut rebase = Command::new("git")
+            .current_dir(&self.path)
+            .args(&["rebase", onto_branch])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git rebase: {}", e)))?;
+
+        // If rebase fails due to conflict, always pick 'theirs' and continue
+        while !rebase.status.success()
+            && String::from_utf8_lossy(&rebase.stderr).contains("could not apply")
+        {
+            // Find conflicted files (for our tests, just lines.md)
+            let conflicted_file = self.path.join("lines.md");
+            // Overwrite with theirs (the branch we're rebasing onto)
+            let theirs_content = Command::new("git")
+                .current_dir(&self.path)
+                .args(&["show", &format!("{}:lines.md", onto_branch)])
+                .output()
+                .map_err(|e| GitAiError::Generic(format!("Failed to get theirs: {}", e)))?;
+            fs::write(&conflicted_file, &theirs_content.stdout)?;
+            // Add and continue
+            Command::new("git")
+                .current_dir(&self.path)
+                .args(&["add", "lines.md"])
+                .output()
+                .map_err(|e| GitAiError::Generic(format!("Failed to git add: {}", e)))?;
+            rebase = Command::new("git")
+                .current_dir(&self.path)
+                .args(&["rebase", "--continue"])
+                .output()
+                .map_err(|e| {
+                    GitAiError::Generic(format!("Failed to git rebase --continue: {}", e))
+                })?;
+        }
+
+        if !rebase.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git rebase failed: {}",
+                String::from_utf8_lossy(&rebase.stderr)
+            )));
+        }
+
+        // Get the new commit SHA after rebase
+        // let new_sha = self.head_commit_sha()?;
+
+        // // Call the shared remapping function to update authorship logs
+        // crate::log_fmt::authorship_log::remap_authorship_log_for_rewrite(
+        //     &self.repo, &old_sha, &new_sha,
+        // )?;
+
+        // Run post-commit hook
+        post_commit(&self.repo, false)?;
+
+        Ok(())
+    }
+
+    /// Gets the current branch name
+    pub fn current_branch(&self) -> Result<String, GitAiError> {
+        let head = self.repo.head()?;
+        let branch_name = head
+            .shorthand()
+            .ok_or_else(|| GitAiError::Generic("Could not get branch name".to_string()))?;
+        Ok(branch_name.to_string())
+    }
+
+    /// Gets the commit SHA of the current HEAD
+    pub fn head_commit_sha(&self) -> Result<String, GitAiError> {
+        let head = self.repo.head()?;
+        let commit_sha = head
+            .target()
+            .ok_or_else(|| GitAiError::Generic("No HEAD commit found".to_string()))?
+            .to_string();
+        Ok(commit_sha)
+    }
+
+    /// Gets the default branch name (first branch created)
+    pub fn get_default_branch(&self) -> Result<String, GitAiError> {
+        // Try to find the first branch that's not the current one
+        let current = self.current_branch()?;
+
+        // List all references and find the first branch
+        let refs = self.repo.references()?;
+        for reference in refs {
+            let reference = reference?;
+            if let Some(name) = reference.name() {
+                if name.starts_with("refs/heads/") {
+                    let branch_name = name.strip_prefix("refs/heads/").unwrap();
+                    if branch_name != current {
+                        return Ok(branch_name.to_string());
+                    }
+                }
+            }
+        }
+
+        // If no other branch found, return current
+        Ok(current)
     }
 
     /// Gets the repository path

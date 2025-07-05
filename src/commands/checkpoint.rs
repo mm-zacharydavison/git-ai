@@ -159,11 +159,18 @@ pub fn run(
     }
 
     if !quiet {
+        let label = if entries.len() > 1 {
+            "checkpoint"
+        } else {
+            "commit"
+        };
+
         println!(
-            "{} changed {} of the {} file(s) that have changed since the last commit",
+            "{} changed {} of the {} file(s) that have changed since the last {}",
             author,
             entries.len(),
-            files.len()
+            files.len(),
+            label
         );
     }
 
