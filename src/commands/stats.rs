@@ -130,7 +130,6 @@ fn print_stats(
     total_additions_by_author: &HashMap<String, u32>,
     total_deletions: u32,
 ) {
-    println!("Statistics for commit:");
     println!("{}", "=".repeat(50));
 
     // Print per-file statistics

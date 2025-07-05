@@ -3,13 +3,12 @@ const commitSha = process.env.COMMIT_SHA;
 const statsOutput = process.env.STATS_OUTPUT;
 const eventName = process.env.EVENT_NAME;
 
-let title, body;
+let body;
+let title = 'Live demo of git-ai:';
 
 if (eventName === 'push') {
-  title = '🚀 **Code Pushed!**';
   body = statsOutput;
 } else {
-  title = '📝 **PR Commit Analysis**';
   body = statsOutput;
 }
 
