@@ -311,7 +311,6 @@ fn get_initial_checkpoint_entries(
             String::new()
         };
 
-        println!("base_commit: {}", base_commit);
         let base_content = if base_commit == "initial" {
             String::new()
         } else {
