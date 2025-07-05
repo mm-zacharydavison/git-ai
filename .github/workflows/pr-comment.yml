@@ -5,6 +5,10 @@ on:
     types: [opened, synchronize, reopened]
   # push:
 
+permissions:
+  pull-requests: write
+  issues: write
+
 jobs:
   comment-on-merge:
     name: Comment on Merged PR
