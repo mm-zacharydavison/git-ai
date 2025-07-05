@@ -49,41 +49,13 @@ jobs:
 
             if (eventName === 'push') {
               title = '🚀 **Code Pushed!**';
-              body = `New code has been pushed to the repository.
-
-              **Commit:** \`${commitSha}\`
-
-              **Git-AI Stats for Commit:**
-              \`\`\`
-              ${statsOutput}
-              \`\`\`
-
-              **Next Steps:**
-              - The changes are now live in the branch
-              - If this was a feature or bug fix, consider updating the documentation
-              - If you have any follow-up tasks, please create new issues or PRs
-
-              Thanks for contributing to the project! 🚀`;
+              body = statsOutput;
             } else {
               title = '📝 **PR Commit Analysis**';
-              body = `Git-AI analysis for this pull request commit.
-
-              **Commit:** \`${commitSha}\`
-
-              **Git-AI Stats for Commit:**
-              \`\`\`
-              ${statsOutput}
-              \`\`\`
-
-              **Next Steps:**
-              - Review the AI contribution analysis above
-              - Consider any suggestions for improvement
-              - Continue with your development workflow
-
-              Thanks for contributing to the project! 🚀`;
+              body = statsOutput;
             }
 
-            const comment = `${title}\n\n${body}`;
+            const comment = title + '\n\n' + body;
 
             await github.rest.issues.createComment({
               owner,
