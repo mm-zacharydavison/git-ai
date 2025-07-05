@@ -13,8 +13,7 @@ pub struct BlameHunk {
     pub commit_sha: String,
     /// Original author from Git blame
     pub original_author: String,
-    /// Author from our authorship log (if available)
-    pub ai_author: Option<String>,
+    // ai_author: Option<String>,
 }
 
 pub fn run(
@@ -144,7 +143,6 @@ fn get_git_blame_hunks(
             range: (start.try_into().unwrap(), end.try_into().unwrap()),
             commit_sha,
             original_author: author,
-            ai_author: None, // Will be filled in later
         });
     }
 

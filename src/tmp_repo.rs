@@ -218,8 +218,8 @@ impl TmpRepo {
 
     pub fn new_with_base_commit(tmp_dir: PathBuf) -> Result<(Self, TmpFile, TmpFile), GitAiError> {
         let repo = TmpRepo::new(tmp_dir)?;
-        let mut lines_file = repo.write_file("lines.md", lines, true)?;
-        let mut alphabet_file = repo.write_file("alphabet.md", alphabet, true)?;
+        let lines_file = repo.write_file("lines.md", LINES, true)?;
+        let alphabet_file = repo.write_file("alphabet.md", ALPHABET, true)?;
         repo.trigger_checkpoint_with_author("test_user")?;
         repo.commit_with_message("initial commit")?;
         Ok((repo, lines_file, alphabet_file))
@@ -387,7 +387,7 @@ impl TmpRepo {
     /// Rebases the current branch onto another branch using real git CLI, always picking 'theirs' in conflicts
     pub fn rebase_onto(&self, _base_branch: &str, onto_branch: &str) -> Result<(), GitAiError> {
         // First, get the current commit SHA before rebase
-        let old_sha = self.head_commit_sha()?;
+        // let old_sha = self.head_commit_sha()?;
 
         let mut rebase = Command::new("git")
             .current_dir(&self.path)
@@ -509,7 +509,7 @@ impl TmpRepo {
     }
 }
 
-const alphabet: &str = "A
+const ALPHABET: &str = "A
 B
 C
 D
@@ -536,7 +536,7 @@ X
 Y
 Z";
 
-const lines: &str = "1
+const LINES: &str = "1
 2
 3
 4

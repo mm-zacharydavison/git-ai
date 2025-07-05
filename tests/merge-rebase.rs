@@ -1,6 +1,5 @@
 use git_ai::tmp_repo::TmpRepo;
 use insta::assert_debug_snapshot;
-use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
@@ -9,8 +8,7 @@ fn test_blame_after_merge_with_ai_contributions() {
     let repo_path = tmp_dir.path().to_path_buf();
 
     // Create initial repository with base commit
-    let (mut tmp_repo, mut lines, mut alphabet) =
-        TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
 
     // Create a feature branch
     tmp_repo.create_branch("feature").unwrap();
@@ -89,8 +87,7 @@ fn test_blame_after_complex_merge_scenario() {
     let repo_path = tmp_dir.path().to_path_buf();
 
     // Create initial repository with base commit
-    let (mut tmp_repo, mut lines, mut alphabet) =
-        TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
 
     // Create multiple branches
     tmp_repo.create_branch("feature-a").unwrap();
@@ -188,8 +185,7 @@ fn test_blame_after_merge_conflict_resolution() {
     let repo_path = tmp_dir.path().to_path_buf();
 
     // Create initial repository with base commit
-    let (mut tmp_repo, mut lines, mut alphabet) =
-        TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
 
     // Create a feature branch
     tmp_repo.create_branch("feature").unwrap();

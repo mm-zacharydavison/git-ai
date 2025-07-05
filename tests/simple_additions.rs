@@ -1,6 +1,5 @@
 use git_ai::tmp_repo::TmpRepo;
 use insta::assert_debug_snapshot;
-use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
@@ -32,8 +31,7 @@ fn test_simple_additions_with_base_commit() {
     let tmp_dir = tempdir().unwrap();
     let repo_path = tmp_dir.path().to_path_buf();
 
-    let (mut tmp_repo, mut lines, mut alphabet) =
-        TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
 
     lines
         .append("NEW LINEs From Claude!\nHello\nWorld\n")
@@ -53,8 +51,7 @@ fn test_simple_additions_on_top_of_ai_contributions() {
     let tmp_dir = tempdir().unwrap();
     let repo_path = tmp_dir.path().to_path_buf();
 
-    let (mut tmp_repo, mut lines, mut alphabet) =
-        TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
 
     lines
         .append("NEW LINEs From Claude!\nHello\nWorld\n")

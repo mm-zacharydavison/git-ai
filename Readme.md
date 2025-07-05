@@ -172,6 +172,10 @@ pub fn checkpoint_internal(
 ) -> Result<(usize, usize, usize), GitAiError>
 ```
 
+### Known limitiaitons
+
+- Authorship logs will not survive a rebase. Possible, but requires merging authorship logs in a `post-rewrite` hook.
+
 ### Development Setup
 
 ```bash
