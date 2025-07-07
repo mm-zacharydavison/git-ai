@@ -1,5 +1,6 @@
 version: "3"
 tasks:
+  # CLI
   build:
     desc: Build the project in release mode (native Apple Silicon)
     cmds:
@@ -13,30 +14,24 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - cargo clean
-
-  check:
-    desc: Check code without building
-    cmds:
-      - cargo check
-
-  clippy:
-    desc: Run clippy linter
-    cmds:
-      - cargo clippy -- -D warnings
-
-  fmt:
-    desc: Format code
-    cmds:
-      - cargo fmt
-
-  fmt:check:
-    desc: Check code formatting
-    cmds:
-      - cargo fmt -- --check
-
   release:local:
     desc: Build release and install to user bin directory
     deps: [build]
     cmds:
       - cp target/release/git-ai ~/.local/bin/git-ai
       - chmod +x ~/.local/bin/git-ai
+
+  # Extensions
+  cursor:build:
+    desc: Build the cursor extension
+    dir: agent-support/cursor
+    cmds:
+      - yarn install
+      - yarn run compile
+  cursor:publish:
+    desc: publish the cursor extension
+    deps: [cursor:build]
+    dir: agent-support/cursor
+    cmds:
+      - npx vsce package --out cursor-git-ai.vsix
+      - npx ovsx publish cursor-git-ai.vsix
