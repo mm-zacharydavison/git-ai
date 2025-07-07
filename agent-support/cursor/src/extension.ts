@@ -11,7 +11,7 @@ interface ChangeEvent {
 const showCheckpointMessage = () =>
   vscode.workspace
     .getConfiguration("cursorGitAi")
-    .get("enableCheckpointLogging") || process.env.NODE_ENV === "development";
+    .get("enableCheckpointLogging");
 
 class AIDetector {
   private recentChanges: ChangeEvent[] = [];
