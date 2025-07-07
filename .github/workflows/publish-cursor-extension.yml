@@ -1,0 +1,40 @@
+name: Publish Cursor Extension
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "yarn"
+          cache-dependency-path: "agent-support/cursor/yarn.lock"
+
+      - name: Install Task
+        uses: arduino/setup-task@v1
+        with:
+          version: "3.x"
+
+      - name: Publish Cursor Extension
+        run: task cursor:publish
+        working-directory: ${{ github.workspace }}
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+
+      - name: Upload Extension Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cursor-git-ai-extension
+          path: agent-support/cursor/cursor-git-ai.vsix
+          retention-days: 30
