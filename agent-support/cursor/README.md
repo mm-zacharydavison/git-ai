@@ -1,5 +1,7 @@
 # VSCode / Cursor `git-ai` extension
 
+# [Install `git-ai for Cursor here!`](https://marketplace.cursorapi.com/items/?itemName=acunniffe.cursor-git-ai)
+
 A VS Code extension that tracks AI-generated code using [git-ai](https://github.com/acunniffe/git-ai).
 
 ## Workaround Alert
@@ -29,3 +31,5 @@ You can enable toast messages from the extension when it calls checkpoints to ge
 4. **Restart Cursor**
 
 ## License
+
+MIT

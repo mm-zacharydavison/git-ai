@@ -45,60 +45,62 @@ Next: **Finalize specification and start making PRs into Coding Agents**
 curl -sSL https://gitai.run/install.sh | bash
 ```
 
-2. Init - adds a local precommit and postcommit hook
+### Init - adds a local precommit and postcommit hook
 
 ```
 git-ai init
 ```
 
-> If you are not using Claude Code, you'll need to manually mark AI contributions by running `git-ai checkpoint --author 'Cursor'` after approving generated code. Automatic support for Cursor, Codex, Copilot support coming soon!
+### Setup your IDE or Agent CLI to log AI contributions
 
-3. Add hooks to Claude Code [`.claude/settings.local.json`](https://docs.anthropic.com/en/docs/claude-code/hooks)
+Supported:
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "git-ai checkpoint"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "git-ai checkpoint --author \"Claude Code\""
-          }
-        ]
-      }
-    ]
-  }
-}
+[x] [Cursor - Extension](https://marketplace.cursorapi.com/items/?itemName=acunniffe.cursor-git-ai). [Documentation](/agent-support//cursor//README.md)
+
+[x] [Claude Code - Hooks](/agent-support/claude-code.md)
+
+Help needed:
+
+[ ] Sourcegraph Cody + Amp
+
+[ ] OpenAI Codex
+
+[ ] Windsurf
+
+[ ] RovoDev CLI
+_...your tool_
+
+Manually:
+
+If you want to manually mark code as written by you or your agent.
+
+Before submitting your prompt (not specifying `--author` will default to your `git.config.name`.
+
+```
+git-ai checkpoint
 ```
 
-3. **Work and commit** - Claude Code will automatically mark its contributions after writing to the file system, and the pre-commit hooks will mark your contributions.
+After the AI has applied its changes, run checkpoint with the name of the agent you're using.
 
-4. **View authorship** - after your first commit, run:
+```
+git-ai checkpoint --author "Claude Code"
+```
+
+### Work and commit
+
+Claude Code will automatically mark its contributions after writing to the file system, and the pre-commit hooks will mark your contributions.
+
+### View authorship\*\* - after your first commit, run:
 
 ```bash
 git-ai blame path/to/file
 ```
 
-### For Other AI Tools
-
-> **Note**: If you're not using Claude Code, you'll need to manually mark AI contributions by running `git-ai checkpoint --author 'Your AI Tool'` after approving generated code. Automatic support for Cursor, Codex, Copilot coming soon!
-
 ---
 
-### The Standard (draft-1)
+# For toolbuilders
+
+## The Standard (draft-1)
 
 Authorship logs, attached to commits, pushed to the `refs/ai/authorship` as blob objects.
 
