@@ -34,4 +34,4 @@ tasks:
     dir: agent-support/cursor
     cmds:
       - npx vsce package --out cursor-git-ai.vsix
-      - npx ovsx publish cursor-git-ai.vsix
+      - npx ovsx publish cursor-git-ai.vsix -p $OVSX_TOKEN
