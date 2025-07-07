@@ -53,13 +53,13 @@ git-ai init
 
 ### Setup your IDE or Agent CLI to log AI contributions
 
-Supported:
+**Supported:**
 
-[x] [Cursor - Extension](https://marketplace.cursorapi.com/items/?itemName=acunniffe.cursor-git-ai). [Documentation](/agent-support//cursor//README.md)
+[x] [Cursor via Extension](https://marketplace.cursorapi.com/items/?itemName=acunniffe.cursor-git-ai). Source and documentation are [here](/agent-support//cursor//README.md)
 
-[x] [Claude Code - Hooks](/agent-support/claude-code.md)
+[x] [Claude Code via Hooks](/agent-support/claude-code.md)
 
-Help needed:
+**Help needed:**
 
 [ ] Sourcegraph Cody + Amp
 
@@ -70,7 +70,9 @@ Help needed:
 [ ] RovoDev CLI
 _...your tool_
 
-Manually:
+> **Want to add yours?** All PRs welcome! Add documentation or plugin code to `/agent-support/{tool-name}.md`
+
+**Manually:**
 
 If you want to manually mark code as written by you or your agent.
 
