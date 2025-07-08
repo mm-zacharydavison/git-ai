@@ -155,7 +155,9 @@ class AIDetector {
     return false;
   }
 
-  public processChange(event: vscode.TextDocumentChangeEvent): void {
+  public async processChange(
+    event: vscode.TextDocumentChangeEvent
+  ): Promise<void> {
     const changeEvent: ChangeEvent = {
       timestamp: Date.now(),
       contentChanges: event.contentChanges,
@@ -177,16 +179,22 @@ class AIDetector {
       // Cancel any pending human edit notification
       this.cancelHumanEditNotification();
       this.aiDetectedRecently = true;
-      this.onAIDetected(event);
+      await this.onAIDetected(event);
 
-      // Reset the flag after 2 seconds
+      // Reset the flag after 4.5 seconds to cover the full human edit timeout period plus a small buffer
+      // This prevents race conditions where human edits could trigger during the 4-second timeout window
       setTimeout(() => {
         this.aiDetectedRecently = false;
-      }, 2000);
+      }, 4500);
     } else {
       // Only trigger human edit if AI hasn't been detected recently
       if (!this.aiDetectedRecently) {
         this.triggerHumanEditNotification();
+      } else {
+        // Log when human edits are suppressed due to recent AI detection
+        if (showCheckpointMessage()) {
+          console.log("Human edit suppressed due to recent AI detection");
+        }
       }
     }
   }
@@ -208,8 +216,13 @@ class AIDetector {
     }, 4000);
   }
 
-  private onAIDetected(event: vscode.TextDocumentChangeEvent): void {
+  private async onAIDetected(
+    event: vscode.TextDocumentChangeEvent
+  ): Promise<void> {
     const analysis = this.analyzeContentChanges(event.contentChanges);
+
+    // Save all open documents before creating checkpoint
+    await this.saveAllOpenDocuments();
 
     checkpoint("ai");
     // Only show notification if enabled in settings
@@ -219,6 +232,29 @@ class AIDetector {
           analysis.totalLines
         } lines with ${Math.round(analysis.avgCharsPerLine)} chars per line.`
       );
+    }
+  }
+
+  private async saveAllOpenDocuments(): Promise<void> {
+    try {
+      // Get all open text editors
+      const openEditors = vscode.window.visibleTextEditors;
+
+      // Save all documents that have unsaved changes
+      const savePromises = openEditors
+        .filter((editor) => editor.document.isDirty)
+        .map((editor) => editor.document.save());
+
+      if (savePromises.length > 0) {
+        await Promise.all(savePromises);
+        if (showCheckpointMessage()) {
+          console.log(
+            `Saved ${savePromises.length} open documents before AI checkpoint`
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Error saving documents:", error);
     }
   }
 }
@@ -236,8 +272,8 @@ export function activate(context: vscode.ExtensionContext) {
       const aiDetector = new AIDetector();
       // Listen for text document changes
       const textDocumentChangeDisposable =
-        vscode.workspace.onDidChangeTextDocument((event) => {
-          aiDetector.processChange(event);
+        vscode.workspace.onDidChangeTextDocument(async (event) => {
+          await aiDetector.processChange(event);
         });
 
       context.subscriptions.push(textDocumentChangeDisposable);

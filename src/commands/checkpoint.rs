@@ -37,6 +37,11 @@ pub fn run(
         get_or_create_working_log(repo, &base_commit)?
     };
 
+    // Clear ai-working-log/diffs references when reset is true
+    if reset {
+        clear_working_log_diffs(repo, &base_commit)?;
+    }
+
     if show_working_log {
         if working_log.is_empty() {
             if !quiet {
@@ -677,4 +682,36 @@ fn is_text_file(repo: &Repository, file_path: &str) -> bool {
     }
 
     true
+}
+
+/// Clear all ai-working-log/diffs references for a specific base commit
+/// This is called when the --reset flag is used to clean up old diff references
+fn clear_working_log_diffs(repo: &Repository, base_commit: &str) -> Result<(), GitAiError> {
+    // Use git CLI to list and remove references that match the pattern
+    let output = std::process::Command::new("git")
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/ai-working-log/diffs/",
+        ])
+        .current_dir(repo.workdir().unwrap_or_else(|| Path::new(".")))
+        .output()?;
+
+    if output.status.success() {
+        let refs_output = String::from_utf8_lossy(&output.stdout);
+        let prefix = format!("refs/ai-working-log/diffs/{}-", base_commit);
+
+        for line in refs_output.lines() {
+            let ref_name = line.trim();
+            if ref_name.starts_with(&prefix) {
+                // Remove the reference using git CLI
+                let _ = std::process::Command::new("git")
+                    .args(["update-ref", "-d", ref_name])
+                    .current_dir(repo.workdir().unwrap_or_else(|| Path::new(".")))
+                    .output();
+            }
+        }
+    }
+
+    Ok(())
 }
