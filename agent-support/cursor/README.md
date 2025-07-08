@@ -1,6 +1,8 @@
 # VSCode / Cursor `git-ai` extension
 
-# [Install `git-ai for Cursor here!`](https://marketplace.cursorapi.com/items/?itemName=acunniffe.cursor-git-ai)
+# [Install `git-ai for Cursor here!`](https://open-vsx.org/extension/acunniffe/cursor-git-ai)
+
+Search for "git-ai for cursor" in Cursor Extensions tab
 
 A VS Code extension that tracks AI-generated code using [git-ai](https://github.com/acunniffe/git-ai).
 
