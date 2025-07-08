@@ -8,6 +8,11 @@
 git-ai blame src/log_fmt_authorship.rs
 ```
 
+
+https://github.com/user-attachments/assets/fee74ee7-2404-41b5-bc4c-3139f2825b46
+
+
+
 <img src="assets/blame-cmd.jpg" />
 
 ### How it works
