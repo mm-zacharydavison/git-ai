@@ -8,12 +8,10 @@ interface ChangeEvent {
   isPaste: boolean;
 }
 
-const showCheckpointMessage = () =>
-  Boolean(
-    vscode.workspace
-      .getConfiguration("cursorGitAi")
-      .get("enableCheckpointLogging")
-  );
+const showCheckpointMessage = () => {
+  const config = vscode.workspace.getConfiguration("cursorGitAi");
+  return Boolean(config.get("enableCheckpointLogging"));
+};
 
 class AIDetector {
   private recentChanges: ChangeEvent[] = [];
@@ -206,11 +204,6 @@ class AIDetector {
 
     this.humanEditTimeout = setTimeout(() => {
       checkpoint("human");
-
-      if (showCheckpointMessage()) {
-        vscode.window.showInformationMessage(`Human Edit Detected!`);
-      }
-
       this.humanEditTimeout = null;
     }, 4000);
   }
@@ -249,9 +242,11 @@ export function activate(context: vscode.ExtensionContext) {
 
       context.subscriptions.push(textDocumentChangeDisposable);
       // Show startup notification
-      vscode.window.showInformationMessage(
-        "🤖 AI Code Detector is now active! Status:" + showCheckpointMessage()
-      );
+      if (showCheckpointMessage()) {
+        vscode.window.showInformationMessage(
+          `🤖 AI Code Detector is now active!`
+        );
+      }
     }
   });
 }
@@ -287,13 +282,18 @@ export function checkpoint(author: "human" | "ai") {
       { cwd: workspaceRoot },
       (error, stdout, stderr) => {
         if (error) {
-          vscode.window.showInformationMessage(
-            "Error with checkpoint: " + error.message
-          );
+          if (showCheckpointMessage()) {
+            vscode.window.showInformationMessage(
+              "Error with checkpoint: " + error.message
+            );
+          }
           resolve(false);
         } else {
-          console.log("Checkpoint created " + author);
-          vscode.window.showInformationMessage("Checkpoint created " + author);
+          if (showCheckpointMessage()) {
+            vscode.window.showInformationMessage(
+              "Checkpoint created " + author
+            );
+          }
           resolve(true);
         }
       }
