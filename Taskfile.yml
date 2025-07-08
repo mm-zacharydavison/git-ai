@@ -33,5 +33,6 @@ tasks:
     deps: [cursor:build]
     dir: agent-support/cursor
     cmds:
+      - cp ../../assets/git-ai.png git-ai.png
       - npx vsce package --out cursor-git-ai.vsix
       - npx ovsx publish cursor-git-ai.vsix -p $OVSX_TOKEN
