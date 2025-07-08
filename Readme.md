@@ -8,10 +8,7 @@
 git-ai blame src/log_fmt_authorship.rs
 ```
 
-
-https://github.com/user-attachments/assets/fee74ee7-2404-41b5-bc4c-3139f2825b46
-
-
+https://github.com/user-attachments/assets/74b49493-92af-4627-934a-a3c161dbb49f
 
 <img src="assets/blame-cmd.jpg" />
 
