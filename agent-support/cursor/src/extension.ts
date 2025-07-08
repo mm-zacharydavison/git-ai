@@ -9,9 +9,11 @@ interface ChangeEvent {
 }
 
 const showCheckpointMessage = () =>
-  vscode.workspace
-    .getConfiguration("cursorGitAi")
-    .get("enableCheckpointLogging");
+  Boolean(
+    vscode.workspace
+      .getConfiguration("cursorGitAi")
+      .get("enableCheckpointLogging")
+  );
 
 class AIDetector {
   private recentChanges: ChangeEvent[] = [];
@@ -248,7 +250,7 @@ export function activate(context: vscode.ExtensionContext) {
       context.subscriptions.push(textDocumentChangeDisposable);
       // Show startup notification
       vscode.window.showInformationMessage(
-        "🤖 AI Code Detector is now active!"
+        "🤖 AI Code Detector is now active! Status:" + showCheckpointMessage()
       );
     }
   });
