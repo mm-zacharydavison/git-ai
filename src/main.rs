@@ -305,7 +305,40 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
 
 fn proxy_to_git(args: &[String]) {
     // Check if this is an interactive command that needs special handling
-    let interactive_commands = ["commit", "rebase", "merge", "revert", "cherry-pick"];
+    let interactive_commands = [
+        "add",
+        "am",
+        "apply",
+        "bisect",
+        "branch",
+        "checkout",
+        "cherry-pick",
+        "clean",
+        "clone",
+        "commit",
+        "config",
+        "fetch",
+        "help",
+        "init",
+        "interactive",
+        "merge",
+        "mv",
+        "notes",
+        "pull",
+        "push",
+        "rebase",
+        "remote",
+        "reflog",
+        "reset",
+        "restore",
+        "revert",
+        "rm",
+        "stash",
+        "submodule",
+        "switch",
+        "tag",
+        "worktree",
+    ];
     let is_interactive = args
         .first()
         .map(|cmd| interactive_commands.contains(&cmd.as_str()))
