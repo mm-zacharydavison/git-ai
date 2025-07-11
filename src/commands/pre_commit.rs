@@ -3,6 +3,6 @@ use git2::Repository;
 
 pub fn run(repo: &Repository, default_user_name: String) -> Result<(), GitAiError> {
     // Run checkpoint as human editor.
-    let result = super::checkpoint::run(repo, &default_user_name, false, false, true, None, None);
+    let result = super::checkpoint::run(repo, &default_user_name, false, false, None, None);
     result.map(|_| ())
 }

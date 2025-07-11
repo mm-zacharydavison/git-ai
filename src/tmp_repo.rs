@@ -267,7 +267,6 @@ impl TmpRepo {
         checkpoint(
             &self.repo, author, false, // show_working_log
             false, // reset
-            true,  // quiet
             None,  // model
             None,  // human_author
         )

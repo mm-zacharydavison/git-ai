@@ -2,12 +2,14 @@ mod commands;
 mod error;
 mod git;
 mod log_fmt;
+mod utils;
 
 use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use std::io::Write;
 use std::process::Command;
+use utils::debug_log;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -19,12 +21,6 @@ struct Cli {
     /// Git command and arguments
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
-}
-
-fn debug_log(msg: &str) {
-    if cfg!(debug_assertions) {
-        eprintln!("\x1b[1;33m[git-ai]\x1b[0m {}", msg);
-    }
 }
 
 fn main() {
@@ -71,7 +67,6 @@ fn handle_checkpoint(args: &[String]) {
     let mut show_working_log = false;
     let mut reset = false;
     let mut model = None;
-    let mut quiet = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -102,10 +97,7 @@ fn handle_checkpoint(args: &[String]) {
                     std::process::exit(1);
                 }
             }
-            "--quiet" => {
-                quiet = true;
-                i += 1;
-            }
+
             _ => {
                 eprintln!("Unknown checkpoint argument: {}", args[i]);
                 std::process::exit(1);
@@ -144,7 +136,6 @@ fn handle_checkpoint(args: &[String]) {
         final_author,
         show_working_log,
         reset,
-        quiet,
         model.as_deref(),
         Some(&default_user_name),
     ) {
