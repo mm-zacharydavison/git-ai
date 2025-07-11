@@ -1,4 +1,5 @@
-use crate::commands::{blame, checkpoint, post_commit};
+use crate::commands::post_commit::run as post_commit;
+use crate::commands::{blame, checkpoint};
 use crate::error::GitAiError;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;

@@ -6,6 +6,8 @@ use serde_json;
 use std::fs;
 use std::io::{self, Write};
 
+pub const AI_AUTHORSHIP_REFSPEC: &str = "+refs/ai/authorship/*:refs/ai/authorship/*";
+
 ///
 pub fn put_reference(
     repo: &Repository,
