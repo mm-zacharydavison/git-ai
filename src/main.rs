@@ -47,6 +47,14 @@ fn main() {
             // debug_log(&format!("wrapping: git commit"));
             handle_commit(args);
         }
+        "pre-commit" => {
+            // Backwards compatibility: do nothing and exit 0
+            std::process::exit(0);
+        }
+        "post-commit" => {
+            // Backwards compatibility: do nothing and exit 0
+            std::process::exit(0);
+        }
         "fetch" => {
             handle_fetch_or_pull("fetch", args);
         }
