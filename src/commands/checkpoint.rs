@@ -13,6 +13,7 @@ pub fn run(
     author: &str,
     show_working_log: bool,
     reset: bool,
+    quiet: bool,
     model: Option<&str>,
     human_author: Option<&str>,
 ) -> Result<(usize, usize, usize), GitAiError> {
@@ -163,13 +164,15 @@ pub fn run(
         "commit"
     };
 
-    debug_log(&format!(
-        "{} changed {} of the {} file(s) that have changed since the last {}",
-        author,
-        entries.len(),
-        files.len(),
-        label
-    ));
+    if !quiet {
+        eprintln!(
+            "{} changed {} of the {} file(s) that have changed since the last {}",
+            author,
+            entries.len(),
+            files.len(),
+            label
+        );
+    }
 
     // Return the requested values: (entries_len, files_len, working_log_len)
     Ok((entries.len(), files.len(), working_log.len()))

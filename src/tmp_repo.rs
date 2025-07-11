@@ -1,6 +1,6 @@
-use crate::commands::post_commit::run as post_commit;
 use crate::commands::{blame, checkpoint};
 use crate::error::GitAiError;
+use crate::git::post_commit::post_commit;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
 use std::fs;
@@ -267,8 +267,8 @@ impl TmpRepo {
         checkpoint(
             &self.repo, author, false, // show_working_log
             false, // reset
-            None,  // model
-            None,  // human_author
+            true, None, // model
+            None, // human_author
         )
     }
 

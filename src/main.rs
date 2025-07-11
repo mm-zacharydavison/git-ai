@@ -44,7 +44,7 @@ fn main() {
             handle_blame(args);
         }
         "commit" => {
-            debug_log(&format!("wrapping: git commit"));
+            // debug_log(&format!("wrapping: git commit"));
             handle_commit(args);
         }
         "fetch" => {
@@ -136,6 +136,7 @@ fn handle_checkpoint(args: &[String]) {
         final_author,
         show_working_log,
         reset,
+        false,
         model.as_deref(),
         Some(&default_user_name),
     ) {
@@ -196,33 +197,37 @@ fn handle_commit(args: &[String]) {
     };
 
     // Run pre-commit logic
-    if let Err(e) = commands::pre_commit(&repo, default_user_name.clone()) {
+    if let Err(e) = git::pre_commit::pre_commit(&repo, default_user_name.clone()) {
         eprintln!("Pre-commit failed: {}", e);
         std::process::exit(1);
     }
 
-    // Proxy to git commit
+    // Proxy to git commit with interactive support
     let mut full_args = vec!["commit".to_string()];
     full_args.extend_from_slice(args);
-    let output = std::process::Command::new("git").args(&full_args).output();
 
-    match output {
-        Ok(output) => {
-            // Forward stdout and stderr
-            if !output.stdout.is_empty() {
-                std::io::stdout().write_all(&output.stdout).unwrap();
-            }
-            if !output.stderr.is_empty() {
-                std::io::stderr().write_all(&output.stderr).unwrap();
-            }
-            let code = output.status.code().unwrap_or(1);
-            // If commit succeeded, run post-commit
-            if code == 0 {
-                if let Err(e) = commands::post_commit(&repo, false) {
-                    eprintln!("Post-commit failed: {}", e);
+    let child = std::process::Command::new("git").args(&full_args).spawn();
+
+    match child {
+        Ok(mut child) => {
+            // Wait for the process to complete
+            let status = child.wait();
+            match status {
+                Ok(status) => {
+                    let code = status.code().unwrap_or(1);
+                    // If commit succeeded, run post-commit
+                    if code == 0 {
+                        if let Err(e) = git::post_commit::post_commit(&repo, false) {
+                            eprintln!("Post-commit failed: {}", e);
+                        }
+                    }
+                    std::process::exit(code);
+                }
+                Err(e) => {
+                    eprintln!("Failed to wait for git commit process: {}", e);
+                    std::process::exit(1);
                 }
             }
-            std::process::exit(code);
         }
         Err(e) => {
             eprintln!("Failed to execute git commit: {}", e);
@@ -299,24 +304,56 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
 }
 
 fn proxy_to_git(args: &[String]) {
-    let output = Command::new("git").args(args).output();
+    // Check if this is an interactive command that needs special handling
+    let interactive_commands = ["commit", "rebase", "merge", "revert", "cherry-pick"];
+    let is_interactive = args
+        .first()
+        .map(|cmd| interactive_commands.contains(&cmd.as_str()))
+        .unwrap_or(false);
 
-    match output {
-        Ok(output) => {
-            // Forward stdout and stderr
-            if !output.stdout.is_empty() {
-                std::io::stdout().write_all(&output.stdout).unwrap();
-            }
-            if !output.stderr.is_empty() {
-                std::io::stderr().write_all(&output.stderr).unwrap();
-            }
+    if is_interactive {
+        // Use spawn for interactive commands
+        let child = Command::new("git").args(args).spawn();
 
-            // Forward the exit code
-            std::process::exit(output.status.code().unwrap_or(1));
+        match child {
+            Ok(mut child) => {
+                let status = child.wait();
+                match status {
+                    Ok(status) => {
+                        std::process::exit(status.code().unwrap_or(1));
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to wait for git process: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to execute git command: {}", e);
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("Failed to execute git command: {}", e);
-            std::process::exit(1);
+    } else {
+        // Use output for non-interactive commands
+        let output = Command::new("git").args(args).output();
+
+        match output {
+            Ok(output) => {
+                // Forward stdout and stderr
+                if !output.stdout.is_empty() {
+                    std::io::stdout().write_all(&output.stdout).unwrap();
+                }
+                if !output.stderr.is_empty() {
+                    std::io::stderr().write_all(&output.stderr).unwrap();
+                }
+
+                // Forward the exit code
+                std::process::exit(output.status.code().unwrap_or(1));
+            }
+            Err(e) => {
+                eprintln!("Failed to execute git command: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }
