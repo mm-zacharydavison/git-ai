@@ -50,8 +50,8 @@ fn main() {
         "fetch" => {
             handle_fetch_or_pull("fetch", args);
         }
-        "pull" => {
-            handle_fetch_or_pull("pull", args);
+        "push" => {
+            handle_fetch_or_pull("push", args);
         }
         _ => {
             debug_log(&format!("proxying: git {}", command));
