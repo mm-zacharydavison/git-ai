@@ -725,12 +725,16 @@ fn output_default_format(
         output.push_str(stats);
     }
 
-    // Output handling - try pager first, fall back to direct output
-    if io::stdout().is_terminal() {
-        let pager = std::env::var("GIT_PAGER")
-            .or_else(|_| std::env::var("PAGER"))
-            .unwrap_or_else(|_| "less".to_string());
+    // Output handling - respect pager environment variables
+    let pager = std::env::var("GIT_PAGER")
+        .or_else(|_| std::env::var("PAGER"))
+        .unwrap_or_else(|_| "less".to_string());
 
+    // If pager is set to "cat" or empty, output directly
+    if pager == "cat" || pager.is_empty() {
+        print!("{}", output);
+    } else if io::stdout().is_terminal() {
+        // Try to use the specified pager
         match std::process::Command::new(&pager)
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -754,6 +758,7 @@ fn output_default_format(
             }
         }
     } else {
+        // Not a terminal, output directly
         print!("{}", output);
     }
     Ok(())

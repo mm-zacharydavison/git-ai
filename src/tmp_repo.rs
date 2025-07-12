@@ -511,6 +511,13 @@ impl TmpRepo {
         if let Some((start, end)) = line_range {
             options.line_ranges.push((start, end));
         }
+
+        // Set pager environment variables to avoid interactive pager in tests
+        unsafe {
+            std::env::set_var("GIT_PAGER", "cat");
+            std::env::set_var("PAGER", "cat");
+        }
+
         let blame_map = blame::run(&self.repo, &tmp_file.filename, &options)?;
         Ok(blame_map.into_iter().collect())
     }

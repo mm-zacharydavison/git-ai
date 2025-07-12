@@ -47,6 +47,8 @@ fn run_git_blame(repo_path: &std::path::Path, file_path: &str, args: &[&str]) ->
         .arg("blame")
         .args(&processed_args)
         .arg(file_path)
+        .env("GIT_PAGER", "cat") // Force use of cat instead of less
+        .env("PAGER", "cat")
         .output()
         .expect("Failed to run git blame");
 
