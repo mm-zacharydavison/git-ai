@@ -7,7 +7,7 @@ mod utils;
 use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::Command;
 use utils::debug_log;
 
@@ -159,8 +159,6 @@ fn handle_blame(args: &[String]) {
         std::process::exit(1);
     }
 
-    let file_arg = &args[0];
-
     // Find the git repository
     let repo = match find_repository() {
         Ok(repo) => repo,
@@ -170,10 +168,28 @@ fn handle_blame(args: &[String]) {
         }
     };
 
-    // Parse file argument for line range (e.g., "file.rs:10-20" or "file.rs:10")
-    let (file_path, line_range) = parse_file_with_line_range(file_arg);
+    // Parse blame arguments
+    let (file_path, options) = match commands::blame::parse_blame_args(args) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("Failed to parse blame arguments: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    if let Err(e) = commands::blame(&repo, &file_path, line_range) {
+    // Check if this is an interactive terminal
+    let is_interactive = std::io::stdout().is_terminal();
+
+    if is_interactive && options.incremental {
+        // For incremental mode in interactive terminal, we need special handling
+        // This would typically involve a pager like less
+        let mut full_args = vec!["blame".to_string()];
+        full_args.extend_from_slice(args);
+        proxy_to_git(&full_args);
+        return;
+    }
+
+    if let Err(e) = commands::blame::run(&repo, &file_path, &options) {
         eprintln!("Blame failed: {}", e);
         std::process::exit(1);
     }

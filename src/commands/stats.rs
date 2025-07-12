@@ -1,4 +1,4 @@
-use crate::commands::blame::{get_git_blame_hunks, overlay_ai_authorship};
+use crate::commands::blame::{GitAiBlameOptions, get_git_blame_hunks, overlay_ai_authorship};
 use crate::error::GitAiError;
 use git2::{DiffOptions, Repository};
 use std::collections::HashMap;
@@ -87,7 +87,13 @@ pub fn run(repo: &Repository, sha: &str) -> Result<(), GitAiError> {
         if total_lines == 0 {
             continue;
         }
-        let blame_hunks = match get_git_blame_hunks(repo, file_path, 1, total_lines) {
+        let blame_hunks = match get_git_blame_hunks(
+            repo,
+            file_path,
+            1,
+            total_lines,
+            &GitAiBlameOptions::default(),
+        ) {
             Ok(hunks) => hunks,
             Err(_) => continue,
         };

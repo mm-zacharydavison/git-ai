@@ -283,7 +283,10 @@ impl TmpRepo {
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
 
-        let signature = Signature::now("Test User", "test@example.com")?;
+        // Use a fixed timestamp for stable test results
+        // Unix timestamp for 2023-01-01 12:00:00 UTC
+        let fixed_time = git2::Time::new(1672574400, 0);
+        let signature = Signature::new("Test User", "test@example.com", &fixed_time)?;
 
         // Check if there's a parent commit before we use it
         let _has_parent = if let Ok(head) = self.repo.head() {
@@ -504,7 +507,11 @@ impl TmpRepo {
     ) -> Result<BTreeMap<u32, String>, GitAiError> {
         // Use the filename (relative path) instead of the absolute path
         // Convert the blame result to BTreeMap for deterministic order
-        let blame_map = blame(&self.repo, &tmp_file.filename, line_range)?;
+        let mut options = blame::GitAiBlameOptions::default();
+        if let Some((start, end)) = line_range {
+            options.line_ranges.push((start, end));
+        }
+        let blame_map = blame::run(&self.repo, &tmp_file.filename, &options)?;
         Ok(blame_map.into_iter().collect())
     }
 }
