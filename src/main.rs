@@ -415,6 +415,7 @@ fn proxy_to_git(args: &[String]) {
     }
 }
 
+#[allow(dead_code)]
 fn parse_file_with_line_range(file_arg: &str) -> (String, Option<(u32, u32)>) {
     if let Some(colon_pos) = file_arg.rfind(':') {
         let file_path = file_arg[..colon_pos].to_string();

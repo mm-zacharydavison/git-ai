@@ -4,12 +4,14 @@ use git2::{DiffOptions, Repository};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FileStats {
     pub additions: HashMap<String, u32>,
     pub deletions: u32,
     pub total_additions: u32,
 }
 
+#[allow(dead_code)]
 pub fn run(repo: &Repository, sha: &str) -> Result<(), GitAiError> {
     // Find the commit
     let commit = repo.find_commit(repo.revparse_single(sha)?.id())?;
@@ -131,6 +133,7 @@ pub fn run(repo: &Repository, sha: &str) -> Result<(), GitAiError> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn print_stats(
     file_stats: &HashMap<String, FileStats>,
     total_additions_by_author: &HashMap<String, u32>,
@@ -152,6 +155,7 @@ fn print_stats(
     println!("\nTotal Deletions: -{}", total_deletions);
 }
 
+#[allow(dead_code)]
 fn print_file_stats(file_path: &str, stats: &FileStats) {
     // Calculate total changes for the file
     let total_additions = stats.total_additions;

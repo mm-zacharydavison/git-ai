@@ -15,6 +15,7 @@ pub struct BlameHunk {
     /// Commit SHA that introduced this hunk
     pub commit_sha: String,
     /// Abbreviated commit SHA
+    #[allow(dead_code)]
     pub abbrev_sha: String,
     /// Original author from Git blame
     pub original_author: String,
@@ -83,6 +84,7 @@ pub struct GitAiBlameOptions {
     pub contents_file: Option<String>,
 
     // Revision options
+    #[allow(dead_code)]
     pub revision: Option<String>,
     pub reverse: Option<String>,
     pub first_parent: bool,
@@ -364,6 +366,7 @@ pub fn overlay_ai_authorship(
 }
 
 #[allow(unused_variables)]
+#[allow(dead_code)]
 fn print_blame_summary(line_authors: &HashMap<u32, String>, start_line: u32, end_line: u32) {
     println!("{}", "=".repeat(80));
 
@@ -404,7 +407,7 @@ fn print_blame_summary(line_authors: &HashMap<u32, String>, start_line: u32, end
 
 fn output_porcelain_format(
     repo: &Repository,
-    line_authors: &HashMap<u32, String>,
+    _line_authors: &HashMap<u32, String>,
     file_path: &str,
     lines: &[&str],
     line_ranges: &[(u32, u32)],
@@ -517,7 +520,7 @@ fn output_porcelain_format(
 
 fn output_incremental_format(
     repo: &Repository,
-    line_authors: &HashMap<u32, String>,
+    _line_authors: &HashMap<u32, String>,
     file_path: &str,
     _lines: &[&str],
     line_ranges: &[(u32, u32)],
