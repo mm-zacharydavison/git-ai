@@ -9,7 +9,6 @@ interface ChangeEvent {
 }
 
 const showCheckpointMessage = () => {
-  return true;
   const config = vscode.workspace.getConfiguration("cursorGitAi");
   return Boolean(config.get("enableCheckpointLogging"));
 };
