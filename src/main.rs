@@ -24,11 +24,29 @@ struct Cli {
 }
 
 fn main() {
+    // Get the binary name that was called
+    let binary_name = std::env::args_os()
+        .next()
+        .and_then(|arg| arg.into_string().ok())
+        .and_then(|path| {
+            std::path::Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or("git-ai".to_string());
+
     let cli = Cli::parse();
 
     if cli.args.is_empty() {
-        // No arguments provided, proxy to git help
-        proxy_to_git(&["help".to_string()]);
+        // No arguments provided, show appropriate help
+        if binary_name == "git" {
+            // User called 'git' (via alias), show git help
+            proxy_to_git(&["help".to_string()]);
+        } else {
+            // User called 'git-ai', show git-ai specific help
+            print_help();
+        }
         return;
     }
 
@@ -437,4 +455,21 @@ fn parse_file_with_line_range(file_arg: &str) -> (String, Option<(u32, u32)>) {
         }
     }
     (file_arg.to_string(), None)
+}
+
+fn print_help() {
+    eprintln!("git-ai - git proxy with AI authorship tracking");
+    eprintln!("");
+    eprintln!("Usage: git-ai <git or git-ai command> [args...]");
+    eprintln!("");
+    eprintln!("Commands:");
+    eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
+    eprintln!("  blame         [override] git blame with AI authorship tracking");
+    eprintln!(
+        "  commit        [wrapper] pass through to 'git commit' with git-ai before/after hooks"
+    );
+    eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
+    eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
+    eprintln!("");
+    std::process::exit(0);
 }

@@ -5,56 +5,26 @@
 <p align="center"><code>curl -sSL https://gitai.run/install.sh | bash</code></p>
 
 ```bash
-git-ai blame src/log_fmt_authorship.rs
+git blame src/log_fmt_authorship.rs
 ```
 
 https://github.com/user-attachments/assets/74b49493-92af-4627-934a-a3c161dbb49f
 
 <img src="assets/blame-cmd.jpg" />
 
-### How it works
+## Install
 
-`git-ai` uses checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system they call `checkpoint --author 'Claude Code' --model 'claude-4-sonnet'` to mark their contribution as AI-generated. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine.
-
-When you commit code, the base commit's checkpoints are compacted into a much smaller authorship log that is linked to your commit.
-
-<img src="assets/diagram.svg" />
-
-### Status - Preview Release
-
-_July 2 2025_ - **Seeking Feedback.** First version of the spec and Rust implementation released
-
-Next: **Finalize specification and start making PRs into Coding Agents**
-
-## Why `git-ai`?
-
-`git blame` attributes all code to the commit's author, even when much of it is AI-generated.
-
-**⭐️Git-native** - enhanced authorship is stored in Git and linked to commit hashes.
-
-**🫡Simple and explicit** - no file system monitors, keyloggers or batch-write heuristics. Supported Agents call `git-ai checkpoint --author "Claude Code" --model claude-4-sonnet` after writing code.
-
-**🤞Emerging Standard** - developers have tool choice, and they're likely using a mix of Claude Code, Codex, Cursor, etc.
-
-**⚡️Fast + Cross Platform** - implemented in Rust, as fast as `git status`, and built on [`libgit2`](https://github.com/libgit2/libgit2)
-
----
-
-## Installation
-
-### Quick Install (Recommended)
+`git-ai` is implimented as a git proxy. It passes commands, args and flags to your `git` binary. You and your IDEs won't notice the difference, but all your code will be annotated with AI Authorship.
 
 ```bash
 curl -sSL https://gitai.run/install.sh | bash
 ```
 
-### Init - adds a local precommit and postcommit hook
+> **Recommended**: add an `alias git=git-ai` to your shell config
 
-```
-git-ai init
-```
+> Alternative (more flaky): update your IDEs and SCM GUI tool's git paths to `bin/git-ai` and favor `git-ai` over `git` when running commmands you manually.
 
-### Setup your IDE or Agent CLI to log AI contributions
+### Agent Setup
 
 **Supported:**
 
@@ -79,29 +49,37 @@ _...your tool_
 
 If you want to manually mark code as written by you or your agent.
 
-Before submitting your prompt (not specifying `--author` will default to your `git.config.name`.
+Before submitting your prompt run checkpoint to attribute any new working copy changes to yourself.
 
 ```
 git-ai checkpoint
 ```
 
-After the AI has applied its changes, run checkpoint with the name of the agent you're using.
+After the AI has applied its changes, run checkpoint with the name of the agent you're using. This will apply the latest (generated) working copy changes to the agent.
 
 ```
 git-ai checkpoint --author "Claude Code"
 ```
 
-### Work and commit
+## Why `git-ai`?
 
-Claude Code will automatically mark its contributions after writing to the file system, and the pre-commit hooks will mark your contributions.
+`git blame` attributes all code to the commit's author, even when much of it is AI-generated.
 
-### View authorship\*\* - after your first commit, run:
+**⭐️Git-native** - enhanced authorship is stored in Git and linked to commit hashes.
 
-```bash
-git-ai blame path/to/file
-```
+**🫡Simple and explicit** - no file system monitors, keyloggers or batch-write heuristics. Supported Agents call `git-ai checkpoint --author "Claude Code" --model claude-4-sonnet` after writing code.
 
----
+**🤞Emerging Standard** - developers have tool choice, and they're likely using a mix of Claude Code, Codex, Cursor, etc.
+
+**⚡️Fast + Cross Platform** - implemented in Rust, as fast as `git status`, and built on [`libgit2`](https://github.com/libgit2/libgit2)
+
+### How it works
+
+`git-ai` uses checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system they call `checkpoint --author 'Claude Code' --model 'claude-4-sonnet'` to mark their contribution as AI-generated. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine.
+
+When you commit code, the base commit's checkpoints are compacted into a much smaller authorship log that is linked to your commit.
+
+<img src="assets/diagram.svg" />
 
 # For toolbuilders
 
