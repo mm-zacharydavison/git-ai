@@ -16,7 +16,6 @@ use utils::debug_log;
 #[command(about = "git proxy with AI authorship tracking", long_about = None)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(disable_help_flag = true)]
-#[command(disable_version_flag = true)]
 struct Cli {
     /// Git command and arguments
     #[arg(trailing_var_arg = true)]
