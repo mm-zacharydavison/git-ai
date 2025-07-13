@@ -9,6 +9,7 @@ interface ChangeEvent {
 }
 
 const showCheckpointMessage = () => {
+  return true;
   const config = vscode.workspace.getConfiguration("cursorGitAi");
   return Boolean(config.get("enableCheckpointLogging"));
 };
@@ -119,11 +120,42 @@ class AIDetector {
     };
   }
 
+  private normalizeContent(text: string): string {
+    return text
+      .replace(/\s+/g, "") // Remove all whitespace (spaces, tabs, newlines)
+      .replace(/[;()]/g, "") // Remove semicolons and parentheses
+      .toLowerCase(); // Normalize case for comparison
+  }
+
+  private isFormattingChange(
+    changes: readonly vscode.TextDocumentContentChangeEvent[],
+    document: vscode.TextDocument
+  ): boolean {
+    for (const change of changes) {
+      const beforeText =
+        change.rangeLength > 0 ? document.getText(change.range) : "";
+      const beforeNormalized = this.normalizeContent(beforeText);
+      const afterNormalized = this.normalizeContent(change.text);
+
+      // If the normalized content is the same, it's just formatting
+      if (beforeNormalized === afterNormalized) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private isLikelyAIInsertion(
-    changes: readonly vscode.TextDocumentContentChangeEvent[]
+    changes: readonly vscode.TextDocumentContentChangeEvent[],
+    document: vscode.TextDocument
   ): boolean {
     // If it's a recent paste, undo, or redo, it's probably not AI
     if (this.isRecentPaste() || this.isRecentUndoOrRedo()) {
+      return false;
+    }
+
+    // Check if this is just a formatting change
+    if (this.isFormattingChange(changes, document)) {
       return false;
     }
 
@@ -173,7 +205,7 @@ class AIDetector {
     );
 
     // Check if this looks like AI insertion
-    const isAI = this.isLikelyAIInsertion(event.contentChanges);
+    const isAI = this.isLikelyAIInsertion(event.contentChanges, event.document);
 
     if (isAI) {
       // Cancel any pending human edit notification
