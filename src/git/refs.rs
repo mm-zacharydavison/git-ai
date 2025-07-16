@@ -6,6 +6,7 @@ use serde_json;
 use std::fs;
 
 pub const AI_AUTHORSHIP_REFSPEC: &str = "+refs/ai/authorship/*:refs/ai/authorship/*";
+pub const DEFAULT_REFSPEC: &str = "+refs/heads/*:refs/heads/*";
 
 ///
 pub fn put_reference(
