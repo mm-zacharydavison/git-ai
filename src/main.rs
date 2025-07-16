@@ -11,6 +11,8 @@ use std::io::{IsTerminal, Write};
 use std::process::Command;
 use utils::debug_log;
 
+use crate::git::refs::DEFAULT_REFSPEC;
+
 #[derive(Parser)]
 #[command(name = "git-ai")]
 #[command(about = "git proxy with AI authorship tracking", long_about = None)]
@@ -302,6 +304,7 @@ fn handle_fetch_or_pull(cmd: &str, args: &[String]) {
                 cmd.to_string(),
                 default_remote,
                 AI_AUTHORSHIP_REFSPEC.to_string(),
+                DEFAULT_REFSPEC.to_string(),
             ]);
         } else {
             eprintln!("No git remotes found.");
