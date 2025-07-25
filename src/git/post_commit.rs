@@ -90,6 +90,14 @@ fn filter_untracked_files(
     let current_commit = repo.find_commit(head.target().unwrap())?;
     let current_tree = current_commit.tree()?;
 
+    // Get the parent commit tree to see which files were tracked before
+    let parent_tree = if let Ok(parent) = current_commit.parent(0) {
+        parent.tree()?
+    } else {
+        // No parent commit, so all files in current tree are new
+        current_tree.clone()
+    };
+
     // Filter the working log
     let mut filtered_checkpoints = Vec::new();
 
@@ -98,10 +106,19 @@ fn filter_untracked_files(
 
         for entry in &checkpoint.entries {
             // Check if this file is currently tracked in the current commit
-            if current_tree
+            let is_currently_tracked = current_tree
                 .get_path(std::path::Path::new(&entry.file))
-                .is_ok()
-            {
+                .is_ok();
+
+            // Check if this file was tracked in the parent commit
+            let was_previously_tracked = parent_tree
+                .get_path(std::path::Path::new(&entry.file))
+                .is_ok();
+
+            // Include the entry if:
+            // 1. The file is currently tracked, OR
+            // 2. The file is new (not in parent) but has working log entries
+            if is_currently_tracked || !was_previously_tracked {
                 filtered_entries.push(entry.clone());
             }
         }
