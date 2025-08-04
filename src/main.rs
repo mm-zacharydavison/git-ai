@@ -55,6 +55,9 @@ fn main() {
     let args = &cli.args[1..];
 
     match command.as_str() {
+        "stats-delta" => {
+            handle_stats_delta(args);
+        }
         "checkpoint" => {
             handle_checkpoint(args);
         }
@@ -168,6 +171,22 @@ fn handle_checkpoint(args: &[String]) {
         Some(&default_user_name),
     ) {
         eprintln!("Checkpoint failed: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn handle_stats_delta(_args: &[String]) {
+    // Find the git repository
+    let repo = match find_repository() {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = commands::stats_delta::run(&repo) {
+        eprintln!("Stats delta failed: {}", e);
         std::process::exit(1);
     }
 }
@@ -482,6 +501,7 @@ fn print_help() {
     eprintln!("Usage: git-ai <git or git-ai command> [args...]");
     eprintln!("");
     eprintln!("Commands:");
+    eprintln!("  stats-delta   [new] Statistics delta command");
     eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
     eprintln!("  blame         [override] git blame with AI authorship tracking");
     eprintln!(
