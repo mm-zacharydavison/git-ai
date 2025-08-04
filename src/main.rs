@@ -518,7 +518,6 @@ fn print_help() {
     eprintln!("Usage: git-ai <git or git-ai command> [args...]");
     eprintln!("");
     eprintln!("Commands:");
-    eprintln!("  stats-delta   [new] Statistics delta command");
     eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
     eprintln!("  blame         [override] git blame with AI authorship tracking");
     eprintln!(
