@@ -366,6 +366,7 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
 
 fn proxy_to_git(args: &[String]) {
     // Check if this is an interactive command that needs special handling
+    // Including color-supporting commands to preserve TTY for proper color output
     let interactive_commands = [
         "add",
         "am",
@@ -378,10 +379,15 @@ fn proxy_to_git(args: &[String]) {
         "clone",
         "commit",
         "config",
+        "diff",
+        "describe",
         "fetch",
         "help",
         "init",
         "interactive",
+        "log",
+        "ls-files",
+        "ls-tree",
         "merge",
         "mv",
         "notes",
@@ -394,10 +400,14 @@ fn proxy_to_git(args: &[String]) {
         "restore",
         "revert",
         "rm",
+        "shortlog",
+        "show",
         "stash",
+        "status",
         "submodule",
         "switch",
         "tag",
+        "whatchanged",
         "worktree",
     ];
     let is_interactive = args
