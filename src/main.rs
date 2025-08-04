@@ -175,7 +175,24 @@ fn handle_checkpoint(args: &[String]) {
     }
 }
 
-fn handle_stats_delta(_args: &[String]) {
+fn handle_stats_delta(args: &[String]) {
+    // Parse stats-delta-specific arguments
+    let mut json_output = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => {
+                json_output = true;
+                i += 1;
+            }
+            _ => {
+                eprintln!("Unknown stats-delta argument: {}", args[i]);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Find the git repository
     let repo = match find_repository() {
         Ok(repo) => repo,
@@ -185,7 +202,7 @@ fn handle_stats_delta(_args: &[String]) {
         }
     };
 
-    if let Err(e) = commands::stats_delta::run(&repo) {
+    if let Err(e) = commands::stats_delta::run(&repo, json_output) {
         eprintln!("Stats delta failed: {}", e);
         std::process::exit(1);
     }

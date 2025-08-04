@@ -6,7 +6,7 @@ use crate::log_fmt::authorship_log::AuthorshipLog;
 use git2::Repository;
 use std::collections::HashMap;
 
-pub fn run(repo: &Repository) -> Result<(), GitAiError> {
+pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
     // Find all working log refs
     let working_log_refs = find_working_log_refs(repo)?;
 
@@ -87,7 +87,7 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
         .collect();
 
     // Create authorship logs for direct children that don't already have one
-    let mut authorship_created = 0;
+    let mut authorship_logs: HashMap<String, AuthorshipLog> = HashMap::new();
 
     for commit_hash in &commit_hashes {
         // Get the working log for this commit
@@ -124,10 +124,21 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
                     &format!("AI authorship attestation for commit {}", child_commit),
                 )?;
 
-                println!("refs/ai/authorship{}", child_commit);
-                authorship_created += 1;
+                if json_output {
+                    // Store the authorship log for JSON output
+                    authorship_logs.insert(child_commit.clone(), authorship_log);
+                } else {
+                    // Print individual ref as before
+                    println!("refs/ai/authorship{}", child_commit);
+                }
             }
         }
+    }
+
+    // Output JSON if requested
+    if json_output && !authorship_logs.is_empty() {
+        let json_output = serde_json::to_string(&authorship_logs)?;
+        println!("{}", json_output);
     }
 
     // Delete working logs after creating authorship logs
