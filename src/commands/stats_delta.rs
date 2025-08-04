@@ -124,10 +124,7 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
                     &format!("AI authorship attestation for commit {}", child_commit),
                 )?;
 
-                println!(
-                    "Created authorship log for {} from working log of {}",
-                    child_commit, commit_hash
-                );
+                println!("refs/ai/authorship{}", child_commit);
                 authorship_created += 1;
             }
         }
