@@ -65,3 +65,19 @@ pub fn get_reference_as_authorship_log(
     let authorship_log = serde_json::from_str(&content)?;
     Ok(authorship_log)
 }
+
+pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
+    let full_ref_name = format!("refs/{}", ref_name);
+
+    // Try to find and delete the reference
+    match repo.find_reference(&full_ref_name) {
+        Ok(mut reference) => {
+            reference.delete()?;
+            Ok(())
+        }
+        Err(_) => {
+            // Reference doesn't exist, which is fine for deletion
+            Ok(())
+        }
+    }
+}

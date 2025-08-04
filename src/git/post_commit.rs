@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::git::refs::put_reference;
+use crate::git::refs::{delete_reference, put_reference};
 use crate::log_fmt::authorship_log::AuthorshipLog;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
@@ -76,6 +76,12 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
         "Authorship log written to refs/ai/authorship/{}",
         commit_sha
     ));
+
+    // Delete the working log after successfully creating the authorship log
+    let working_log_ref = format!("ai-working-log/{}", parent_sha);
+    delete_reference(repo, &working_log_ref)?;
+
+    debug_log(&format!("Working log deleted: refs/{}", working_log_ref));
 
     Ok((ref_name, authorship_log))
 }
