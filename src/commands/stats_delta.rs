@@ -5,39 +5,26 @@ use crate::git::refs::put_reference;
 use crate::log_fmt::authorship_log::AuthorshipLog;
 use git2::Repository;
 use std::collections::HashMap;
-use std::time::Instant;
 
 pub fn run(repo: &Repository) -> Result<(), GitAiError> {
-    let start_time = Instant::now();
-
     // Find all working log refs
-    let find_start = Instant::now();
     let working_log_refs = find_working_log_refs(repo)?;
-    let find_duration = find_start.elapsed();
-    println!("Finding working log refs took: {:?}", find_duration);
 
     // Filter to only show refs with > 0 checkpoints
-    let filter_start = Instant::now();
     let mut filtered_refs: HashMap<String, usize> = working_log_refs
         .into_iter()
         .filter(|(_, checkpoint_count)| *checkpoint_count > 0)
         .collect();
-    let filter_duration = filter_start.elapsed();
-    println!("Filtering by checkpoint count took: {:?}", filter_duration);
 
     // Build reverse lookup map for child commits (much faster than checking each commit individually)
-    let child_filter_start = Instant::now();
     let mut parent_to_children: HashMap<String, Vec<String>> = HashMap::new();
 
     // Get all references and build the parent->children map
     let refs = repo.references()?;
-    let mut ref_count = 0;
-    let mut commit_count = 0;
     let mut processed_commits = std::collections::HashSet::new();
 
     for reference in refs {
         let reference = reference?;
-        ref_count += 1;
         let ref_name = reference.name().unwrap_or("");
 
         // Skip ai-working-log refs to avoid self-references
@@ -54,8 +41,6 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
 
             let commit_id = commit.id().to_string();
             if processed_commits.insert(commit_id.clone()) {
-                commit_count += 1;
-
                 // Add this commit as a child of each of its parents
                 for parent in commit.parents() {
                     let parent_id = parent.id().to_string();
@@ -68,25 +53,10 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
         }
     }
 
-    println!(
-        "Built parent->children map: checked {} refs, {} commits",
-        ref_count, commit_count
-    );
-
     // Filter using the pre-built map
-    let mut child_check_count = 0;
-    filtered_refs.retain(|commit_hash, _| {
-        child_check_count += 1;
-        parent_to_children.contains_key(commit_hash)
-    });
-    let child_filter_duration = child_filter_start.elapsed();
-    println!(
-        "Filtering by child commits took: {:?} (checked {} commits)",
-        child_filter_duration, child_check_count
-    );
+    filtered_refs.retain(|commit_hash, _| parent_to_children.contains_key(commit_hash));
 
     if filtered_refs.is_empty() {
-        println!("No working log refs with checkpoints and child commits found.");
         return Ok(());
     }
 
@@ -116,23 +86,8 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
         .map(|(hash, _, _)| hash.clone())
         .collect();
 
-    println!(
-        "Found {} working log ref(s) with checkpoints and child commits:",
-        sorted_refs.len()
-    );
-    println!();
-
-    for (commit_hash, checkpoint_count, _) in &sorted_refs {
-        println!("  {} ({} checkpoint(s))", commit_hash, checkpoint_count);
-    }
-
     // Create authorship logs for direct children that don't already have one
-    let authorship_start = Instant::now();
     let mut authorship_created = 0;
-
-    let mut total_children = 0;
-    let mut existing_authorship_logs = 0;
-    let mut no_children = 0;
 
     for commit_hash in &commit_hashes {
         // Get the working log for this commit
@@ -147,11 +102,8 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
         let children = parent_to_children.get(commit_hash).unwrap_or(&empty_vec);
 
         if children.is_empty() {
-            no_children += 1;
             continue;
         }
-
-        total_children += children.len();
 
         for child_commit in children {
             // Check if authorship log already exists for this child
@@ -177,34 +129,11 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
                     child_commit, commit_hash
                 );
                 authorship_created += 1;
-            } else {
-                existing_authorship_logs += 1;
             }
         }
     }
 
-    println!("Debug breakdown:");
-    println!("  - Working logs with no children: {}", no_children);
-    println!("  - Total children found: {}", total_children);
-    println!(
-        "  - Children with existing authorship logs: {}",
-        existing_authorship_logs
-    );
-    println!(
-        "  - Children needing authorship logs: {}",
-        authorship_created
-    );
-
-    let authorship_duration = authorship_start.elapsed();
-    println!(
-        "Authorship log creation took: {:?} (created {} logs)",
-        authorship_duration, authorship_created
-    );
-
     // Delete working logs after creating authorship logs
-    let delete_start = Instant::now();
-    let mut working_logs_deleted = 0;
-
     for commit_hash in &commit_hashes {
         let working_log_ref = format!("ai-working-log/{}", commit_hash);
 
@@ -221,20 +150,9 @@ pub fn run(repo: &Repository) -> Result<(), GitAiError> {
             let full_ref_name = format!("refs/{}", working_log_ref);
             if let Ok(mut reference) = repo.find_reference(&full_ref_name) {
                 reference.delete()?;
-                println!("Deleted working log for {}", commit_hash);
-                working_logs_deleted += 1;
             }
         }
     }
-
-    let delete_duration = delete_start.elapsed();
-    println!(
-        "Working log deletion took: {:?} (deleted {} logs)",
-        delete_duration, working_logs_deleted
-    );
-
-    let total_duration = start_time.elapsed();
-    println!("\nTotal execution time: {:?}", total_duration);
 
     Ok(())
 }
@@ -249,12 +167,8 @@ fn find_working_log_refs(repo: &Repository) -> Result<HashMap<String, usize>, Gi
         let reference = reference?;
         let ref_name = reference.name().unwrap_or("");
 
-        // Check if this is a working log ref (starts with refs/ai-working-log/)
         if ref_name.starts_with("refs/ai-working-log/") {
-            // Extract the base commit from the ref name
             let base_commit = ref_name.trim_start_matches("refs/ai-working-log/");
-
-            // Try to load the working log to get the checkpoint count
             match get_reference_as_working_log(repo, &format!("ai-working-log/{}", base_commit)) {
                 Ok(checkpoints) => {
                     working_log_refs.insert(base_commit.to_string(), checkpoints.len());
