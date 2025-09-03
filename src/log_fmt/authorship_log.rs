@@ -281,6 +281,7 @@ impl AuthorEntry {
     pub fn add_lines(&mut self, lines: &[LineRange]) {
         self.lines.extend(lines.iter().cloned());
         self.lines.sort();
+        self.deduplicate_and_merge_ranges();
     }
 
     pub fn remove_lines(&mut self, to_remove: &[LineRange]) {
@@ -306,6 +307,108 @@ impl AuthorEntry {
             }
         }
         None
+    }
+
+    /// Deduplicate and merge overlapping/adjacent ranges
+    fn deduplicate_and_merge_ranges(&mut self) {
+        if self.lines.is_empty() {
+            return;
+        }
+
+        // First, deduplicate identical ranges
+        self.lines.dedup();
+
+        // Keep merging until no more merges are possible
+        loop {
+            let mut merged_any = false;
+            let mut i = 0;
+
+            while i < self.lines.len() {
+                let mut j = i + 1;
+                let mut merged_with = None;
+
+                // Look for a range that can be merged with the current one
+                while j < self.lines.len() {
+                    if self.ranges_can_merge(&self.lines[i], &self.lines[j]) {
+                        // Merge the ranges
+                        let merged = self.merge_ranges(&self.lines[i], &self.lines[j]);
+                        self.lines[i] = merged;
+                        merged_with = Some(j);
+                        merged_any = true;
+                        break;
+                    }
+                    j += 1;
+                }
+
+                if let Some(j) = merged_with {
+                    // Remove the merged range
+                    self.lines.remove(j);
+                } else {
+                    i += 1;
+                }
+            }
+
+            // If no merges happened in this pass, we're done
+            if !merged_any {
+                break;
+            }
+        }
+
+        // Ensure the final result is sorted by start line number
+        self.lines.sort_by(|a, b| {
+            let start_a = match a {
+                LineRange::Single(l) => *l,
+                LineRange::Range(start, _) => *start,
+            };
+            let start_b = match b {
+                LineRange::Single(l) => *l,
+                LineRange::Range(start, _) => *start,
+            };
+            start_a.cmp(&start_b)
+        });
+    }
+
+    /// Check if two ranges can be merged (overlapping or adjacent)
+    fn ranges_can_merge(&self, range1: &LineRange, range2: &LineRange) -> bool {
+        match (range1, range2) {
+            (LineRange::Single(l1), LineRange::Single(l2)) => {
+                // Adjacent single lines
+                l1.abs_diff(*l2) <= 1
+            }
+            (LineRange::Single(l), LineRange::Range(start, end)) => {
+                // Single line adjacent to or overlapping with range
+                *l >= start.saturating_sub(1) && *l <= end + 1
+            }
+            (LineRange::Range(start, end), LineRange::Single(l)) => {
+                // Range adjacent to or overlapping with single line
+                *l >= start.saturating_sub(1) && *l <= end + 1
+            }
+            (LineRange::Range(start1, end1), LineRange::Range(start2, end2)) => {
+                // Two ranges overlap or are adjacent
+                start1 <= &(end2 + 1) && start2 <= &(end1 + 1)
+            }
+        }
+    }
+
+    /// Merge two ranges that can be merged
+    fn merge_ranges(&self, range1: &LineRange, range2: &LineRange) -> LineRange {
+        let (start1, end1) = match range1 {
+            LineRange::Single(l) => (*l, *l),
+            LineRange::Range(start, end) => (*start, *end),
+        };
+        let (start2, end2) = match range2 {
+            LineRange::Single(l) => (*l, *l),
+            LineRange::Range(start, end) => (*start, *end),
+        };
+
+        let merged_start = start1.min(start2);
+        let merged_end = end1.max(end2);
+
+        if merged_start == merged_end {
+            LineRange::Single(merged_start)
+        } else {
+            LineRange::Range(merged_start, merged_end)
+        }
     }
 }
 
@@ -923,5 +1026,129 @@ mod tests {
 
         // Verify that lines are still attributed correctly
         assert_eq!(file_auth.get_author(5), Some("claude"));
+    }
+
+    #[test]
+    fn test_deduplicate_identical_ranges() {
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Add the same range multiple times
+        author_entry.add_lines(&[LineRange::Range(1, 5)]);
+        author_entry.add_lines(&[LineRange::Range(1, 5)]);
+        author_entry.add_lines(&[LineRange::Range(1, 5)]);
+
+        // Should only have one range after deduplication
+        assert_eq!(author_entry.lines.len(), 1);
+        assert_eq!(author_entry.lines[0], LineRange::Range(1, 5));
+    }
+
+    #[test]
+    fn test_merge_adjacent_ranges() {
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Add adjacent ranges
+        author_entry.add_lines(&[LineRange::Range(1, 5)]);
+        author_entry.add_lines(&[LineRange::Range(6, 10)]);
+
+        // Should be merged into one range
+        assert_eq!(author_entry.lines.len(), 1);
+        assert_eq!(author_entry.lines[0], LineRange::Range(1, 10));
+    }
+
+    #[test]
+    fn test_merge_overlapping_ranges() {
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Add overlapping ranges
+        author_entry.add_lines(&[LineRange::Range(1, 8)]);
+        author_entry.add_lines(&[LineRange::Range(5, 12)]);
+
+        // Should be merged into one range
+        assert_eq!(author_entry.lines.len(), 1);
+        assert_eq!(author_entry.lines[0], LineRange::Range(1, 12));
+    }
+
+    #[test]
+    fn test_merge_single_lines_with_ranges() {
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Add a range and adjacent single lines
+        author_entry.add_lines(&[LineRange::Range(1, 5)]);
+        author_entry.add_lines(&[LineRange::Single(6)]);
+        author_entry.add_lines(&[LineRange::Single(7)]);
+
+        // Should be merged into one range
+        assert_eq!(author_entry.lines.len(), 1);
+        assert_eq!(author_entry.lines[0], LineRange::Range(1, 7));
+    }
+
+    #[test]
+    fn test_merge_adjacent_single_lines() {
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Add adjacent single lines
+        author_entry.add_lines(&[LineRange::Single(5)]);
+        author_entry.add_lines(&[LineRange::Single(6)]);
+        author_entry.add_lines(&[LineRange::Single(7)]);
+
+        // Should be merged into one range
+        assert_eq!(author_entry.lines.len(), 1);
+        assert_eq!(author_entry.lines[0], LineRange::Range(5, 7));
+    }
+
+    #[test]
+    fn test_complex_merging_scenario() {
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Add a complex mix of ranges and single lines
+        author_entry.add_lines(&[LineRange::Range(1, 3)]);
+        author_entry.add_lines(&[LineRange::Single(4)]);
+        author_entry.add_lines(&[LineRange::Range(5, 7)]);
+        author_entry.add_lines(&[LineRange::Single(8)]);
+        author_entry.add_lines(&[LineRange::Range(10, 12)]);
+        author_entry.add_lines(&[LineRange::Single(13)]);
+        author_entry.add_lines(&[LineRange::Single(14)]);
+
+        // Should result in two ranges: [1,8] and [10,14]
+        assert_eq!(author_entry.lines.len(), 2);
+        assert_eq!(author_entry.lines[0], LineRange::Range(1, 8));
+        assert_eq!(author_entry.lines[1], LineRange::Range(10, 14));
+    }
+
+    #[test]
+    fn test_duplicate_ranges_issue_fix() {
+        // This test simulates the exact issue reported: massive amounts of duplicate line ranges
+        let mut author_entry = AuthorEntry::new("claude".to_string());
+
+        // Simulate the same range being added hundreds of times (like in the reported issue)
+        for _ in 0..100 {
+            author_entry.add_lines(&[LineRange::Range(412, 414)]);
+        }
+        for _ in 0..100 {
+            author_entry.add_lines(&[LineRange::Single(420)]);
+        }
+        for _ in 0..100 {
+            author_entry.add_lines(&[LineRange::Range(423, 424)]);
+        }
+
+        // After deduplication and merging, we should have only 3 unique ranges
+        assert_eq!(author_entry.lines.len(), 3);
+
+        // The ranges should be sorted by their start position
+        // Range(412, 414) comes first, then Single(420), then Range(423, 424)
+        assert_eq!(author_entry.lines[0], LineRange::Range(412, 414));
+        assert_eq!(author_entry.lines[1], LineRange::Single(420));
+        assert_eq!(author_entry.lines[2], LineRange::Range(423, 424));
+
+        // Verify that the ranges are properly sorted by start line number
+        let start_lines: Vec<u32> = author_entry
+            .lines
+            .iter()
+            .map(|range| match range {
+                LineRange::Single(l) => *l,
+                LineRange::Range(start, _) => *start,
+            })
+            .collect();
+        assert_eq!(start_lines, vec![412, 420, 423]);
     }
 }
