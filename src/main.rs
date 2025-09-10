@@ -42,6 +42,8 @@ fn main() {
     if cli.args.is_empty() {
         if binary_name == "git" {
             // User called 'git' (via alias), show git help
+            //
+            //
             proxy_to_git(&["help".to_string()]);
         } else {
             // User called 'git-ai', show git-ai specific help
