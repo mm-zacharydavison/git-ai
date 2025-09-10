@@ -39,9 +39,7 @@ fn main() {
         .unwrap_or("git-ai".to_string());
 
     let cli = Cli::parse();
-
     if cli.args.is_empty() {
-        // No arguments provided, show appropriate help
         if binary_name == "git" {
             // User called 'git' (via alias), show git help
             proxy_to_git(&["help".to_string()]);
