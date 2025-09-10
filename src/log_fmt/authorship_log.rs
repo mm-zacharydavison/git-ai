@@ -732,10 +732,11 @@ impl AuthorshipLog {
                     }
 
                     // Add to this author with compression
+                    // Group by attribution (not just author name) so each prompt gets its own entry
                     if let Some(entry) = file_auth
                         .authors
                         .iter_mut()
-                        .find(|a| a.author == author_name)
+                        .find(|a| a.attribution == attribution)
                     {
                         entry.add_lines(&lines_to_remove);
                         // Update agent metadata if provided and not already set
@@ -1449,6 +1450,109 @@ mod tests {
         assert_eq!(stored_prompt.agent_id.tool, "cursor");
         assert_eq!(stored_prompt.agent_id.id, "session-abc123");
         assert_eq!(stored_prompt.messages.len(), 2);
+    }
+
+    #[test]
+    fn test_multiple_prompts_same_tool_separate_entries() {
+        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+
+        // Create two different prompts from the same tool (cursor)
+        let prompt1 = Prompt {
+            agent_id: AgentId {
+                tool: "cursor".to_string(),
+                id: "session-abc123".to_string(),
+            },
+            messages: vec![PromptMessage {
+                text: "Add error handling".to_string(),
+                role: PromptRole::User,
+                username: Some("john.doe".to_string()),
+                timestamp: 1234567890,
+            }],
+        };
+
+        let prompt2 = Prompt {
+            agent_id: AgentId {
+                tool: "cursor".to_string(),
+                id: "session-xyz789".to_string(),
+            },
+            messages: vec![PromptMessage {
+                text: "Add logging".to_string(),
+                role: PromptRole::User,
+                username: Some("john.doe".to_string()),
+                timestamp: 1234567891,
+            }],
+        };
+
+        // Create two checkpoints with different prompts
+        let checkpoint1 = Checkpoint {
+            snapshot: "abc123".to_string(),
+            diff: "diff1".to_string(),
+            author: "john.doe".to_string(),
+            timestamp: 1234567890,
+            entries: vec![crate::log_fmt::working_log::WorkingLogEntry {
+                file: "src/main.rs".to_string(),
+                added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
+                deleted_lines: vec![],
+            }],
+            agent_metadata: Some(crate::log_fmt::working_log::AgentMetadata {
+                model: "gpt-4".to_string(),
+                human_author: Some("john.doe".to_string()),
+            }),
+            prompt: Some(prompt1),
+        };
+
+        let checkpoint2 = Checkpoint {
+            snapshot: "xyz789".to_string(),
+            diff: "diff2".to_string(),
+            author: "john.doe".to_string(),
+            timestamp: 1234567891,
+            entries: vec![crate::log_fmt::working_log::WorkingLogEntry {
+                file: "src/main.rs".to_string(),
+                added_lines: vec![crate::log_fmt::working_log::Line::Range(15, 20)],
+                deleted_lines: vec![],
+            }],
+            agent_metadata: Some(crate::log_fmt::working_log::AgentMetadata {
+                model: "gpt-4".to_string(),
+                human_author: Some("john.doe".to_string()),
+            }),
+            prompt: Some(prompt2),
+        };
+
+        // Convert to authorship log
+        let authorship_log = AuthorshipLog::from_working_log(&[checkpoint1, checkpoint2]);
+
+        // Should have two separate author entries for the same tool
+        let file_auth = &authorship_log.files["src/main.rs"];
+        assert_eq!(file_auth.authors.len(), 2);
+
+        // Both should have author "cursor" but different prompt_ids
+        let authors: Vec<&str> = file_auth
+            .authors
+            .iter()
+            .map(|a| a.author.as_str())
+            .collect();
+        assert_eq!(authors, vec!["cursor", "cursor"]);
+
+        // But they should have different attributions (different prompt_ids)
+        let attributions: Vec<&Attribution> =
+            file_auth.authors.iter().map(|a| &a.attribution).collect();
+        match &attributions[0] {
+            Attribution::Agent { prompt_id: id1 } => match &attributions[1] {
+                Attribution::Agent { prompt_id: id2 } => {
+                    assert_ne!(id1, id2, "Different prompts should have different IDs");
+                }
+                _ => panic!("Expected Agent attribution"),
+            },
+            _ => panic!("Expected Agent attribution"),
+        }
+
+        // Verify prompts are stored separately
+        assert_eq!(authorship_log.prompts.len(), 2);
+
+        // Show the JSON output to demonstrate multiple cursor entries
+        let json = serde_json::to_string_pretty(&authorship_log).unwrap();
+        println!("Multiple Prompts Same Tool JSON Example:");
+        println!("{}", json);
     }
 
     #[test]
