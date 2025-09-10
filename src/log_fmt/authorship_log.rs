@@ -1,4 +1,4 @@
-use crate::log_fmt::working_log::{AgentMetadata, Checkpoint, Line, Prompt};
+use crate::log_fmt::working_log::{Checkpoint, Line, Prompt};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer, ser::SerializeSeq};
@@ -282,14 +282,12 @@ impl fmt::Display for AuthoredRange {
 pub struct AuthorEntry {
     pub author: String, // Derived from attribution for backward compatibility
     pub lines: Vec<LineRange>,
-    pub agent_metadata: Option<AgentMetadata>,
     pub attribution: Attribution, // The actual attribution source
 }
 
 impl PartialEq for AuthorEntry {
     fn eq(&self, other: &Self) -> bool {
         self.author == other.author && self.lines == other.lines
-        // Note: We don't compare agent_metadata since AgentMetadata doesn't implement Eq
     }
 }
 
@@ -299,16 +297,6 @@ impl AuthorEntry {
         Self {
             author: author.clone(),
             lines: Vec::new(),
-            agent_metadata: None,
-            attribution: Attribution::Human { username: author },
-        }
-    }
-
-    pub fn new_with_metadata(author: String, agent_metadata: Option<AgentMetadata>) -> Self {
-        Self {
-            author: author.clone(),
-            lines: Vec::new(),
-            agent_metadata,
             attribution: Attribution::Human { username: author },
         }
     }
@@ -320,20 +308,6 @@ impl AuthorEntry {
         Self {
             author: attribution.author(prompts),
             lines: Vec::new(),
-            agent_metadata: None,
-            attribution,
-        }
-    }
-
-    pub fn new_with_attribution_and_metadata(
-        attribution: Attribution,
-        agent_metadata: Option<AgentMetadata>,
-        prompts: &BTreeMap<String, Prompt>,
-    ) -> Self {
-        Self {
-            author: attribution.author(prompts),
-            lines: Vec::new(),
-            agent_metadata,
             attribution,
         }
     }
@@ -519,17 +493,12 @@ impl FileAuthorship {
     }
 
     /// Add lines for an author, removing them from all other authors
-    pub fn add_lines(
-        &mut self,
-        author: &str,
-        lines: &[u32],
-        agent_metadata: Option<AgentMetadata>,
-    ) {
+    pub fn add_lines(&mut self, author: &str, lines: &[u32]) {
         // Create attribution from author string (backward compatibility)
         let attribution = Attribution::Human {
             username: author.to_string(),
         };
-        self.add_lines_with_attribution(attribution, lines, agent_metadata, &BTreeMap::new());
+        self.add_lines_with_attribution(attribution, lines, &BTreeMap::new());
     }
 
     /// Add lines with specific attribution, removing them from all other authors
@@ -537,7 +506,6 @@ impl FileAuthorship {
         &mut self,
         attribution: Attribution,
         lines: &[u32],
-        agent_metadata: Option<AgentMetadata>,
         prompts: &BTreeMap<String, Prompt>,
     ) {
         // Create a single range to remove from all other authors
@@ -552,17 +520,9 @@ impl FileAuthorship {
         let author_key = attribution.author(prompts);
         if let Some(entry) = self.authors.iter_mut().find(|a| a.author == author_key) {
             entry.add_lines(&lines_to_remove);
-            // Update agent metadata if provided and not already set
-            if agent_metadata.is_some() && entry.agent_metadata.is_none() {
-                entry.agent_metadata = agent_metadata;
-            }
         } else {
             // Create new author entry
-            let mut new_entry = AuthorEntry::new_with_attribution_and_metadata(
-                attribution,
-                agent_metadata,
-                prompts,
-            );
+            let mut new_entry = AuthorEntry::new_with_attribution(attribution, prompts);
             new_entry.add_lines(&lines_to_remove);
             self.authors.push(new_entry);
         }
@@ -589,13 +549,6 @@ impl fmt::Display for FileAuthorship {
         write!(f, "{}", self.file)?;
         for author in &self.authors {
             write!(f, "\n  Author: {}", author.author)?;
-            if let Some(ref metadata) = author.agent_metadata {
-                write!(f, " (model: {}", metadata.model)?;
-                if let Some(ref human_author) = metadata.human_author {
-                    write!(f, ", human: {}", human_author)?;
-                }
-                write!(f, ")")?;
-            }
             for range in &author.lines {
                 write!(f, " {}", range)?;
             }
@@ -739,16 +692,11 @@ impl AuthorshipLog {
                         .find(|a| a.attribution == attribution)
                     {
                         entry.add_lines(&lines_to_remove);
-                        // Update agent metadata if provided and not already set
-                        if checkpoint.agent_metadata.is_some() && entry.agent_metadata.is_none() {
-                            entry.agent_metadata = checkpoint.agent_metadata.clone();
-                        }
                     } else {
                         // Create new author entry
                         let mut new_entry = AuthorEntry {
                             author: author_name,
                             lines: Vec::new(),
-                            agent_metadata: checkpoint.agent_metadata.clone(),
                             attribution,
                         };
                         new_entry.add_lines(&lines_to_remove);
@@ -806,9 +754,9 @@ mod tests {
     #[test]
     fn test_file_authorship_add_lines() {
         let mut file_auth = FileAuthorship::new("src/test.rs".to_string());
-        file_auth.add_lines("claude", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], None);
+        file_auth.add_lines("claude", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         assert_eq!(file_auth.get_author(5), Some("claude"));
-        file_auth.add_lines("aidan", &[5, 6, 50], None);
+        file_auth.add_lines("aidan", &[5, 6, 50]);
         assert_eq!(file_auth.get_author(5), Some("aidan"));
         assert_eq!(file_auth.get_author(6), Some("aidan"));
         assert_eq!(file_auth.get_author(50), Some("aidan"));
@@ -1133,8 +1081,8 @@ mod tests {
     fn test_new_authorship_format_serialization() {
         use serde_json;
         let mut file_auth = FileAuthorship::new("src/test.rs".to_string());
-        file_auth.add_lines("claude", &[1, 2, 3, 4, 5], None);
-        file_auth.add_lines("aidan", &[6, 7, 8], None);
+        file_auth.add_lines("claude", &[1, 2, 3, 4, 5]);
+        file_auth.add_lines("aidan", &[6, 7, 8]);
 
         let json = serde_json::to_string(&file_auth).unwrap();
         println!("Serialized format: {}", json);
@@ -1158,46 +1106,6 @@ mod tests {
 
         assert_eq!(claude_entry.lines.len(), 1); // Should be compressed to one range
         assert_eq!(aidan_entry.lines.len(), 1); // Should be compressed to one range
-    }
-
-    #[test]
-    fn test_agent_metadata_integration() {
-        use crate::log_fmt::working_log::AgentMetadata;
-
-        let entry =
-            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
-
-        let agent_metadata = AgentMetadata {
-            model: "claude-3-sonnet".to_string(),
-            human_author: Some("john.doe".to_string()),
-        };
-
-        let checkpoint = Checkpoint::new_with_metadata(
-            "abc123".to_string(),
-            "".to_string(),
-            "claude".to_string(),
-            vec![entry],
-            agent_metadata,
-        );
-
-        let checkpoints = vec![checkpoint];
-        let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
-        // Check that the author entry has the agent metadata
-        let claude_entry = file_auth
-            .authors
-            .iter()
-            .find(|a| a.author == "claude")
-            .unwrap();
-        assert!(claude_entry.agent_metadata.is_some());
-
-        let metadata = claude_entry.agent_metadata.as_ref().unwrap();
-        assert_eq!(metadata.model, "claude-3-sonnet");
-        assert_eq!(metadata.human_author.as_deref(), Some("john.doe"));
-
-        // Verify that lines are still attributed correctly
-        assert_eq!(file_auth.get_author(5), Some("claude"));
     }
 
     #[test]
@@ -1424,10 +1332,6 @@ mod tests {
                 added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
                 deleted_lines: vec![],
             }],
-            agent_metadata: Some(crate::log_fmt::working_log::AgentMetadata {
-                model: "gpt-4".to_string(),
-                human_author: Some("john.doe".to_string()),
-            }),
             prompt: Some(prompt),
         };
 
@@ -1494,10 +1398,6 @@ mod tests {
                 added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
                 deleted_lines: vec![],
             }],
-            agent_metadata: Some(crate::log_fmt::working_log::AgentMetadata {
-                model: "gpt-4".to_string(),
-                human_author: Some("john.doe".to_string()),
-            }),
             prompt: Some(prompt1),
         };
 
@@ -1511,10 +1411,6 @@ mod tests {
                 added_lines: vec![crate::log_fmt::working_log::Line::Range(15, 20)],
                 deleted_lines: vec![],
             }],
-            agent_metadata: Some(crate::log_fmt::working_log::AgentMetadata {
-                model: "gpt-4".to_string(),
-                human_author: Some("john.doe".to_string()),
-            }),
             prompt: Some(prompt2),
         };
 

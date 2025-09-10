@@ -1,6 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::refs::{get_reference, put_reference};
-use crate::log_fmt::working_log::{AgentMetadata, Checkpoint, Line, Prompt, WorkingLogEntry};
+use crate::log_fmt::working_log::{Checkpoint, Line, Prompt, WorkingLogEntry};
 use crate::utils::debug_log;
 use git2::{Repository, StatusOptions};
 use sha2::{Digest, Sha256};
@@ -14,8 +14,8 @@ pub fn run(
     show_working_log: bool,
     reset: bool,
     quiet: bool,
-    model: Option<&str>,
-    human_author: Option<&str>,
+    _model: Option<&str>,
+    _human_author: Option<&str>,
     prompt: Option<Prompt>,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
@@ -54,13 +54,6 @@ pub fn run(
                 debug_log(&format!("Checkpoint {}: {}", i + 1, checkpoint.snapshot));
                 debug_log(&format!("  Diff: {}", checkpoint.diff));
                 debug_log(&format!("  Author: {}", checkpoint.author));
-                if let Some(metadata) = &checkpoint.agent_metadata {
-                    debug_log("  Agent Metadata:");
-                    debug_log(&format!("    Model: {}", metadata.model));
-                    if let Some(human_author) = &metadata.human_author {
-                        debug_log(&format!("    Human Author: {}", human_author));
-                    }
-                }
                 debug_log("  Entries:");
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
@@ -115,26 +108,12 @@ pub fn run(
         )?
     };
 
-    let mut checkpoint = if let Some(model) = model {
-        let agent_metadata = AgentMetadata {
-            model: model.to_string(),
-            human_author: human_author.map(|s| s.to_string()),
-        };
-        Checkpoint::new_with_metadata(
-            base_commit.clone(),
-            combined_hash.clone(),
-            author.to_string(),
-            entries.clone(),
-            agent_metadata,
-        )
-    } else {
-        Checkpoint::new(
-            base_commit.clone(),
-            combined_hash.clone(),
-            author.to_string(),
-            entries.clone(),
-        )
-    };
+    let mut checkpoint = Checkpoint::new(
+        base_commit.clone(),
+        combined_hash.clone(),
+        author.to_string(),
+        entries.clone(),
+    );
 
     // Set prompt if provided
     if let Some(prompt) = prompt {

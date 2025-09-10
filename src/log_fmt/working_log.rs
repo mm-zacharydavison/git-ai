@@ -107,12 +107,6 @@ impl WorkingLogEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentMetadata {
-    pub model: String,
-    pub human_author: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptMessage {
     pub text: String,
@@ -146,7 +140,6 @@ pub struct Checkpoint {
     pub author: String,
     pub entries: Vec<WorkingLogEntry>,
     pub timestamp: u64,
-    pub agent_metadata: Option<AgentMetadata>,
     pub prompt: Option<Prompt>,
 }
 
@@ -168,30 +161,6 @@ impl Checkpoint {
             author,
             entries,
             timestamp,
-            agent_metadata: None,
-            prompt: None,
-        }
-    }
-
-    pub fn new_with_metadata(
-        snapshot: String,
-        diff: String,
-        author: String,
-        entries: Vec<WorkingLogEntry>,
-        agent_metadata: AgentMetadata,
-    ) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        Self {
-            snapshot,
-            diff,
-            author,
-            entries,
-            timestamp,
-            agent_metadata: Some(agent_metadata),
             prompt: None,
         }
     }
@@ -240,7 +209,6 @@ mod tests {
             .as_secs();
         assert!(checkpoint.timestamp > 0);
         assert!(checkpoint.timestamp <= current_time);
-        assert!(checkpoint.agent_metadata.is_none());
         assert!(checkpoint.prompt.is_none());
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
@@ -250,7 +218,6 @@ mod tests {
         assert_eq!(deserialized.entries.len(), 1);
         assert_eq!(deserialized.entries[0].file, "src/xyz.rs");
         assert_eq!(deserialized.timestamp, checkpoint.timestamp);
-        assert!(deserialized.agent_metadata.is_none());
         assert!(deserialized.prompt.is_none());
     }
 
@@ -324,39 +291,6 @@ mod tests {
         assert!(entry.covers_line(10));
         assert!(!entry.covers_line(6));
         assert!(!entry.covers_line(11));
-    }
-
-    #[test]
-    fn test_checkpoint_with_agent_metadata() {
-        let entry = WorkingLogEntry::new("src/xyz.rs".to_string(), vec![Line::Single(1)], vec![]);
-
-        let agent_metadata = AgentMetadata {
-            model: "claude-3-sonnet".to_string(),
-            human_author: Some("john.doe".to_string()),
-        };
-
-        let checkpoint = Checkpoint::new_with_metadata(
-            "abc123".to_string(),
-            "".to_string(),
-            "claude".to_string(),
-            vec![entry],
-            agent_metadata,
-        );
-
-        assert!(checkpoint.agent_metadata.is_some());
-        let metadata = checkpoint.agent_metadata.as_ref().unwrap();
-        assert_eq!(metadata.model, "claude-3-sonnet");
-        assert_eq!(metadata.human_author.as_deref(), Some("john.doe"));
-
-        let json = serde_json::to_string_pretty(&checkpoint).unwrap();
-        let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.agent_metadata.is_some());
-        let deserialized_metadata = deserialized.agent_metadata.as_ref().unwrap();
-        assert_eq!(deserialized_metadata.model, "claude-3-sonnet");
-        assert_eq!(
-            deserialized_metadata.human_author.as_deref(),
-            Some("john.doe")
-        );
     }
 
     #[test]

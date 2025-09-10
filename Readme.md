@@ -94,11 +94,6 @@ Authorship logs, attached to commits, pushed to the `refs/ai/authorship` as blob
   - `files` MUST be a map of git file names -> `authors[]`
     - `author` MUST be a string. Agents SHOULD use their full name. Human developers SHOULD use their `git.config.name`
     - `lines` MUST be an array of added lines. Items MUST be an integer or a range tuple `[start-int, end-int]`. Range MUST be inclusive.
-    - `agent_metadata`
-      - SHOULD be `null` for humans
-      - SHOULD be an object for agents
-        - MUST have `model` (a string), that SHOULD be the model's name as it is provided to the API (ie `claude-4-sonnet`, not `Claude 4, Sonnet`).
-        - MAY have any other properties of any other type.
 
 ```json file="refs/ai/authorship/f46b403b4f269bd2530b2d91a676449787886d02"
 {
@@ -109,15 +104,11 @@ Authorship logs, attached to commits, pushed to the `refs/ai/authorship` as blob
       "authors": [
         {
           "author": "Claude Code",
-          "lines": [12, [91, 101]],
-          "agent_metadata": {
-            "model": "claude-4-sonnet"
-          }
+          "lines": [12, [91, 101]]
         },
         {
           "author": "Aidan Cunniffe",
-          "lines": [57],
-          "agent_metadata": null
+          "lines": [57]
         }
       ]
     }
