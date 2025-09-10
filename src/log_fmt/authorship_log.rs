@@ -1,12 +1,44 @@
-use crate::log_fmt::working_log::{AgentMetadata, Checkpoint, Line};
+use crate::log_fmt::working_log::{AgentMetadata, Checkpoint, Line, Prompt};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer, ser::SerializeSeq};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// Semantic version for the authorship log format
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.1";
+
+/// Represents the source of code attribution - either human or AI agent
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Attribution {
+    Human { username: String },
+    Agent { prompt_id: String },
+}
+
+impl Attribution {
+    /// Derive the "author" field from the attribution
+    /// For agents, this requires resolving the prompt_id to get the actual agent details
+    pub fn author(&self, prompts: &BTreeMap<String, Prompt>) -> String {
+        match self {
+            Attribution::Human { username } => username.clone(),
+            Attribution::Agent { prompt_id } => {
+                if let Some(prompt) = prompts.get(prompt_id) {
+                    prompt.agent_id.tool.clone() // Just return "cursor", "windsurf", etc.
+                } else {
+                    prompt_id.clone() // Fallback to hash if prompt not found
+                }
+            }
+        }
+    }
+}
+
+/// Represents a line range with its attribution source
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineAttribution {
+    pub range: LineRange,
+    pub attribution: Attribution,
+}
 
 /// Represents either a single line or a range of lines
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -248,9 +280,10 @@ impl fmt::Display for AuthoredRange {
 /// Represents an author with their line ranges
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorEntry {
-    pub author: String,
+    pub author: String, // Derived from attribution for backward compatibility
     pub lines: Vec<LineRange>,
     pub agent_metadata: Option<AgentMetadata>,
+    pub attribution: Attribution, // The actual attribution source
 }
 
 impl PartialEq for AuthorEntry {
@@ -264,17 +297,44 @@ impl AuthorEntry {
     #[allow(dead_code)]
     pub fn new(author: String) -> Self {
         Self {
-            author,
+            author: author.clone(),
             lines: Vec::new(),
             agent_metadata: None,
+            attribution: Attribution::Human { username: author },
         }
     }
 
     pub fn new_with_metadata(author: String, agent_metadata: Option<AgentMetadata>) -> Self {
         Self {
-            author,
+            author: author.clone(),
             lines: Vec::new(),
             agent_metadata,
+            attribution: Attribution::Human { username: author },
+        }
+    }
+
+    pub fn new_with_attribution(
+        attribution: Attribution,
+        prompts: &BTreeMap<String, Prompt>,
+    ) -> Self {
+        Self {
+            author: attribution.author(prompts),
+            lines: Vec::new(),
+            agent_metadata: None,
+            attribution,
+        }
+    }
+
+    pub fn new_with_attribution_and_metadata(
+        attribution: Attribution,
+        agent_metadata: Option<AgentMetadata>,
+        prompts: &BTreeMap<String, Prompt>,
+    ) -> Self {
+        Self {
+            author: attribution.author(prompts),
+            lines: Vec::new(),
+            agent_metadata,
+            attribution,
         }
     }
 
@@ -465,6 +525,21 @@ impl FileAuthorship {
         lines: &[u32],
         agent_metadata: Option<AgentMetadata>,
     ) {
+        // Create attribution from author string (backward compatibility)
+        let attribution = Attribution::Human {
+            username: author.to_string(),
+        };
+        self.add_lines_with_attribution(attribution, lines, agent_metadata, &BTreeMap::new());
+    }
+
+    /// Add lines with specific attribution, removing them from all other authors
+    pub fn add_lines_with_attribution(
+        &mut self,
+        attribution: Attribution,
+        lines: &[u32],
+        agent_metadata: Option<AgentMetadata>,
+        prompts: &BTreeMap<String, Prompt>,
+    ) {
         // Create a single range to remove from all other authors
         let lines_to_remove = LineRange::compress_lines(lines);
 
@@ -474,7 +549,8 @@ impl FileAuthorship {
         }
 
         // Add to this author with compression
-        if let Some(entry) = self.authors.iter_mut().find(|a| a.author == author) {
+        let author_key = attribution.author(prompts);
+        if let Some(entry) = self.authors.iter_mut().find(|a| a.author == author_key) {
             entry.add_lines(&lines_to_remove);
             // Update agent metadata if provided and not already set
             if agent_metadata.is_some() && entry.agent_metadata.is_none() {
@@ -482,7 +558,11 @@ impl FileAuthorship {
             }
         } else {
             // Create new author entry
-            let mut new_entry = AuthorEntry::new_with_metadata(author.to_string(), agent_metadata);
+            let mut new_entry = AuthorEntry::new_with_attribution_and_metadata(
+                attribution,
+                agent_metadata,
+                prompts,
+            );
             new_entry.add_lines(&lines_to_remove);
             self.authors.push(new_entry);
         }
@@ -528,6 +608,7 @@ impl fmt::Display for FileAuthorship {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorshipLog {
     pub files: BTreeMap<String, FileAuthorship>,
+    pub prompts: BTreeMap<String, Prompt>, // Global prompts by ID
     pub schema_version: String,
 }
 
@@ -535,6 +616,7 @@ impl AuthorshipLog {
     pub fn new() -> Self {
         Self {
             files: BTreeMap::new(),
+            prompts: BTreeMap::new(),
             schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
         }
     }
@@ -545,9 +627,50 @@ impl AuthorshipLog {
             .or_insert_with(|| FileAuthorship::new(file.to_string()))
     }
 
+    /// Generate a unique prompt ID based on the prompt content
+    fn generate_prompt_id(prompt: &Prompt) -> String {
+        // Create a hash of the prompt content for uniqueness
+        let mut hasher = Sha256::new();
+        hasher.update(prompt.agent_id.tool.as_bytes());
+        hasher.update(prompt.agent_id.id.as_bytes());
+        for message in &prompt.messages {
+            hasher.update(message.text.as_bytes());
+            hasher.update(format!("{:?}", message.role).as_bytes());
+            if let Some(ref username) = message.username {
+                hasher.update(username.as_bytes());
+            }
+            hasher.update(&message.timestamp.to_le_bytes());
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Add a prompt to the global prompts dictionary and return its ID
+    fn add_prompt(&mut self, prompt: Prompt) -> String {
+        let prompt_id = Self::generate_prompt_id(&prompt);
+        self.prompts.entry(prompt_id.clone()).or_insert(prompt);
+        prompt_id
+    }
+
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
         let mut authorship_log = AuthorshipLog::new();
+
+        // First pass: collect all unique prompts and create prompt IDs
+        let mut prompt_id_map = std::collections::HashMap::new();
+        for checkpoint in checkpoints.iter() {
+            if let Some(prompt) = &checkpoint.prompt {
+                let prompt_id = authorship_log.add_prompt(prompt.clone());
+                prompt_id_map.insert(checkpoint.snapshot.clone(), prompt_id);
+            }
+        }
+
+        // Create a map of prompt_id -> tool_name for quick lookup
+        let mut prompt_tool_map = std::collections::HashMap::new();
+        for (prompt_id, prompt) in &authorship_log.prompts {
+            prompt_tool_map.insert(prompt_id.clone(), prompt.agent_id.tool.clone());
+        }
+
+        // Second pass: process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
             for entry in &checkpoint.entries {
                 let file_auth = authorship_log.get_or_create_file(&entry.file);
@@ -577,11 +700,59 @@ impl AuthorshipLog {
                     }
                 }
                 if !added_lines.is_empty() {
-                    file_auth.add_lines(
-                        &checkpoint.author,
-                        &added_lines,
-                        checkpoint.agent_metadata.clone(),
-                    );
+                    // Create attribution based on whether there's a prompt
+                    let attribution =
+                        if let Some(prompt_id) = prompt_id_map.get(&checkpoint.snapshot) {
+                            Attribution::Agent {
+                                prompt_id: prompt_id.clone(),
+                            }
+                        } else {
+                            Attribution::Human {
+                                username: checkpoint.author.clone(),
+                            }
+                        };
+
+                    // Get the author name for this attribution
+                    let author_name = match &attribution {
+                        Attribution::Human { username } => username.clone(),
+                        Attribution::Agent { prompt_id } => {
+                            prompt_tool_map
+                                .get(prompt_id)
+                                .cloned()
+                                .unwrap_or_else(|| prompt_id.clone()) // Fallback to hash if not found
+                        }
+                    };
+
+                    // Create a single range to remove from all other authors
+                    let lines_to_remove = LineRange::compress_lines(&added_lines);
+
+                    // Remove these lines from all other authors
+                    for other_author in &mut file_auth.authors {
+                        other_author.remove_lines(&lines_to_remove);
+                    }
+
+                    // Add to this author with compression
+                    if let Some(entry) = file_auth
+                        .authors
+                        .iter_mut()
+                        .find(|a| a.author == author_name)
+                    {
+                        entry.add_lines(&lines_to_remove);
+                        // Update agent metadata if provided and not already set
+                        if checkpoint.agent_metadata.is_some() && entry.agent_metadata.is_none() {
+                            entry.agent_metadata = checkpoint.agent_metadata.clone();
+                        }
+                    } else {
+                        // Create new author entry
+                        let mut new_entry = AuthorEntry {
+                            author: author_name,
+                            lines: Vec::new(),
+                            agent_metadata: checkpoint.agent_metadata.clone(),
+                            attribution,
+                        };
+                        new_entry.add_lines(&lines_to_remove);
+                        file_auth.authors.push(new_entry);
+                    }
                 }
             }
         }
@@ -1150,5 +1321,213 @@ mod tests {
             })
             .collect();
         assert_eq!(start_lines, vec![412, 420, 423]);
+    }
+
+    #[test]
+    fn test_prompt_attribution_in_authorship_log() {
+        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+
+        let entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
+
+        let prompt_message = PromptMessage {
+            text: "Please add error handling to this function".to_string(),
+            role: PromptRole::User,
+            username: Some("john.doe".to_string()),
+            timestamp: 1234567890,
+        };
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
+        };
+
+        let prompt = Prompt {
+            messages: vec![prompt_message],
+            agent_id,
+        };
+
+        let mut checkpoint = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
+        checkpoint.prompt = Some(prompt);
+
+        let checkpoints = vec![checkpoint];
+        let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
+        let file_auth = &authorship_log.files["src/test.rs"];
+
+        // Should have one author entry
+        assert_eq!(file_auth.authors.len(), 1);
+        let author_entry = &file_auth.authors[0];
+
+        // Check that the author is derived from the prompt (now shows tool name)
+        // The author should be the tool name (e.g., "cursor"), not the hash
+        assert_eq!(author_entry.author, "cursor");
+
+        // Check that the attribution is Agent with a prompt_id
+        match &author_entry.attribution {
+            Attribution::Agent { prompt_id } => {
+                // Verify the prompt exists in the global prompts dictionary
+                let prompt = authorship_log.prompts.get(prompt_id).unwrap();
+                assert_eq!(prompt.agent_id.tool, "cursor");
+                assert_eq!(prompt.agent_id.id, "session-abc123");
+                assert_eq!(prompt.messages.len(), 1);
+                assert_eq!(
+                    prompt.messages[0].text,
+                    "Please add error handling to this function"
+                );
+            }
+            Attribution::Human { .. } => panic!("Expected Agent attribution, got Human"),
+        }
+
+        // Verify that lines are still attributed correctly
+        assert_eq!(file_auth.get_author(5), Some(author_entry.author.as_str()));
+    }
+
+    #[test]
+    fn test_authorship_log_json_example() {
+        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+
+        // Create a checkpoint with a prompt
+        let prompt = Prompt {
+            agent_id: AgentId {
+                tool: "cursor".to_string(),
+                id: "session-abc123".to_string(),
+            },
+            messages: vec![
+                PromptMessage {
+                    text: "Please add error handling to this function".to_string(),
+                    role: PromptRole::User,
+                    username: Some("john.doe".to_string()),
+                    timestamp: 1234567890,
+                },
+                PromptMessage {
+                    text: "I'll add comprehensive error handling with try-catch blocks".to_string(),
+                    role: PromptRole::Agent,
+                    username: None,
+                    timestamp: 1234567891,
+                },
+            ],
+        };
+
+        let checkpoint = Checkpoint {
+            snapshot: "abc123".to_string(),
+            diff: "diff content".to_string(),
+            author: "john.doe".to_string(),
+            timestamp: 1234567890,
+            entries: vec![crate::log_fmt::working_log::WorkingLogEntry {
+                file: "src/main.rs".to_string(),
+                added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
+                deleted_lines: vec![],
+            }],
+            agent_metadata: Some(crate::log_fmt::working_log::AgentMetadata {
+                model: "gpt-4".to_string(),
+                human_author: Some("john.doe".to_string()),
+            }),
+            prompt: Some(prompt),
+        };
+
+        // Convert to authorship log
+        let authorship_log = AuthorshipLog::from_working_log(&[checkpoint]);
+
+        // Serialize to JSON to show the format
+        let json = serde_json::to_string_pretty(&authorship_log).unwrap();
+        println!("Authorship Log JSON Example:");
+        println!("{}", json);
+
+        // Verify the structure
+        assert_eq!(authorship_log.files.len(), 1);
+        assert_eq!(authorship_log.prompts.len(), 1);
+        assert!(authorship_log.files.contains_key("src/main.rs"));
+
+        // Verify prompt is stored in global dictionary
+        let prompt_id = authorship_log.prompts.keys().next().unwrap();
+        let stored_prompt = authorship_log.prompts.get(prompt_id).unwrap();
+        assert_eq!(stored_prompt.agent_id.tool, "cursor");
+        assert_eq!(stored_prompt.agent_id.id, "session-abc123");
+        assert_eq!(stored_prompt.messages.len(), 2);
+    }
+
+    #[test]
+    fn test_mixed_human_and_agent_attribution() {
+        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+
+        // Human-written entry
+        let human_entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 5)], vec![]);
+        let human_checkpoint = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "john.doe".to_string(),
+            vec![human_entry],
+        );
+
+        // AI-generated entry
+        let ai_entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(6, 10)], vec![]);
+        let prompt_message = PromptMessage {
+            text: "Add error handling".to_string(),
+            role: PromptRole::User,
+            username: Some("jane.doe".to_string()),
+            timestamp: 1234567890,
+        };
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-xyz789".to_string(),
+        };
+        let prompt = Prompt {
+            messages: vec![prompt_message],
+            agent_id,
+        };
+        let mut ai_checkpoint = Checkpoint::new(
+            "def456".to_string(),
+            "".to_string(),
+            "claude".to_string(),
+            vec![ai_entry],
+        );
+        ai_checkpoint.prompt = Some(prompt);
+
+        let checkpoints = vec![human_checkpoint, ai_checkpoint];
+        let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
+        let file_auth = &authorship_log.files["src/test.rs"];
+
+        // Should have two author entries
+        assert_eq!(file_auth.authors.len(), 2);
+
+        // Find human and agent entries
+        let human_entry = file_auth
+            .authors
+            .iter()
+            .find(|a| a.author == "john.doe")
+            .unwrap();
+        let agent_entry = file_auth
+            .authors
+            .iter()
+            .find(|a| a.author != "john.doe") // Agent entry will have a hash as author
+            .unwrap();
+
+        // Check human attribution
+        match &human_entry.attribution {
+            Attribution::Human { username } => assert_eq!(username, "john.doe"),
+            Attribution::Agent { .. } => panic!("Expected Human attribution, got Agent"),
+        }
+
+        // Check agent attribution
+        match &agent_entry.attribution {
+            Attribution::Agent { prompt_id } => {
+                // Verify the prompt exists in the global prompts dictionary
+                let prompt = authorship_log.prompts.get(prompt_id).unwrap();
+                assert_eq!(prompt.agent_id.tool, "cursor");
+                assert_eq!(prompt.agent_id.id, "session-xyz789");
+            }
+            Attribution::Human { .. } => panic!("Expected Agent attribution, got Human"),
+        }
+
+        // Verify line attributions
+        assert_eq!(file_auth.get_author(3), Some("john.doe")); // Human lines
+        assert_eq!(file_auth.get_author(8), Some(agent_entry.author.as_str())); // Agent lines
     }
 }

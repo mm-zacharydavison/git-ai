@@ -12,6 +12,7 @@ use std::process::Command;
 use utils::debug_log;
 
 use crate::git::refs::DEFAULT_REFSPEC;
+use crate::log_fmt::working_log::Prompt;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -97,6 +98,7 @@ fn handle_checkpoint(args: &[String]) {
     let mut show_working_log = false;
     let mut reset = false;
     let mut model = None;
+    let mut prompt_json = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -124,6 +126,15 @@ fn handle_checkpoint(args: &[String]) {
                     i += 2;
                 } else {
                     eprintln!("Error: --model requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--prompt" => {
+                if i + 1 < args.len() {
+                    prompt_json = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --prompt requires a JSON value");
                     std::process::exit(1);
                 }
             }
@@ -161,7 +172,20 @@ fn handle_checkpoint(args: &[String]) {
 
     let final_author = author.as_ref().unwrap_or(&default_user_name);
 
-    if let Err(e) = commands::checkpoint(
+    // Parse prompt from JSON if provided
+    let prompt = if let Some(json_str) = prompt_json {
+        match serde_json::from_str::<Prompt>(&json_str) {
+            Ok(prompt) => Some(prompt),
+            Err(e) => {
+                eprintln!("Error: Failed to parse prompt JSON: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = commands::checkpoint::run(
         &repo,
         final_author,
         show_working_log,
@@ -169,6 +193,7 @@ fn handle_checkpoint(args: &[String]) {
         false,
         model.as_deref(),
         Some(&default_user_name),
+        prompt,
     ) {
         eprintln!("Checkpoint failed: {}", e);
         std::process::exit(1);
@@ -529,6 +554,9 @@ fn print_help() {
     eprintln!("");
     eprintln!("Commands:");
     eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
+    eprintln!(
+        "    --prompt <json>    JSON string containing prompt structure with messages and agent_id"
+    );
     eprintln!("  blame         [override] git blame with AI authorship tracking");
     eprintln!(
         "  commit        [wrapper] pass through to 'git commit' with git-ai before/after hooks"

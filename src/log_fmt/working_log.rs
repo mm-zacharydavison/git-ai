@@ -113,6 +113,32 @@ pub struct AgentMetadata {
     pub human_author: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptMessage {
+    pub text: String,
+    pub role: PromptRole,
+    pub username: Option<String>,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PromptRole {
+    User,
+    Agent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentId {
+    pub tool: String, // e.g., "cursor", "windsurf"
+    pub id: String,   // id in their domain
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prompt {
+    pub messages: Vec<PromptMessage>,
+    pub agent_id: AgentId,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub snapshot: String,
@@ -121,6 +147,7 @@ pub struct Checkpoint {
     pub entries: Vec<WorkingLogEntry>,
     pub timestamp: u64,
     pub agent_metadata: Option<AgentMetadata>,
+    pub prompt: Option<Prompt>,
 }
 
 impl Checkpoint {
@@ -142,6 +169,7 @@ impl Checkpoint {
             entries,
             timestamp,
             agent_metadata: None,
+            prompt: None,
         }
     }
 
@@ -164,6 +192,7 @@ impl Checkpoint {
             entries,
             timestamp,
             agent_metadata: Some(agent_metadata),
+            prompt: None,
         }
     }
 }
@@ -212,6 +241,7 @@ mod tests {
         assert!(checkpoint.timestamp > 0);
         assert!(checkpoint.timestamp <= current_time);
         assert!(checkpoint.agent_metadata.is_none());
+        assert!(checkpoint.prompt.is_none());
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
         let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
@@ -221,6 +251,7 @@ mod tests {
         assert_eq!(deserialized.entries[0].file, "src/xyz.rs");
         assert_eq!(deserialized.timestamp, checkpoint.timestamp);
         assert!(deserialized.agent_metadata.is_none());
+        assert!(deserialized.prompt.is_none());
     }
 
     #[test]
@@ -326,5 +357,59 @@ mod tests {
             deserialized_metadata.human_author.as_deref(),
             Some("john.doe")
         );
+    }
+
+    #[test]
+    fn test_checkpoint_with_prompt() {
+        let entry = WorkingLogEntry::new("src/xyz.rs".to_string(), vec![Line::Single(1)], vec![]);
+
+        let prompt_message = PromptMessage {
+            text: "Please add error handling to this function".to_string(),
+            role: PromptRole::User,
+            username: Some("john.doe".to_string()),
+            timestamp: 1234567890,
+        };
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
+        };
+
+        let prompt = Prompt {
+            messages: vec![prompt_message],
+            agent_id,
+        };
+
+        let mut checkpoint = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
+        checkpoint.prompt = Some(prompt);
+
+        assert!(checkpoint.prompt.is_some());
+        let prompt_data = checkpoint.prompt.as_ref().unwrap();
+        assert_eq!(prompt_data.messages.len(), 1);
+        assert_eq!(
+            prompt_data.messages[0].text,
+            "Please add error handling to this function"
+        );
+        assert!(matches!(prompt_data.messages[0].role, PromptRole::User));
+        assert_eq!(
+            prompt_data.messages[0].username.as_deref(),
+            Some("john.doe")
+        );
+        assert_eq!(prompt_data.messages[0].timestamp, 1234567890);
+        assert_eq!(prompt_data.agent_id.tool, "cursor");
+        assert_eq!(prompt_data.agent_id.id, "session-abc123");
+
+        let json = serde_json::to_string_pretty(&checkpoint).unwrap();
+        let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.prompt.is_some());
+        let deserialized_prompt = deserialized.prompt.as_ref().unwrap();
+        assert_eq!(deserialized_prompt.messages.len(), 1);
+        assert_eq!(deserialized_prompt.agent_id.tool, "cursor");
+        assert_eq!(deserialized_prompt.agent_id.id, "session-abc123");
     }
 }
