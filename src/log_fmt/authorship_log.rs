@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// Semantic version for the authorship log format
-pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.1";
+pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.2";
 
 /// Represents the source of code attribution - either human or AI agent
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
