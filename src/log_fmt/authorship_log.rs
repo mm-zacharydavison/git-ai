@@ -7,38 +7,18 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// Semantic version for the authorship log format
-pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.2";
+pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.3";
 
-/// Represents the source of code attribution - either human or AI agent
+/// Represents a human author, optionally associated with a prompt (AI assistance)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Attribution {
-    Human { username: String },
-    Agent { prompt_id: String },
+pub struct Author {
+    pub username: String,
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>, // shortened prompt id if AI assisted
 }
 
-impl Attribution {
-    /// Derive the "author" field from the attribution
-    /// For agents, this requires resolving the prompt_id to get the actual agent details
-    pub fn author(&self, prompts: &BTreeMap<String, Prompt>) -> String {
-        match self {
-            Attribution::Human { username } => username.clone(),
-            Attribution::Agent { prompt_id } => {
-                if let Some(prompt) = prompts.get(prompt_id) {
-                    prompt.agent_id.tool.clone() // Just return "cursor", "windsurf", etc.
-                } else {
-                    prompt_id.clone() // Fallback to hash if prompt not found
-                }
-            }
-        }
-    }
-}
-
-/// Represents a line range with its attribution source
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineAttribution {
-    pub range: LineRange,
-    pub attribution: Attribution,
-}
+// Deprecated: previous attribution structure removed in favor of explicit Author with optional prompt reference
 
 /// Represents either a single line or a range of lines
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -278,37 +258,20 @@ impl fmt::Display for AuthoredRange {
 }
 
 /// Represents an author with their line ranges
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthorEntry {
-    pub author: String, // Derived from attribution for backward compatibility
+    pub author: Author,
     pub lines: Vec<LineRange>,
-    pub attribution: Attribution, // The actual attribution source
 }
 
-impl PartialEq for AuthorEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.author == other.author && self.lines == other.lines
-    }
-}
+// Derive handles PartialEq/Eq
 
 impl AuthorEntry {
     #[allow(dead_code)]
-    pub fn new(author: String) -> Self {
+    pub fn new(author: Author) -> Self {
         Self {
-            author: author.clone(),
+            author,
             lines: Vec::new(),
-            attribution: Attribution::Human { username: author },
-        }
-    }
-
-    pub fn new_with_attribution(
-        attribution: Attribution,
-        prompts: &BTreeMap<String, Prompt>,
-    ) -> Self {
-        Self {
-            author: attribution.author(prompts),
-            lines: Vec::new(),
-            attribution,
         }
     }
 
@@ -334,7 +297,7 @@ impl AuthorEntry {
         self.lines.is_empty()
     }
 
-    pub fn get_author_for_line(&self, line: u32) -> Option<&str> {
+    pub fn get_author_for_line(&self, line: u32) -> Option<&Author> {
         for range in &self.lines {
             if range.contains(line) {
                 return Some(&self.author);
@@ -459,8 +422,8 @@ impl serde::Serialize for FileAuthorship {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("FileAuthorship", 2)?;
-        state.serialize_field("file", &self.file)?;
+        // Exclude duplicate file field inside value; key already contains the file path
+        let mut state = serializer.serialize_struct("FileAuthorship", 1)?;
         state.serialize_field("authors", &self.authors)?;
         state.end()
     }
@@ -473,12 +436,11 @@ impl<'de> serde::Deserialize<'de> for FileAuthorship {
     {
         #[derive(serde::Deserialize)]
         struct FileAuthorshipHelper {
-            file: String,
             authors: Vec<AuthorEntry>,
         }
         let helper = FileAuthorshipHelper::deserialize(deserializer)?;
         Ok(FileAuthorship {
-            file: helper.file,
+            file: String::new(),
             authors: helper.authors,
         })
     }
@@ -492,37 +454,26 @@ impl FileAuthorship {
         }
     }
 
-    /// Add lines for an author, removing them from all other authors
-    pub fn add_lines(&mut self, author: &str, lines: &[u32]) {
-        // Create attribution from author string (backward compatibility)
-        let attribution = Attribution::Human {
-            username: author.to_string(),
+    /// Add lines for a simple human author, removing them from all other authors
+    pub fn add_lines(&mut self, username: &str, lines: &[u32]) {
+        let author = Author {
+            username: username.to_string(),
+            email: "".to_string(),
+            prompt: None,
         };
-        self.add_lines_with_attribution(attribution, lines, &BTreeMap::new());
+        self.add_lines_with_author(author, lines);
     }
 
-    /// Add lines with specific attribution, removing them from all other authors
-    pub fn add_lines_with_attribution(
-        &mut self,
-        attribution: Attribution,
-        lines: &[u32],
-        prompts: &BTreeMap<String, Prompt>,
-    ) {
-        // Create a single range to remove from all other authors
+    /// Add lines with a full Author object (including optional prompt), removing them from others
+    pub fn add_lines_with_author(&mut self, author: Author, lines: &[u32]) {
         let lines_to_remove = LineRange::compress_lines(lines);
-
-        // Remove these lines from all other authors
         for other_author in &mut self.authors {
             other_author.remove_lines(&lines_to_remove);
         }
-
-        // Add to this author with compression
-        let author_key = attribution.author(prompts);
-        if let Some(entry) = self.authors.iter_mut().find(|a| a.author == author_key) {
+        if let Some(entry) = self.authors.iter_mut().find(|a| a.author == author) {
             entry.add_lines(&lines_to_remove);
         } else {
-            // Create new author entry
-            let mut new_entry = AuthorEntry::new_with_attribution(attribution, prompts);
+            let mut new_entry = AuthorEntry::new(author);
             new_entry.add_lines(&lines_to_remove);
             self.authors.push(new_entry);
         }
@@ -537,6 +488,16 @@ impl FileAuthorship {
         // Check authors in reverse order (most recent first)
         for author in self.authors.iter().rev() {
             if let Some(author) = author.get_author_for_line(line) {
+                return Some(author.username.as_str());
+            }
+        }
+        None
+    }
+
+    /// Get the full Author info for a line, if present
+    pub fn get_author_info(&self, line: u32) -> Option<&Author> {
+        for author in self.authors.iter().rev() {
+            if let Some(author) = author.get_author_for_line(line) {
                 return Some(author);
             }
         }
@@ -548,7 +509,7 @@ impl fmt::Display for FileAuthorship {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.file)?;
         for author in &self.authors {
-            write!(f, "\n  Author: {}", author.author)?;
+            write!(f, "\n  Author: {}", author.author.username)?;
             for range in &author.lines {
                 write!(f, " {}", range)?;
             }
@@ -579,7 +540,7 @@ impl AuthorshipLog {
             .or_insert_with(|| FileAuthorship::new(file.to_string()))
     }
 
-    /// Generate a unique prompt ID based on the prompt content
+    /// Generate a unique prompt ID based on the prompt content (shortened)
     fn generate_prompt_id(prompt: &Prompt) -> String {
         // Create a hash of the prompt content for uniqueness
         let mut hasher = Sha256::new();
@@ -593,7 +554,8 @@ impl AuthorshipLog {
             }
             hasher.update(&message.timestamp.to_le_bytes());
         }
-        format!("{:x}", hasher.finalize())
+        let full = format!("{:x}", hasher.finalize());
+        full.chars().take(8).collect()
     }
 
     /// Add a prompt to the global prompts dictionary and return its ID
@@ -614,12 +576,6 @@ impl AuthorshipLog {
                 let prompt_id = authorship_log.add_prompt(prompt.clone());
                 prompt_id_map.insert(checkpoint.snapshot.clone(), prompt_id);
             }
-        }
-
-        // Create a map of prompt_id -> tool_name for quick lookup
-        let mut prompt_tool_map = std::collections::HashMap::new();
-        for (prompt_id, prompt) in &authorship_log.prompts {
-            prompt_tool_map.insert(prompt_id.clone(), prompt.agent_id.tool.clone());
         }
 
         // Second pass: process checkpoints and create attributions
@@ -652,27 +608,11 @@ impl AuthorshipLog {
                     }
                 }
                 if !added_lines.is_empty() {
-                    // Create attribution based on whether there's a prompt
-                    let attribution =
-                        if let Some(prompt_id) = prompt_id_map.get(&checkpoint.snapshot) {
-                            Attribution::Agent {
-                                prompt_id: prompt_id.clone(),
-                            }
-                        } else {
-                            Attribution::Human {
-                                username: checkpoint.author.clone(),
-                            }
-                        };
-
-                    // Get the author name for this attribution
-                    let author_name = match &attribution {
-                        Attribution::Human { username } => username.clone(),
-                        Attribution::Agent { prompt_id } => {
-                            prompt_tool_map
-                                .get(prompt_id)
-                                .cloned()
-                                .unwrap_or_else(|| prompt_id.clone()) // Fallback to hash if not found
-                        }
+                    // Determine the human author, plus optional prompt reference
+                    let author = Author {
+                        username: checkpoint.author.clone(),
+                        email: "".to_string(),
+                        prompt: prompt_id_map.get(&checkpoint.snapshot).cloned(),
                     };
 
                     // Create a single range to remove from all other authors
@@ -684,19 +624,12 @@ impl AuthorshipLog {
                     }
 
                     // Add to this author with compression
-                    // Group by attribution (not just author name) so each prompt gets its own entry
-                    if let Some(entry) = file_auth
-                        .authors
-                        .iter_mut()
-                        .find(|a| a.attribution == attribution)
-                    {
+                    if let Some(entry) = file_auth.authors.iter_mut().find(|a| a.author == author) {
                         entry.add_lines(&lines_to_remove);
                     } else {
-                        // Create new author entry
                         let mut new_entry = AuthorEntry {
-                            author: author_name,
+                            author,
                             lines: Vec::new(),
-                            attribution,
                         };
                         new_entry.add_lines(&lines_to_remove);
                         file_auth.authors.push(new_entry);
@@ -927,7 +860,7 @@ mod tests {
         // Debug: print the actual authorship data
         println!("Debug: File authorship data:");
         for author in &file_auth.authors {
-            println!("  Author: {}", author.author);
+            println!("  Author: {}", author.author.username);
             for range in &author.lines {
                 println!("    Range: {}", range);
             }
@@ -1088,19 +1021,18 @@ mod tests {
 
         // Verify the structure matches the new format
         let deserialized: FileAuthorship = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.file, "src/test.rs");
         assert_eq!(deserialized.authors.len(), 2);
 
         // Check that authors are in the expected format
         let claude_entry = deserialized
             .authors
             .iter()
-            .find(|a| a.author == "claude")
+            .find(|a| a.author.username == "claude")
             .unwrap();
         let aidan_entry = deserialized
             .authors
             .iter()
-            .find(|a| a.author == "aidan")
+            .find(|a| a.author.username == "aidan")
             .unwrap();
 
         assert_eq!(claude_entry.lines.len(), 1); // Should be compressed to one range
@@ -1109,7 +1041,11 @@ mod tests {
 
     #[test]
     fn test_deduplicate_identical_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Add the same range multiple times
         author_entry.add_lines(&[LineRange::Range(1, 5)]);
@@ -1123,7 +1059,11 @@ mod tests {
 
     #[test]
     fn test_merge_adjacent_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Add adjacent ranges
         author_entry.add_lines(&[LineRange::Range(1, 5)]);
@@ -1136,7 +1076,11 @@ mod tests {
 
     #[test]
     fn test_merge_overlapping_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Add overlapping ranges
         author_entry.add_lines(&[LineRange::Range(1, 8)]);
@@ -1149,7 +1093,11 @@ mod tests {
 
     #[test]
     fn test_merge_single_lines_with_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Add a range and adjacent single lines
         author_entry.add_lines(&[LineRange::Range(1, 5)]);
@@ -1163,7 +1111,11 @@ mod tests {
 
     #[test]
     fn test_merge_adjacent_single_lines() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Add adjacent single lines
         author_entry.add_lines(&[LineRange::Single(5)]);
@@ -1177,7 +1129,11 @@ mod tests {
 
     #[test]
     fn test_complex_merging_scenario() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Add a complex mix of ranges and single lines
         author_entry.add_lines(&[LineRange::Range(1, 3)]);
@@ -1197,7 +1153,11 @@ mod tests {
     #[test]
     fn test_duplicate_ranges_issue_fix() {
         // This test simulates the exact issue reported: massive amounts of duplicate line ranges
-        let mut author_entry = AuthorEntry::new("claude".to_string());
+        let mut author_entry = AuthorEntry::new(Author {
+            username: "claude".to_string(),
+            email: "".to_string(),
+            prompt: None,
+        });
 
         // Simulate the same range being added hundreds of times (like in the reported issue)
         for _ in 0..100 {
@@ -1269,30 +1229,24 @@ mod tests {
 
         // Should have one author entry
         assert_eq!(file_auth.authors.len(), 1);
-        let author_entry = &file_auth.authors[0];
+        let entry = &file_auth.authors[0];
 
-        // Check that the author is derived from the prompt (now shows tool name)
-        // The author should be the tool name (e.g., "cursor"), not the hash
-        assert_eq!(author_entry.author, "cursor");
+        // Check that the prompt reference exists and maps to a prompt with tool "cursor"
+        let prompt_id = entry.author.prompt.as_ref().expect("expected prompt id");
+        let prompt = authorship_log.prompts.get(prompt_id).unwrap();
+        assert_eq!(prompt.agent_id.tool, "cursor");
+        assert_eq!(prompt.agent_id.id, "session-abc123");
+        assert_eq!(prompt.messages.len(), 1);
+        assert_eq!(
+            prompt.messages[0].text,
+            "Please add error handling to this function"
+        );
 
-        // Check that the attribution is Agent with a prompt_id
-        match &author_entry.attribution {
-            Attribution::Agent { prompt_id } => {
-                // Verify the prompt exists in the global prompts dictionary
-                let prompt = authorship_log.prompts.get(prompt_id).unwrap();
-                assert_eq!(prompt.agent_id.tool, "cursor");
-                assert_eq!(prompt.agent_id.id, "session-abc123");
-                assert_eq!(prompt.messages.len(), 1);
-                assert_eq!(
-                    prompt.messages[0].text,
-                    "Please add error handling to this function"
-                );
-            }
-            Attribution::Human { .. } => panic!("Expected Agent attribution, got Human"),
-        }
-
-        // Verify that lines are still attributed correctly
-        assert_eq!(file_auth.get_author(5), Some(author_entry.author.as_str()));
+        // Verify that lines are still attributed correctly (username)
+        assert_eq!(
+            file_auth.get_author(5),
+            Some(entry.author.username.as_str())
+        );
     }
 
     #[test]
@@ -1416,30 +1370,19 @@ mod tests {
         // Convert to authorship log
         let authorship_log = AuthorshipLog::from_working_log(&[checkpoint1, checkpoint2]);
 
-        // Should have two separate author entries for the same tool
+        // Should have two separate author entries for the same human with different prompts
         let file_auth = &authorship_log.files["src/main.rs"];
         assert_eq!(file_auth.authors.len(), 2);
 
-        // Both should have author "cursor" but different prompt_ids
-        let authors: Vec<&str> = file_auth
+        // Both should reference different prompt ids
+        let mut prompts: Vec<String> = file_auth
             .authors
             .iter()
-            .map(|a| a.author.as_str())
+            .map(|a| a.author.prompt.clone().expect("prompt expected"))
             .collect();
-        assert_eq!(authors, vec!["cursor", "cursor"]);
-
-        // But they should have different attributions (different prompt_ids)
-        let attributions: Vec<&Attribution> =
-            file_auth.authors.iter().map(|a| &a.attribution).collect();
-        match &attributions[0] {
-            Attribution::Agent { prompt_id: id1 } => match &attributions[1] {
-                Attribution::Agent { prompt_id: id2 } => {
-                    assert_ne!(id1, id2, "Different prompts should have different IDs");
-                }
-                _ => panic!("Expected Agent attribution"),
-            },
-            _ => panic!("Expected Agent attribution"),
-        }
+        prompts.sort();
+        prompts.dedup();
+        assert_eq!(prompts.len(), 2);
 
         // Verify prompts are stored separately
         assert_eq!(authorship_log.prompts.len(), 2);
@@ -1496,37 +1439,18 @@ mod tests {
         // Should have two author entries
         assert_eq!(file_auth.authors.len(), 2);
 
-        // Find human and agent entries
-        let human_entry = file_auth
-            .authors
-            .iter()
-            .find(|a| a.author == "john.doe")
-            .unwrap();
-        let agent_entry = file_auth
-            .authors
-            .iter()
-            .find(|a| a.author != "john.doe") // Agent entry will have a hash as author
-            .unwrap();
-
-        // Check human attribution
-        match &human_entry.attribution {
-            Attribution::Human { username } => assert_eq!(username, "john.doe"),
-            Attribution::Agent { .. } => panic!("Expected Human attribution, got Agent"),
-        }
-
-        // Check agent attribution
-        match &agent_entry.attribution {
-            Attribution::Agent { prompt_id } => {
-                // Verify the prompt exists in the global prompts dictionary
-                let prompt = authorship_log.prompts.get(prompt_id).unwrap();
-                assert_eq!(prompt.agent_id.tool, "cursor");
-                assert_eq!(prompt.agent_id.id, "session-xyz789");
-            }
-            Attribution::Human { .. } => panic!("Expected Agent attribution, got Human"),
-        }
-
         // Verify line attributions
-        assert_eq!(file_auth.get_author(3), Some("john.doe")); // Human lines
-        assert_eq!(file_auth.get_author(8), Some(agent_entry.author.as_str())); // Agent lines
+        // Human-only lines attributed to username
+        assert_eq!(file_auth.get_author(3), Some("john.doe"));
+        // AI-assisted lines show username internally; blame overlay will display tool
+        let assisted = file_auth
+            .authors
+            .iter()
+            .find(|a| a.author.prompt.is_some())
+            .unwrap();
+        assert_eq!(
+            file_auth.get_author(8),
+            Some(assisted.author.username.as_str())
+        );
     }
 }

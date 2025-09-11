@@ -341,8 +341,17 @@ pub fn overlay_ai_authorship(
             if let Some(file_authorship) = authorship_log.files.get(file_path) {
                 // Check each line in this hunk for AI authorship
                 for line_num in hunk.range.0..=hunk.range.1 {
-                    if let Some(author) = file_authorship.get_author(line_num) {
-                        line_authors.insert(line_num, author.to_string());
+                    if let Some(author) = file_authorship.get_author_info(line_num) {
+                        // If this author has an associated prompt, display the tool name; otherwise username
+                        if let Some(prompt_id) = &author.prompt {
+                            if let Some(prompt) = authorship_log.prompts.get(prompt_id) {
+                                line_authors.insert(line_num, prompt.agent_id.tool.clone());
+                            } else {
+                                line_authors.insert(line_num, author.username.clone());
+                            }
+                        } else {
+                            line_authors.insert(line_num, author.username.clone());
+                        }
                     } else {
                         // Fall back to original author if no AI authorship
                         line_authors.insert(line_num, hunk.original_author.clone());
