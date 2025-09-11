@@ -336,11 +336,6 @@ pub fn overlay_ai_authorship(
             authorship
         };
 
-        // CLAUDE DEBUG
-        // EXAMPLE
-
-        // AIDAN EXAMPLEAA
-
         // If we have AI authorship data, look up the author for lines in this hunk
         if let Some(authorship_log) = authorship_log {
             if let Some(file_authorship) = authorship_log.files.get(file_path) {
