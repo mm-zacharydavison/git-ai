@@ -106,12 +106,7 @@ fn binary_exists(name: &str) -> bool {
         for dir in path.split(':') {
             let binary_path = std::path::Path::new(dir).join(name);
             if binary_path.exists() && binary_path.is_file() {
-                // Check if it's executable
-                if let Ok(metadata) = std::fs::metadata(&binary_path) {
-                    use std::os::unix::fs::PermissionsExt;
-                    let permissions = metadata.permissions();
-                    return permissions.mode() & 0o111 != 0; // Check if any execute bit is set
-                }
+                return true;
             }
         }
     }
