@@ -557,11 +557,10 @@ impl fmt::Display for FileAuthorship {
     }
 }
 
-/// Complete authorship log for all files
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorshipLog {
     pub files: BTreeMap<String, FileAuthorship>,
-    pub prompts: BTreeMap<String, Prompt>, // Global prompts by ID
+    pub prompts: BTreeMap<String, Prompt>, // Global prompts by hash
     pub schema_version: String,
 }
 
