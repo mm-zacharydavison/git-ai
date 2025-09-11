@@ -339,7 +339,7 @@ pub fn overlay_ai_authorship(
         // CLAUDE DEBUG
         // EXAMPLE
 
-        // AIDAN EXAMPLE
+        // AIDAN EXAMPLEAA
 
         // If we have AI authorship data, look up the author for lines in this hunk
         if let Some(authorship_log) = authorship_log {
