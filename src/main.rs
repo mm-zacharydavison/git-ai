@@ -84,6 +84,26 @@ fn main() {
         "push" => {
             handle_fetch_or_pull("push", args);
         }
+        "install-hooks" => {
+            // This command only works when called as git-ai, not as git alias
+            if binary_name == "git" {
+                eprintln!(
+                    "Error: install-hooks command is only available when called as 'git-ai', not as 'git'"
+                );
+                std::process::exit(1);
+            }
+
+            // This command is not ready for production - only allow in debug builds
+            if !cfg!(debug_assertions) {
+                eprintln!("Error: install-hooks command is not ready for production");
+                std::process::exit(1);
+            }
+
+            if let Err(e) = commands::install_hooks::run(args) {
+                eprintln!("Install hooks failed: {}", e);
+                std::process::exit(1);
+            }
+        }
         _ => {
             debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
@@ -563,6 +583,7 @@ fn print_help() {
     );
     eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
     eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
+    eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
     eprintln!("");
     std::process::exit(0);
 }
