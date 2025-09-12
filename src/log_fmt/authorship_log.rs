@@ -1,4 +1,5 @@
-use crate::log_fmt::working_log::{Checkpoint, Line, Prompt};
+use crate::log_fmt::working_log::{Checkpoint, Line, AgentId};
+use crate::log_fmt::transcript::{Message, AiTranscript};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer, ser::SerializeSeq};
@@ -15,7 +16,7 @@ pub struct Author {
     pub username: String,
     pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>, // shortened prompt id if AI assisted
+    pub transcript: Option<String>, // shortened transcript id if AI assisted
 }
 
 // Deprecated: previous attribution structure removed in favor of explicit Author with optional prompt reference
@@ -459,7 +460,7 @@ impl FileAuthorship {
         let author = Author {
             username: username.to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         };
         self.add_lines_with_author(author, lines);
     }
@@ -521,7 +522,8 @@ impl fmt::Display for FileAuthorship {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorshipLog {
     pub files: BTreeMap<String, FileAuthorship>,
-    pub prompts: BTreeMap<String, Prompt>, // Global prompts by hash
+    pub transcripts: BTreeMap<String, AiTranscript>, // Global transcripts by hash
+    pub agent_ids: BTreeMap<String, AgentId>, // Agent IDs by transcript ID
     pub schema_version: String,
 }
 
@@ -529,7 +531,8 @@ impl AuthorshipLog {
     pub fn new() -> Self {
         Self {
             files: BTreeMap::new(),
-            prompts: BTreeMap::new(),
+            transcripts: BTreeMap::new(),
+            agent_ids: BTreeMap::new(),
             schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
         }
     }
@@ -540,41 +543,53 @@ impl AuthorshipLog {
             .or_insert_with(|| FileAuthorship::new(file.to_string()))
     }
 
-    /// Generate a unique prompt ID based on the prompt content (shortened)
-    fn generate_prompt_id(prompt: &Prompt) -> String {
-        // Create a hash of the prompt content for uniqueness
+    /// Generate a unique transcript ID based on the transcript content (shortened)
+    fn generate_transcript_id(transcript: &AiTranscript) -> String {
+        // Create a hash of the transcript content for uniqueness
         let mut hasher = Sha256::new();
-        hasher.update(prompt.agent_id.tool.as_bytes());
-        hasher.update(prompt.agent_id.id.as_bytes());
-        for message in &prompt.messages {
-            hasher.update(message.text.as_bytes());
-            hasher.update(format!("{:?}", message.role).as_bytes());
-            if let Some(ref username) = message.username {
-                hasher.update(username.as_bytes());
+        for message in transcript.messages() {
+            match message {
+                Message::User { text } => {
+                    hasher.update(b"user");
+                    hasher.update(text.as_bytes());
+                }
+                Message::Assistant { text } => {
+                    hasher.update(b"assistant");
+                    hasher.update(text.as_bytes());
+                }
+                Message::ToolUse { name, input } => {
+                    hasher.update(b"tool_use");
+                    hasher.update(name.as_bytes());
+                    if let Ok(input_str) = serde_json::to_string(input) {
+                        hasher.update(input_str.as_bytes());
+                    }
+                }
             }
-            hasher.update(&message.timestamp.to_le_bytes());
         }
         let full = format!("{:x}", hasher.finalize());
         full.chars().take(8).collect()
     }
 
-    /// Add a prompt to the global prompts dictionary and return its ID
-    fn add_prompt(&mut self, prompt: Prompt) -> String {
-        let prompt_id = Self::generate_prompt_id(&prompt);
-        self.prompts.entry(prompt_id.clone()).or_insert(prompt);
-        prompt_id
+    /// Add a transcript to the global transcripts dictionary and return its ID
+    fn add_transcript(&mut self, transcript: AiTranscript, agent_id: Option<AgentId>) -> String {
+        let transcript_id = Self::generate_transcript_id(&transcript);
+        self.transcripts.entry(transcript_id.clone()).or_insert(transcript);
+        if let Some(agent_id) = agent_id {
+            self.agent_ids.insert(transcript_id.clone(), agent_id);
+        }
+        transcript_id
     }
 
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
         let mut authorship_log = AuthorshipLog::new();
 
-        // First pass: collect all unique prompts and create prompt IDs
-        let mut prompt_id_map = std::collections::HashMap::new();
+        // First pass: collect all unique transcripts and create transcript IDs
+        let mut transcript_id_map = std::collections::HashMap::new();
         for checkpoint in checkpoints.iter() {
-            if let Some(prompt) = &checkpoint.prompt {
-                let prompt_id = authorship_log.add_prompt(prompt.clone());
-                prompt_id_map.insert(checkpoint.snapshot.clone(), prompt_id);
+            if let Some(transcript) = &checkpoint.transcript {
+                let transcript_id = authorship_log.add_transcript(transcript.clone(), checkpoint.agent_id.clone());
+                transcript_id_map.insert(checkpoint.snapshot.clone(), transcript_id);
             }
         }
 
@@ -612,7 +627,7 @@ impl AuthorshipLog {
                     let author = Author {
                         username: checkpoint.author.clone(),
                         email: "".to_string(),
-                        prompt: prompt_id_map.get(&checkpoint.snapshot).cloned(),
+                        transcript: transcript_id_map.get(&checkpoint.snapshot).cloned(),
                     };
 
                     // Create a single range to remove from all other authors
@@ -1044,7 +1059,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Add the same range multiple times
@@ -1062,7 +1077,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Add adjacent ranges
@@ -1079,7 +1094,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Add overlapping ranges
@@ -1096,7 +1111,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Add a range and adjacent single lines
@@ -1114,7 +1129,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Add adjacent single lines
@@ -1132,7 +1147,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Add a complex mix of ranges and single lines
@@ -1156,7 +1171,7 @@ mod tests {
         let mut author_entry = AuthorEntry::new(Author {
             username: "claude".to_string(),
             email: "".to_string(),
-            prompt: None,
+            transcript: None,
         });
 
         // Simulate the same range being added hundreds of times (like in the reported issue)
@@ -1193,26 +1208,22 @@ mod tests {
 
     #[test]
     fn test_prompt_attribution_in_authorship_log() {
-        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+        use crate::log_fmt::working_log::AgentId;
+        use crate::log_fmt::transcript::{Message, AiTranscript};
 
         let entry =
             WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
 
-        let prompt_message = PromptMessage {
-            text: "Please add error handling to this function".to_string(),
-            role: PromptRole::User,
-            username: Some("john.doe".to_string()),
-            timestamp: 1234567890,
-        };
+        let user_message = Message::user("Please add error handling to this function".to_string());
+        let assistant_message = Message::assistant("I'll add error handling to the function.".to_string());
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+        transcript.add_message(assistant_message);
 
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: "session-abc123".to_string(),
-        };
-
-        let prompt = Prompt {
-            messages: vec![prompt_message],
-            agent_id,
         };
 
         let mut checkpoint = Checkpoint::new(
@@ -1221,7 +1232,8 @@ mod tests {
             "claude".to_string(),
             vec![entry],
         );
-        checkpoint.prompt = Some(prompt);
+        checkpoint.transcript = Some(transcript);
+        checkpoint.agent_id = Some(agent_id);
 
         let checkpoints = vec![checkpoint];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
@@ -1231,16 +1243,26 @@ mod tests {
         assert_eq!(file_auth.authors.len(), 1);
         let entry = &file_auth.authors[0];
 
-        // Check that the prompt reference exists and maps to a prompt with tool "cursor"
-        let prompt_id = entry.author.prompt.as_ref().expect("expected prompt id");
-        let prompt = authorship_log.prompts.get(prompt_id).unwrap();
-        assert_eq!(prompt.agent_id.tool, "cursor");
-        assert_eq!(prompt.agent_id.id, "session-abc123");
-        assert_eq!(prompt.messages.len(), 1);
-        assert_eq!(
-            prompt.messages[0].text,
-            "Please add error handling to this function"
-        );
+        // Check that the transcript reference exists and maps to a transcript
+        let transcript_id = entry.author.transcript.as_ref().expect("expected transcript id");
+        let transcript = authorship_log.transcripts.get(transcript_id).unwrap();
+        assert_eq!(transcript.messages().len(), 2);
+        
+        // Check first message (user)
+        match &transcript.messages()[0] {
+            Message::User { text } => {
+                assert_eq!(text, "Please add error handling to this function");
+            }
+            _ => panic!("Expected user message"),
+        }
+        
+        // Check second message (assistant)
+        match &transcript.messages()[1] {
+            Message::Assistant { text } => {
+                assert_eq!(text, "I'll add error handling to the function.");
+            }
+            _ => panic!("Expected assistant message"),
+        }
 
         // Verify that lines are still attributed correctly (username)
         assert_eq!(
@@ -1251,28 +1273,20 @@ mod tests {
 
     #[test]
     fn test_authorship_log_json_example() {
-        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+        use crate::log_fmt::working_log::AgentId;
+        use crate::log_fmt::transcript::{Message, AiTranscript};
 
-        // Create a checkpoint with a prompt
-        let prompt = Prompt {
-            agent_id: AgentId {
-                tool: "cursor".to_string(),
-                id: "session-abc123".to_string(),
-            },
-            messages: vec![
-                PromptMessage {
-                    text: "Please add error handling to this function".to_string(),
-                    role: PromptRole::User,
-                    username: Some("john.doe".to_string()),
-                    timestamp: 1234567890,
-                },
-                PromptMessage {
-                    text: "I'll add comprehensive error handling with try-catch blocks".to_string(),
-                    role: PromptRole::Agent,
-                    username: None,
-                    timestamp: 1234567891,
-                },
-            ],
+        // Create a checkpoint with a transcript
+        let user_message = Message::user("Please add error handling to this function".to_string());
+        let assistant_message = Message::assistant("I'll add comprehensive error handling with try-catch blocks".to_string());
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+        transcript.add_message(assistant_message);
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
         };
 
         let checkpoint = Checkpoint {
@@ -1285,7 +1299,8 @@ mod tests {
                 added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
                 deleted_lines: vec![],
             }],
-            prompt: Some(prompt),
+            transcript: Some(transcript),
+            agent_id: Some(agent_id),
         };
 
         // Convert to authorship log
@@ -1298,49 +1313,43 @@ mod tests {
 
         // Verify the structure
         assert_eq!(authorship_log.files.len(), 1);
-        assert_eq!(authorship_log.prompts.len(), 1);
+        assert_eq!(authorship_log.transcripts.len(), 1);
         assert!(authorship_log.files.contains_key("src/main.rs"));
 
-        // Verify prompt is stored in global dictionary
-        let prompt_id = authorship_log.prompts.keys().next().unwrap();
-        let stored_prompt = authorship_log.prompts.get(prompt_id).unwrap();
-        assert_eq!(stored_prompt.agent_id.tool, "cursor");
-        assert_eq!(stored_prompt.agent_id.id, "session-abc123");
-        assert_eq!(stored_prompt.messages.len(), 2);
+        // Verify transcript is stored in global dictionary
+        let transcript_id = authorship_log.transcripts.keys().next().unwrap();
+        let stored_transcript = authorship_log.transcripts.get(transcript_id).unwrap();
+        assert_eq!(stored_transcript.messages().len(), 2);
+        
+        // Verify agent_id is stored
+        let stored_agent_id = authorship_log.agent_ids.get(transcript_id).unwrap();
+        assert_eq!(stored_agent_id.tool, "cursor");
+        assert_eq!(stored_agent_id.id, "session-abc123");
     }
 
     #[test]
     fn test_multiple_prompts_same_tool_separate_entries() {
-        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+        use crate::log_fmt::working_log::AgentId;
+        use crate::log_fmt::transcript::{Message, AiTranscript};
 
-        // Create two different prompts from the same tool (cursor)
-        let prompt1 = Prompt {
-            agent_id: AgentId {
-                tool: "cursor".to_string(),
-                id: "session-abc123".to_string(),
-            },
-            messages: vec![PromptMessage {
-                text: "Add error handling".to_string(),
-                role: PromptRole::User,
-                username: Some("john.doe".to_string()),
-                timestamp: 1234567890,
-            }],
+        // Create two different transcripts from the same tool (cursor)
+        let mut transcript1 = AiTranscript::new();
+        transcript1.add_message(Message::user("Add error handling".to_string()));
+
+        let agent_id1 = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
         };
 
-        let prompt2 = Prompt {
-            agent_id: AgentId {
-                tool: "cursor".to_string(),
-                id: "session-xyz789".to_string(),
-            },
-            messages: vec![PromptMessage {
-                text: "Add logging".to_string(),
-                role: PromptRole::User,
-                username: Some("john.doe".to_string()),
-                timestamp: 1234567891,
-            }],
+        let mut transcript2 = AiTranscript::new();
+        transcript2.add_message(Message::user("Add logging".to_string()));
+
+        let agent_id2 = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-xyz789".to_string(),
         };
 
-        // Create two checkpoints with different prompts
+        // Create two checkpoints with different transcripts
         let checkpoint1 = Checkpoint {
             snapshot: "abc123".to_string(),
             diff: "diff1".to_string(),
@@ -1351,7 +1360,8 @@ mod tests {
                 added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
                 deleted_lines: vec![],
             }],
-            prompt: Some(prompt1),
+            transcript: Some(transcript1),
+            agent_id: Some(agent_id1),
         };
 
         let checkpoint2 = Checkpoint {
@@ -1364,28 +1374,29 @@ mod tests {
                 added_lines: vec![crate::log_fmt::working_log::Line::Range(15, 20)],
                 deleted_lines: vec![],
             }],
-            prompt: Some(prompt2),
+            transcript: Some(transcript2),
+            agent_id: Some(agent_id2),
         };
 
         // Convert to authorship log
         let authorship_log = AuthorshipLog::from_working_log(&[checkpoint1, checkpoint2]);
 
-        // Should have two separate author entries for the same human with different prompts
+        // Should have two separate author entries for the same human with different transcripts
         let file_auth = &authorship_log.files["src/main.rs"];
         assert_eq!(file_auth.authors.len(), 2);
 
-        // Both should reference different prompt ids
-        let mut prompts: Vec<String> = file_auth
+        // Both should reference different transcript ids
+        let mut transcripts: Vec<String> = file_auth
             .authors
             .iter()
-            .map(|a| a.author.prompt.clone().expect("prompt expected"))
+            .map(|a| a.author.transcript.clone().expect("transcript expected"))
             .collect();
-        prompts.sort();
-        prompts.dedup();
-        assert_eq!(prompts.len(), 2);
+        transcripts.sort();
+        transcripts.dedup();
+        assert_eq!(transcripts.len(), 2);
 
-        // Verify prompts are stored separately
-        assert_eq!(authorship_log.prompts.len(), 2);
+        // Verify transcripts are stored separately
+        assert_eq!(authorship_log.transcripts.len(), 2);
 
         // Show the JSON output to demonstrate multiple cursor entries
         let json = serde_json::to_string_pretty(&authorship_log).unwrap();
@@ -1395,7 +1406,8 @@ mod tests {
 
     #[test]
     fn test_mixed_human_and_agent_attribution() {
-        use crate::log_fmt::working_log::{AgentId, Prompt, PromptMessage, PromptRole};
+        use crate::log_fmt::working_log::AgentId;
+        use crate::log_fmt::transcript::{Message, AiTranscript};
 
         // Human-written entry
         let human_entry =
@@ -1410,27 +1422,24 @@ mod tests {
         // AI-generated entry
         let ai_entry =
             WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(6, 10)], vec![]);
-        let prompt_message = PromptMessage {
-            text: "Add error handling".to_string(),
-            role: PromptRole::User,
-            username: Some("jane.doe".to_string()),
-            timestamp: 1234567890,
-        };
+        let user_message = Message::user("Add error handling".to_string());
+        
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: "session-xyz789".to_string(),
         };
-        let prompt = Prompt {
-            messages: vec![prompt_message],
-            agent_id,
-        };
+        
         let mut ai_checkpoint = Checkpoint::new(
             "def456".to_string(),
             "".to_string(),
             "claude".to_string(),
             vec![ai_entry],
         );
-        ai_checkpoint.prompt = Some(prompt);
+        ai_checkpoint.transcript = Some(transcript);
+        ai_checkpoint.agent_id = Some(agent_id);
 
         let checkpoints = vec![human_checkpoint, ai_checkpoint];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
@@ -1446,7 +1455,7 @@ mod tests {
         let assisted = file_auth
             .authors
             .iter()
-            .find(|a| a.author.prompt.is_some())
+            .find(|a| a.author.transcript.is_some())
             .unwrap();
         assert_eq!(
             file_auth.get_author(8),

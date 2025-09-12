@@ -12,6 +12,7 @@ pub fn pre_commit(repo: &Repository, default_user_name: String) -> Result<(), Gi
         None,
         None,
         None,
+        None,
     );
     result.map(|_| ())
 }

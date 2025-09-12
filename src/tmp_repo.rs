@@ -269,7 +269,8 @@ impl TmpRepo {
             false, // reset
             true, None, // model
             None, // human_author
-            None, // prompt
+            None, // transcript
+            None, // agent_id
         )
     }
 

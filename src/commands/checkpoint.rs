@@ -1,6 +1,7 @@
 use crate::error::GitAiError;
 use crate::git::refs::{get_reference, put_reference};
-use crate::log_fmt::working_log::{Checkpoint, Line, Prompt, WorkingLogEntry};
+use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry, AgentId};
+use crate::log_fmt::transcript::AiTranscript;
 use crate::utils::debug_log;
 use git2::{Repository, StatusOptions};
 use sha2::{Digest, Sha256};
@@ -16,7 +17,8 @@ pub fn run(
     quiet: bool,
     _model: Option<&str>,
     _human_author: Option<&str>,
-    prompt: Option<Prompt>,
+    transcript: Option<AiTranscript>,
+    agent_id: Option<AgentId>,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
@@ -115,9 +117,12 @@ pub fn run(
         entries.clone(),
     );
 
-    // Set prompt if provided
-    if let Some(prompt) = prompt {
-        checkpoint.prompt = Some(prompt);
+    // Set transcript and agent_id if provided
+    if let Some(transcript) = transcript {
+        checkpoint.transcript = Some(transcript);
+    }
+    if let Some(agent_id) = agent_id {
+        checkpoint.agent_id = Some(agent_id);
     }
 
     working_log.push(checkpoint);

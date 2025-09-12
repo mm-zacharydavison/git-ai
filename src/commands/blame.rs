@@ -343,9 +343,9 @@ pub fn overlay_ai_authorship(
                 for line_num in hunk.range.0..=hunk.range.1 {
                     if let Some(author) = file_authorship.get_author_info(line_num) {
                         // If this author has an associated prompt, display the tool name; otherwise username
-                        if let Some(prompt_id) = &author.prompt {
-                            if let Some(prompt) = authorship_log.prompts.get(prompt_id) {
-                                line_authors.insert(line_num, prompt.agent_id.tool.clone());
+                        if let Some(transcript_id) = &author.transcript {
+                            if let Some(agent_id) = authorship_log.agent_ids.get(transcript_id) {
+                                line_authors.insert(line_num, agent_id.tool.clone());
                             } else {
                                 line_authors.insert(line_num, author.username.clone());
                             }

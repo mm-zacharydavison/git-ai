@@ -1,3 +1,4 @@
+use crate::log_fmt::transcript::AiTranscript;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -108,29 +109,9 @@ impl WorkingLogEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PromptMessage {
-    pub text: String,
-    pub role: PromptRole,
-    pub username: Option<String>,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PromptRole {
-    User,
-    Agent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentId {
     pub tool: String, // e.g., "cursor", "windsurf"
     pub id: String,   // id in their domain
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Prompt {
-    pub messages: Vec<PromptMessage>,
-    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +121,8 @@ pub struct Checkpoint {
     pub author: String,
     pub entries: Vec<WorkingLogEntry>,
     pub timestamp: u64,
-    pub prompt: Option<Prompt>,
+    pub transcript: Option<AiTranscript>,
+    pub agent_id: Option<AgentId>,
 }
 
 impl Checkpoint {
@@ -161,7 +143,8 @@ impl Checkpoint {
             author,
             entries,
             timestamp,
-            prompt: None,
+            transcript: None,
+            agent_id: None,
         }
     }
 }
@@ -169,6 +152,7 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log_fmt::transcript::Message;
 
     #[test]
     fn test_line_serialization() {
@@ -209,7 +193,8 @@ mod tests {
             .as_secs();
         assert!(checkpoint.timestamp > 0);
         assert!(checkpoint.timestamp <= current_time);
-        assert!(checkpoint.prompt.is_none());
+        assert!(checkpoint.transcript.is_none());
+        assert!(checkpoint.agent_id.is_none());
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
         let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
@@ -218,7 +203,8 @@ mod tests {
         assert_eq!(deserialized.entries.len(), 1);
         assert_eq!(deserialized.entries[0].file, "src/xyz.rs");
         assert_eq!(deserialized.timestamp, checkpoint.timestamp);
-        assert!(deserialized.prompt.is_none());
+        assert!(deserialized.transcript.is_none());
+        assert!(deserialized.agent_id.is_none());
     }
 
     #[test]
@@ -294,24 +280,20 @@ mod tests {
     }
 
     #[test]
-    fn test_checkpoint_with_prompt() {
+    fn test_checkpoint_with_transcript() {
         let entry = WorkingLogEntry::new("src/xyz.rs".to_string(), vec![Line::Single(1)], vec![]);
 
-        let prompt_message = PromptMessage {
-            text: "Please add error handling to this function".to_string(),
-            role: PromptRole::User,
-            username: Some("john.doe".to_string()),
-            timestamp: 1234567890,
-        };
+        let user_message = Message::user("Please add error handling to this function".to_string());
+        let assistant_message =
+            Message::assistant("I'll add error handling to the function.".to_string());
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+        transcript.add_message(assistant_message);
 
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: "session-abc123".to_string(),
-        };
-
-        let prompt = Prompt {
-            messages: vec![prompt_message],
-            agent_id,
         };
 
         let mut checkpoint = Checkpoint::new(
@@ -320,30 +302,45 @@ mod tests {
             "claude".to_string(),
             vec![entry],
         );
-        checkpoint.prompt = Some(prompt);
+        checkpoint.transcript = Some(transcript);
+        checkpoint.agent_id = Some(agent_id);
 
-        assert!(checkpoint.prompt.is_some());
-        let prompt_data = checkpoint.prompt.as_ref().unwrap();
-        assert_eq!(prompt_data.messages.len(), 1);
-        assert_eq!(
-            prompt_data.messages[0].text,
-            "Please add error handling to this function"
-        );
-        assert!(matches!(prompt_data.messages[0].role, PromptRole::User));
-        assert_eq!(
-            prompt_data.messages[0].username.as_deref(),
-            Some("john.doe")
-        );
-        assert_eq!(prompt_data.messages[0].timestamp, 1234567890);
-        assert_eq!(prompt_data.agent_id.tool, "cursor");
-        assert_eq!(prompt_data.agent_id.id, "session-abc123");
+        assert!(checkpoint.transcript.is_some());
+        assert!(checkpoint.agent_id.is_some());
+
+        let transcript_data = checkpoint.transcript.as_ref().unwrap();
+        assert_eq!(transcript_data.messages().len(), 2);
+
+        // Check first message (user)
+        match &transcript_data.messages()[0] {
+            Message::User { text } => {
+                assert_eq!(text, "Please add error handling to this function");
+            }
+            _ => panic!("Expected user message"),
+        }
+
+        // Check second message (assistant)
+        match &transcript_data.messages()[1] {
+            Message::Assistant { text } => {
+                assert_eq!(text, "I'll add error handling to the function.");
+            }
+            _ => panic!("Expected assistant message"),
+        }
+
+        let agent_data = checkpoint.agent_id.as_ref().unwrap();
+        assert_eq!(agent_data.tool, "cursor");
+        assert_eq!(agent_data.id, "session-abc123");
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
         let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.prompt.is_some());
-        let deserialized_prompt = deserialized.prompt.as_ref().unwrap();
-        assert_eq!(deserialized_prompt.messages.len(), 1);
-        assert_eq!(deserialized_prompt.agent_id.tool, "cursor");
-        assert_eq!(deserialized_prompt.agent_id.id, "session-abc123");
+        assert!(deserialized.transcript.is_some());
+        assert!(deserialized.agent_id.is_some());
+
+        let deserialized_transcript = deserialized.transcript.as_ref().unwrap();
+        assert_eq!(deserialized_transcript.messages().len(), 2);
+
+        let deserialized_agent = deserialized.agent_id.as_ref().unwrap();
+        assert_eq!(deserialized_agent.tool, "cursor");
+        assert_eq!(deserialized_agent.id, "session-abc123");
     }
 }
