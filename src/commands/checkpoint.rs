@@ -117,10 +117,11 @@ pub fn run(
     );
 
     // Set transcript and agent_id if provided
-    if let Some(agent_run_result) = agent_run_result {
-        checkpoint.transcript = Some(agent_run_result.transcript);
-        checkpoint.agent_id = Some(agent_run_result.agent_id);
-    }
+    let agent_tool = if let Some(agent_run_result) = &agent_run_result {
+        Some(agent_run_result.agent_id.tool.as_str())
+    } else {
+        None
+    };
 
     working_log.push(checkpoint);
 
@@ -152,9 +153,15 @@ pub fn run(
     };
 
     if !quiet {
+        let log_author = agent_tool.unwrap_or(author);
         eprintln!(
-            "{} changed {} of the {} file(s) that have changed since the last {}",
-            author,
+            "{}{} changed {} of the {} file(s) that have changed since the last {}",
+            if agent_run_result.is_some() {
+                "AI: "
+            } else {
+                "Human: "
+            },
+            log_author,
             entries.len(),
             files.len(),
             label
