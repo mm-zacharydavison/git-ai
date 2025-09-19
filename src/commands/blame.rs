@@ -338,28 +338,19 @@ pub fn overlay_ai_authorship(
 
         // If we have AI authorship data, look up the author for lines in this hunk
         if let Some(authorship_log) = authorship_log {
-            if let Some(file_authorship) = authorship_log.files.get(file_path) {
-                // Check each line in this hunk for AI authorship
-                for line_num in hunk.range.0..=hunk.range.1 {
-                    if let Some(author) = file_authorship.get_author_info(line_num) {
-                        // If this author has an associated prompt, display the tool name; otherwise username
-                        if let Some(transcript_id) = &author.transcript {
-                            if let Some(agent_id) = authorship_log.agent_ids.get(transcript_id) {
-                                line_authors.insert(line_num, agent_id.tool.clone());
-                            } else {
-                                line_authors.insert(line_num, author.username.clone());
-                            }
-                        } else {
-                            line_authors.insert(line_num, author.username.clone());
-                        }
+            // Check each line in this hunk for AI authorship using compact schema
+            for line_num in hunk.range.0..=hunk.range.1 {
+                if let Some((author, prompt)) =
+                    authorship_log.get_line_attribution(file_path, line_num)
+                {
+                    // If this line is AI-assisted, display the tool name; otherwise the human username
+                    if let Some(prompt_record) = prompt {
+                        line_authors.insert(line_num, prompt_record.agent_id.tool.clone());
                     } else {
-                        // Fall back to original author if no AI authorship
-                        line_authors.insert(line_num, hunk.original_author.clone());
+                        line_authors.insert(line_num, author.username.clone());
                     }
-                }
-            } else {
-                // No file authorship data, use original author for all lines in hunk
-                for line_num in hunk.range.0..=hunk.range.1 {
+                } else {
+                    // Fall back to original author if no AI authorship
                     line_authors.insert(line_num, hunk.original_author.clone());
                 }
             }
