@@ -80,10 +80,10 @@ fn main() {
             std::process::exit(0);
         }
         "fetch" => {
-            handle_fetch_or_pull("fetch", args);
+            handle_fetch(args);
         }
         "push" => {
-            handle_fetch_or_pull("push", args);
+            handle_push(args);
         }
         "install-hooks" => {
             // This command only works when called as git-ai, not as git alias
@@ -399,7 +399,7 @@ fn handle_commit(args: &[String]) {
     }
 }
 
-fn handle_fetch_or_pull(cmd: &str, args: &[String]) {
+fn handle_fetch(args: &[String]) {
     // Find the git repository
     let repo = match find_repository() {
         Ok(repo) => repo,
@@ -418,18 +418,13 @@ fn handle_fetch_or_pull(cmd: &str, args: &[String]) {
         })
         .unwrap_or_default();
     if args.is_empty() {
-        // git fetch or git pull (no remote): inject default remote and refspec
+        // git fetch (no remote): inject default remote and refspecs (heads + authorship)
         if let Some(default_remote) = get_default_remote(&repo) {
             // Use the default refspec but add --update-head-ok flag for fetch operations
             let refspec = DEFAULT_REFSPEC.to_string();
 
-            let mut args_to_pass = vec![cmd.to_string()];
-
-            // Only add --update-head-ok for fetch operations
-            if cmd == "fetch" {
-                args_to_pass.push("--update-head-ok".to_string());
-            }
-
+            let mut args_to_pass = vec!["fetch".to_string()];
+            args_to_pass.push("--update-head-ok".to_string());
             args_to_pass.extend_from_slice(&[
                 default_remote.clone(),
                 AI_AUTHORSHIP_REFSPEC.to_string(),
@@ -443,25 +438,113 @@ fn handle_fetch_or_pull(cmd: &str, args: &[String]) {
         return;
     }
     if args.len() == 1 && remote_names.contains(&args[0]) {
-        // git fetch <remote> or git pull <remote>: inject refspec after remote
-        let mut args_to_pass = vec![cmd.to_string()];
-
-        // Only add --update-head-ok for fetch operations
-        if cmd == "fetch" {
-            args_to_pass.push("--update-head-ok".to_string());
-        }
-
+        // git fetch <remote>: inject refspec after remote
+        let mut args_to_pass = vec!["fetch".to_string()];
+        args_to_pass.push("--update-head-ok".to_string());
         args_to_pass.extend_from_slice(&[args[0].clone(), AI_AUTHORSHIP_REFSPEC.to_string()]);
         proxy_to_git(&args_to_pass);
         return;
     }
     // More complex: just proxy as-is
 
-    let mut full_args = vec![cmd.to_string()];
+    let mut full_args = vec!["fetch".to_string()];
 
     // println!("fetching or pulling from remote: {:?}", &full_args);
     full_args.extend_from_slice(args);
     proxy_to_git(&full_args);
+}
+
+fn handle_push(args: &[String]) {
+    // Find the git repository
+    let repo = match find_repository() {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let remotes = repo.remotes().ok();
+    let remote_names: Vec<String> = remotes
+        .as_ref()
+        .map(|r| {
+            (0..r.len())
+                .filter_map(|i| r.get(i).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Helper to run a git command and optionally forward output, returning exit code
+    fn run_git_and_forward(args: &[String], quiet: bool) -> i32 {
+        let output = Command::new("git").args(args).output();
+        match output {
+            Ok(output) => {
+                if !quiet {
+                    if !output.stdout.is_empty() {
+                        std::io::stdout().write_all(&output.stdout).unwrap();
+                    }
+                    if !output.stderr.is_empty() {
+                        std::io::stderr().write_all(&output.stderr).unwrap();
+                    }
+                }
+                output.status.code().unwrap_or(1)
+            }
+            Err(e) => {
+                eprintln!("Failed to execute git command: {}", e);
+                1
+            }
+        }
+    }
+
+    // 1) Run exactly what the user typed (no arg mutation)
+    let mut user_push = vec!["push".to_string()];
+    user_push.extend_from_slice(args);
+    let status_code = run_git_and_forward(&user_push, false);
+    if status_code != 0 {
+        std::process::exit(status_code);
+    }
+
+    // 2) Push authorship refs to the appropriate remote
+    // Try to detect remote from args first
+    let specified_remote = args
+        .iter()
+        .find(|a| remote_names.iter().any(|r| r == *a))
+        .cloned();
+
+    // If not specified, try to get upstream remote of current branch
+    fn upstream_remote(repo: &git2::Repository) -> Option<String> {
+        let head = repo.head().ok()?;
+        if !head.is_branch() {
+            return None;
+        }
+        let branch_name = head.shorthand()?;
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .ok()?;
+        let upstream = branch.upstream().ok()?;
+        let upstream_name = upstream.name().ok()??; // e.g., "origin/main"
+        let remote = upstream_name.split('/').next()?.to_string();
+        Some(remote)
+    }
+
+    let remote = specified_remote
+        .or_else(|| upstream_remote(&repo))
+        .or_else(|| get_default_remote(&repo));
+
+    if let Some(remote) = remote {
+        let mut push_authorship = vec!["push".to_string()];
+        push_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
+        // Silence the second push unless we're in debug mode
+        let quiet_second_push = !cfg!(debug_assertions);
+        if !quiet_second_push {
+            debug_log(&format!("pushing authorship refs: {:?}", &push_authorship));
+        }
+        let auth_status = run_git_and_forward(&push_authorship, quiet_second_push);
+        std::process::exit(auth_status);
+    } else {
+        eprintln!("No git remotes found.");
+        std::process::exit(1);
+    }
 }
 
 fn get_default_remote(repo: &git2::Repository) -> Option<String> {
