@@ -4,6 +4,9 @@ mod git;
 mod log_fmt;
 mod utils;
 
+// claude test
+// next claude line
+
 use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
