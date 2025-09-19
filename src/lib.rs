@@ -1,4 +1,3 @@
-pub mod checkpoint_agent;
 pub mod commands;
 pub mod error;
 pub mod git;
