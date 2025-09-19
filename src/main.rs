@@ -11,9 +11,10 @@ use std::io::{IsTerminal, Write};
 use std::process::Command;
 use utils::debug_log;
 
-use crate::log_fmt::transcript::{AiTranscript, Message};
+use crate::commands::checkpoint_agent::agent_preset::{
+    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset,
+};
 use crate::git::refs::DEFAULT_REFSPEC;
-use crate::log_fmt::working_log::AgentId;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -120,7 +121,8 @@ fn handle_checkpoint(args: &[String]) {
     let mut reset = false;
     let mut model = None;
     let mut prompt_json = None;
-    let mut transcript = false;
+    let mut prompt_path = None;
+    let mut prompt_id = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -160,47 +162,52 @@ fn handle_checkpoint(args: &[String]) {
                     std::process::exit(1);
                 }
             }
-            "--transcript" => {
-                transcript = true;
-                i += 1;
+            "--prompt-path" => {
+                if i + 1 < args.len() {
+                    prompt_path = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --prompt-path requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--prompt-id" => {
+                if i + 1 < args.len() {
+                    prompt_id = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --prompt-id requires a value");
+                    std::process::exit(1);
+                }
             }
 
-            // Handle preset arguments
             _ => {
-                // Check if this is a preset (claude, codex, cursor-cli)
-                match args[i].as_str() {
-                    "claude" | "codex" | "cursor-cli" => {
-                        // Apply preset configuration
-                        let (preset_author, preset_model, preset_prompt) =
-                            get_preset_config(&args[i]);
-
-                        // Only apply preset values if they haven't been explicitly set
-                        if author.is_none() {
-                            author = Some(preset_author);
-                        }
-                        if model.is_none() {
-                            model = Some(preset_model);
-                        }
-                        if prompt_json.is_none() {
-                            prompt_json = Some(preset_prompt);
-                        }
-
-                        i += 1;
-                    }
-                    _ => {
-                        eprintln!("Unknown checkpoint argument: {}", args[i]);
-                        std::process::exit(1);
-                    }
-                }
+                i += 1;
             }
         }
     }
 
-    // Validate that transcript flag is required for claude preset
-    if let Some(preset_author) = &author {
-        if preset_author == "claude" && !transcript {
-            eprintln!("Error: --transcript flag is required when using claude preset");
-            std::process::exit(1);
+    let mut agent_run_result = None;
+    // Handle preset arguments after parsing all flags
+    if !args.is_empty() {
+        match args[0].as_str() {
+            "claude" => {
+                match ClaudePreset.run(AgentCheckpointFlags {
+                    transcript: None,
+                    model: model.clone(),
+                    prompt_id: prompt_id.clone(),
+                    prompt_path: prompt_path.clone(),
+                }) {
+                    Ok(agent_run) => {
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Error running Claude preset: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -230,19 +237,6 @@ fn handle_checkpoint(args: &[String]) {
 
     let final_author = author.as_ref().unwrap_or(&default_user_name);
 
-    // Parse transcript from JSON if provided
-    let (transcript, agent_id) = if let Some(json_str) = prompt_json {
-        match serde_json::from_str::<AiTranscript>(&json_str) {
-            Ok(transcript) => (Some(transcript), None), // For now, no agent_id in JSON
-            Err(e) => {
-                eprintln!("Error: Failed to parse transcript JSON: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        (None, None)
-    };
-
     if let Err(e) = commands::checkpoint::run(
         &repo,
         final_author,
@@ -251,8 +245,7 @@ fn handle_checkpoint(args: &[String]) {
         false,
         model.as_deref(),
         Some(&default_user_name),
-        transcript,
-        agent_id,
+        agent_run_result,
     ) {
         eprintln!("Checkpoint failed: {}", e);
         std::process::exit(1);
@@ -712,80 +705,4 @@ fn print_help() {
     eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
     eprintln!("");
     std::process::exit(0);
-}
-
-fn get_preset_config(preset: &str) -> (String, String, String) {
-    match preset {
-        "claude" => {
-            let (transcript, _) = create_claude_transcript();
-            (
-                "claude".to_string(),
-                "claude-sonnet-4".to_string(),
-                serde_json::to_string(&transcript).unwrap_or_default(),
-            )
-        },
-        "codex" => {
-            let (transcript, _) = create_codex_transcript();
-            (
-                "codex".to_string(),
-                "gpt-4".to_string(),
-                serde_json::to_string(&transcript).unwrap_or_default(),
-            )
-        },
-        "cursor-cli" => {
-            let (transcript, _) = create_cursor_cli_transcript();
-            (
-                "cursor-cli".to_string(),
-                "claude-sonnet-4".to_string(),
-                serde_json::to_string(&transcript).unwrap_or_default(),
-            )
-        },
-        _ => (
-            "unknown".to_string(),
-            "unknown".to_string(),
-            "{}".to_string(),
-        ),
-    }
-}
-
-fn create_claude_transcript() -> (AiTranscript, AgentId) {
-    let mut transcript = AiTranscript::new();
-    transcript.add_message(Message::assistant(
-        "Claude AI assistance with code changes".to_string(),
-    ));
-
-    let agent_id = AgentId {
-        tool: "claude".to_string(),
-        id: "claude-session".to_string(),
-    };
-
-    (transcript, agent_id)
-}
-
-fn create_codex_transcript() -> (AiTranscript, AgentId) {
-    let mut transcript = AiTranscript::new();
-    transcript.add_message(Message::assistant(
-        "GitHub Copilot code generation and assistance".to_string(),
-    ));
-
-    let agent_id = AgentId {
-        tool: "codex".to_string(),
-        id: "codex-session".to_string(),
-    };
-
-    (transcript, agent_id)
-}
-
-fn create_cursor_cli_transcript() -> (AiTranscript, AgentId) {
-    let mut transcript = AiTranscript::new();
-    transcript.add_message(Message::assistant(
-        "Cursor CLI AI assistance for code changes".to_string(),
-    ));
-
-    let agent_id = AgentId {
-        tool: "cursor-cli".to_string(),
-        id: "cursor-cli-session".to_string(),
-    };
-
-    (transcript, agent_id)
 }
