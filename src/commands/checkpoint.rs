@@ -299,23 +299,84 @@ fn get_or_create_working_log(
 fn get_initial_checkpoint_entries(
     repo: &Repository,
     files: &[String],
-    base_commit: &str,
+    _base_commit: &str,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
+
+    // Diff working directory against HEAD tree for each file
+    let head_commit = repo
+        .head()
+        .ok()
+        .and_then(|h| h.target())
+        .and_then(|oid| repo.find_commit(oid).ok());
+    let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
 
     for file_path in files {
         let repo_workdir = repo.workdir().unwrap();
         let abs_path = repo_workdir.join(file_path);
 
-        let content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+        // Previous content from HEAD tree if present, otherwise empty
+        let previous_content = if let Some(tree) = &head_tree {
+            match tree.get_path(std::path::Path::new(file_path)) {
+                Ok(entry) => {
+                    if let Ok(blob) = repo.find_blob(entry.id()) {
+                        String::from_utf8_lossy(blob.content()).to_string()
+                    } else {
+                        String::new()
+                    }
+                }
+                Err(_) => String::new(),
+            }
+        } else {
+            String::new()
+        };
 
-        let line_count = content.lines().count() as u32;
+        // Current content from filesystem
+        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
-        if line_count > 0 {
+        // Normalize trailing newlines to avoid spurious inserts
+        let prev_norm = if previous_content.ends_with('\n') {
+            previous_content.clone()
+        } else {
+            format!("{}\n", previous_content)
+        };
+        let curr_norm = if current_content.ends_with('\n') {
+            current_content.clone()
+        } else {
+            format!("{}\n", current_content)
+        };
+
+        let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
+        let mut added_lines = Vec::new();
+        let mut deleted_lines = Vec::new();
+        let mut current_line = 1u32;
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Equal => {
+                    current_line += change.value().lines().count() as u32;
+                }
+                ChangeTag::Delete => {
+                    let delete_start = current_line;
+                    let delete_count = change.value().lines().count() as u32;
+                    let delete_end = delete_start + delete_count - 1;
+                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                }
+                ChangeTag::Insert => {
+                    let insert_start = current_line;
+                    let insert_count = change.value().lines().count() as u32;
+                    let insert_end = insert_start + insert_count - 1;
+                    added_lines.push(Line::Range(insert_start, insert_end));
+                    current_line += insert_count;
+                }
+            }
+        }
+
+        if !added_lines.is_empty() || !deleted_lines.is_empty() {
             entries.push(WorkingLogEntry::new(
                 file_path.clone(),
-                vec![Line::Range(1, line_count)],
-                vec![],
+                added_lines,
+                deleted_lines,
             ));
         }
     }
@@ -344,7 +405,19 @@ fn get_subsequent_checkpoint_entries(
         // Read current content directly from the file system
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
-        let diff = TextDiff::from_lines(&previous_content, &current_content);
+        // Normalize by ensuring trailing newline to avoid off-by-one when appending lines
+        let prev_norm = if previous_content.ends_with('\n') {
+            previous_content.clone()
+        } else {
+            format!("{}\n", previous_content)
+        };
+        let curr_norm = if current_content.ends_with('\n') {
+            current_content.clone()
+        } else {
+            format!("{}\n", current_content)
+        };
+
+        let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
         let mut added_lines = Vec::new();
         let mut deleted_lines = Vec::new();
         let mut current_line = 1u32;
