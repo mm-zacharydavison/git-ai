@@ -1,5 +1,5 @@
-use crate::log_fmt::working_log::{AgentId, Checkpoint, Line};
 use crate::log_fmt::transcript::Message;
+use crate::log_fmt::working_log::{AgentId, Checkpoint, Line};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer, ser::SerializeSeq};
@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
-// Current latest version
+// 2.0.0 being used since some users have wip 1.0.0 in git history already
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/2.0.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -456,25 +456,25 @@ impl AuthorshipLog {
         // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
             // If there is an agent session, record it by its UUID (AgentId.id)
-            let (session_id_opt, turn_opt) = match (&checkpoint.agent_id, &checkpoint.transcript) {
-                (Some(agent), Some(transcript)) => {
-                    let session_id = agent.id.clone();
-                    // Insert or update the prompt session transcript
-                    let entry = authorship_log
-                        .prompts
-                        .entry(session_id.clone())
-                        .or_insert(PromptRecord {
-                            agent_id: agent.clone(),
-                            messages: transcript.messages().to_vec(),
-                        });
-                    if entry.messages.len() < transcript.messages().len() {
-                        entry.messages = transcript.messages().to_vec();
+            let (session_id_opt, turn_opt) =
+                match (&checkpoint.agent_id, &checkpoint.transcript) {
+                    (Some(agent), Some(transcript)) => {
+                        let session_id = agent.id.clone();
+                        // Insert or update the prompt session transcript
+                        let entry = authorship_log.prompts.entry(session_id.clone()).or_insert(
+                            PromptRecord {
+                                agent_id: agent.clone(),
+                                messages: transcript.messages().to_vec(),
+                            },
+                        );
+                        if entry.messages.len() < transcript.messages().len() {
+                            entry.messages = transcript.messages().to_vec();
+                        }
+                        let turn = (transcript.messages().len().saturating_sub(1)) as u32;
+                        (Some(session_id), Some(turn))
                     }
-                    let turn = (transcript.messages().len().saturating_sub(1)) as u32;
-                    (Some(session_id), Some(turn))
-                }
-                _ => (None, None),
-            };
+                    _ => (None, None),
+                };
             for entry in &checkpoint.entries {
                 // Process deletions first (remove lines from all authors)
                 {
