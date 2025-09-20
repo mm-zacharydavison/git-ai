@@ -6,10 +6,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Semantic version for the authorship log format
+// Current latest version
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/2.0.0";
 
-/// Represents a human author
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Author {
     pub username: String,
