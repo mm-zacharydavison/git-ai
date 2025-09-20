@@ -344,7 +344,7 @@ pub fn overlay_ai_authorship(
                     authorship_log.get_line_attribution(file_path, line_num)
                 {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
-                    if let Some(prompt_record) = prompt {
+                    if let Some((prompt_record, _turn)) = prompt {
                         line_authors.insert(line_num, prompt_record.agent_id.tool.clone());
                     } else {
                         line_authors.insert(line_num, author.username.clone());

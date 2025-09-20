@@ -1,4 +1,3 @@
-use crate::log_fmt::transcript::{AiTranscript, Message};
 use crate::log_fmt::working_log::{AgentId, Checkpoint, Line};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -8,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// Semantic version for the authorship log format
-pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/1.0.0";
+pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/2.0.0";
 
 /// Represents a human author
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,12 +204,13 @@ impl<'de> serde::Deserialize<'de> for LineRange {
 
 // Deprecated legacy structures removed in favor of compact format
 
-/// Compact per-file attribution entry: [lines, author_key, prompt_key?]
+/// Compact per-file attribution entry (v2): [lines, author_key, prompt_session_id?, prompt_turn?]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttributionEntry {
     pub lines: Vec<LineRange>,
     pub author_key: String,
-    pub prompt_key: Option<String>,
+    pub prompt_session_id: Option<String>,
+    pub prompt_turn: Option<u32>,
 }
 
 impl AttributionEntry {
@@ -324,12 +324,17 @@ impl serde::Serialize for AttributionEntry {
         S: Serializer,
     {
         use serde::ser::SerializeSeq;
-        let len = if self.prompt_key.is_some() { 3 } else { 2 };
+        let len = if self.prompt_session_id.is_some() {
+            4
+        } else {
+            2
+        };
         let mut seq = serializer.serialize_seq(Some(len))?;
         seq.serialize_element(&self.lines)?;
         seq.serialize_element(&self.author_key)?;
-        if let Some(prompt) = &self.prompt_key {
-            seq.serialize_element(prompt)?;
+        if let Some(session) = &self.prompt_session_id {
+            seq.serialize_element(session)?;
+            seq.serialize_element(&self.prompt_turn.unwrap_or(0))?;
         }
         seq.end()
     }
@@ -344,7 +349,7 @@ impl<'de> serde::Deserialize<'de> for AttributionEntry {
         impl<'de> Visitor<'de> for VisitorImpl {
             type Value = AttributionEntry;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("an array: [lines, author_key, prompt_key?]")
+                f.write_str("an array: [lines, author_key, prompt_session_id?, prompt_turn?]")
             }
             fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
             where
@@ -356,11 +361,20 @@ impl<'de> serde::Deserialize<'de> for AttributionEntry {
                 let author_key: String = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let prompt_key: Option<String> = seq.next_element()?;
+                // Optional session id
+                let prompt_session_id: Option<String> = seq.next_element()?;
+                // Optional turn index (only meaningful if session id present)
+                let prompt_turn: Option<u32> = if prompt_session_id.is_some() {
+                    // If missing, default to 0
+                    Some(seq.next_element()?.unwrap_or(0))
+                } else {
+                    None
+                };
                 Ok(AttributionEntry {
                     lines,
                     author_key,
-                    prompt_key,
+                    prompt_session_id,
+                    prompt_turn,
                 })
             }
         }
@@ -368,10 +382,9 @@ impl<'de> serde::Deserialize<'de> for AttributionEntry {
     }
 }
 
-/// Prompt details stored in the top-level prompts map
+/// Prompt session details stored in the top-level prompts map keyed by AgentId.id (UUID)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
-    pub messages: Vec<Message>,
     pub agent_id: AgentId,
 }
 
@@ -382,6 +395,7 @@ pub type FileAttributions = Vec<AttributionEntry>;
 pub struct AuthorshipLog {
     pub files: BTreeMap<String, FileAttributions>,
     pub authors: BTreeMap<String, Author>,
+    /// Map of prompt session UUID -> AgentId
     pub prompts: BTreeMap<String, PromptRecord>,
     pub schema_version: String,
 }
@@ -405,7 +419,7 @@ impl AuthorshipLog {
         &self,
         file: &str,
         line: u32,
-    ) -> Option<(&Author, Option<&PromptRecord>)> {
+    ) -> Option<(&Author, Option<(&PromptRecord, u32)>)> {
         let entries = self.files.get(file)?;
         // Prefer later entries (latest wins)
         for e in entries.iter().rev() {
@@ -413,9 +427,9 @@ impl AuthorshipLog {
             let contains = e.lines.iter().any(|r| r.contains(line));
             if contains {
                 if let Some(author) = self.authors.get(&e.author_key) {
-                    let prompt = match &e.prompt_key {
-                        Some(key) => self.prompts.get(key),
-                        None => None,
+                    let prompt = match (&e.prompt_session_id, e.prompt_turn) {
+                        (Some(session), Some(turn)) => self.prompts.get(session).map(|p| (p, turn)),
+                        _ => None,
                     };
                     return Some((author, prompt));
                 }
@@ -424,46 +438,7 @@ impl AuthorshipLog {
         None
     }
 
-    /// Generate a unique prompt ID based on the transcript content (shortened)
-    fn generate_prompt_id(transcript: &AiTranscript) -> String {
-        // Create a hash of the transcript content for uniqueness
-        let mut hasher = Sha256::new();
-        for message in transcript.messages() {
-            match message {
-                Message::User { text } => {
-                    hasher.update(b"user");
-                    hasher.update(text.as_bytes());
-                }
-                Message::Assistant { text } => {
-                    hasher.update(b"assistant");
-                    hasher.update(text.as_bytes());
-                }
-                Message::ToolUse { name, input } => {
-                    hasher.update(b"tool_use");
-                    hasher.update(name.as_bytes());
-                    if let Ok(input_str) = serde_json::to_string(input) {
-                        hasher.update(input_str.as_bytes());
-                    }
-                }
-            }
-        }
-        let full = format!("{:x}", hasher.finalize());
-        full.chars().take(8).collect()
-    }
-
-    /// Add a prompt to the global prompts dictionary and return its ID
-    fn add_prompt(&mut self, transcript: AiTranscript, agent_id: Option<AgentId>) -> String {
-        let prompt_id = Self::generate_prompt_id(&transcript);
-        if let Some(agent) = agent_id {
-            self.prompts
-                .entry(prompt_id.clone())
-                .or_insert(PromptRecord {
-                    messages: transcript.messages().to_vec(),
-                    agent_id: agent,
-                });
-        }
-        prompt_id
-    }
+    // Prompt hashing removed in v2; authorship log references prompts by AgentId.id and turn index
 
     /// Generate a stable author key based on username and email
     fn generate_author_key(author: &Author) -> String {
@@ -479,18 +454,23 @@ impl AuthorshipLog {
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
         let mut authorship_log = AuthorshipLog::new();
 
-        // First pass: collect all unique prompts and create prompt IDs
-        let mut prompt_id_map = std::collections::HashMap::new();
+        // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
-            if let Some(transcript) = &checkpoint.transcript {
-                let prompt_id =
-                    authorship_log.add_prompt(transcript.clone(), checkpoint.agent_id.clone());
-                prompt_id_map.insert(checkpoint.snapshot.clone(), prompt_id);
-            }
-        }
-
-        // Second pass: process checkpoints and create attributions
-        for checkpoint in checkpoints.iter() {
+            // If there is an agent session, record it by its UUID (AgentId.id)
+            let (session_id_opt, turn_opt) = match (&checkpoint.agent_id, &checkpoint.transcript) {
+                (Some(agent), Some(transcript)) => {
+                    let session_id = agent.id.clone();
+                    authorship_log
+                        .prompts
+                        .entry(session_id.clone())
+                        .or_insert(PromptRecord {
+                            agent_id: agent.clone(),
+                        });
+                    let turn = (transcript.messages().len().saturating_sub(1)) as u32;
+                    (Some(session_id), Some(turn))
+                }
+                _ => (None, None),
+            };
             for entry in &checkpoint.entries {
                 // Process deletions first (remove lines from all authors)
                 {
@@ -529,7 +509,8 @@ impl AuthorshipLog {
                         authorship_log.authors.insert(key.clone(), author_struct);
                     }
                     let author_key = key;
-                    let prompt_key = prompt_id_map.get(&checkpoint.snapshot).cloned();
+                    let prompt_session_id = session_id_opt.clone();
+                    let prompt_turn = turn_opt;
 
                     // Create a single range to remove from all other entries
                     let lines_to_remove = LineRange::compress_lines(&added_lines);
@@ -539,16 +520,18 @@ impl AuthorshipLog {
                     for rec in file_entries.iter_mut() {
                         rec.remove_lines(&lines_to_remove);
                     }
-                    if let Some(rec) = file_entries
-                        .iter_mut()
-                        .find(|r| r.author_key == author_key && r.prompt_key == prompt_key)
-                    {
+                    if let Some(rec) = file_entries.iter_mut().find(|r| {
+                        r.author_key == author_key
+                            && r.prompt_session_id == prompt_session_id
+                            && r.prompt_turn == prompt_turn
+                    }) {
                         rec.add_lines(&lines_to_remove);
                     } else {
                         let mut new_rec = AttributionEntry {
                             lines: Vec::new(),
                             author_key: author_key.clone(),
-                            prompt_key: prompt_key.clone(),
+                            prompt_session_id: prompt_session_id.clone(),
+                            prompt_turn: prompt_turn,
                         };
                         new_rec.add_lines(&lines_to_remove);
                         file_entries.push(new_rec);
@@ -581,7 +564,7 @@ impl fmt::Display for AuthorshipLog {
                     "\n  {:?} {} {}",
                     e.lines,
                     e.author_key,
-                    e.prompt_key.as_deref().unwrap_or("")
+                    e.prompt_session_id.as_deref().unwrap_or("")
                 )?;
             }
             writeln!(f)?;
@@ -1051,12 +1034,13 @@ mod tests {
         let entry = AttributionEntry {
             lines: vec![LineRange::Range(1, 5)],
             author_key: "a1b2c3d4".to_string(),
-            prompt_key: Some("p1q2r3s4".to_string()),
+            prompt_session_id: Some("session-uuid-1234".to_string()),
+            prompt_turn: Some(3),
         };
         let json = serde_json::to_string(&entry).unwrap();
         println!("Serialized format: {}", json);
-        // Expect array start with lines array
-        assert!(json.starts_with("[[[1,5]],\"a1b2c3d4\",\"p1q2r3s4\"]"));
+        // Expect array start with lines array and prompt session with turn
+        assert!(json.starts_with("[[[1,5]],\"a1b2c3d4\",\"session-uuid-1234\",3]"));
     }
 
     #[test]
@@ -1064,7 +1048,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 5)]);
         entry.add_lines(&[LineRange::Range(1, 5)]);
@@ -1078,7 +1063,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 5)]);
         entry.add_lines(&[LineRange::Range(6, 10)]);
@@ -1091,7 +1077,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 8)]);
         entry.add_lines(&[LineRange::Range(5, 12)]);
@@ -1104,7 +1091,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 5)]);
         entry.add_lines(&[LineRange::Single(6)]);
@@ -1118,7 +1106,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Single(5)]);
         entry.add_lines(&[LineRange::Single(6)]);
@@ -1132,7 +1121,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 3)]);
         entry.add_lines(&[LineRange::Single(4)]);
@@ -1151,7 +1141,8 @@ mod tests {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
             author_key: "a".to_string(),
-            prompt_key: None,
+            prompt_session_id: None,
+            prompt_turn: None,
         };
         for _ in 0..100 {
             entry.add_lines(&[LineRange::Range(412, 414)]);
@@ -1211,25 +1202,13 @@ mod tests {
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
         let entries = &authorship_log.files["src/test.rs"];
         assert_eq!(entries.len(), 1);
-        let prompt_id = entries[0].prompt_key.as_ref().expect("expected prompt id");
-        let prompt = authorship_log.prompts.get(prompt_id).unwrap();
-        assert_eq!(prompt.messages.len(), 2);
-
-        // Check first message (user)
-        match &prompt.messages[0] {
-            Message::User { text } => {
-                assert_eq!(text, "Please add error handling to this function");
-            }
-            _ => panic!("Expected user message"),
-        }
-
-        // Check second message (assistant)
-        match &prompt.messages[1] {
-            Message::Assistant { text } => {
-                assert_eq!(text, "I'll add error handling to the function.");
-            }
-            _ => panic!("Expected assistant message"),
-        }
+        let e = &entries[0];
+        assert_eq!(e.prompt_session_id.as_deref(), Some("session-abc123"));
+        assert_eq!(e.prompt_turn, Some(1));
+        // Check prompt registry stores the agent session
+        let prompt = authorship_log.prompts.get("session-abc123").unwrap();
+        assert_eq!(prompt.agent_id.tool, "cursor");
+        assert_eq!(prompt.agent_id.id, "session-abc123");
 
         // Verify that lines are still attributed correctly (username)
         let who = resolve_username(&authorship_log, "src/test.rs", 5).unwrap();
@@ -1283,10 +1262,9 @@ mod tests {
         assert_eq!(authorship_log.prompts.len(), 1);
         assert!(authorship_log.files.contains_key("src/main.rs"));
 
-        // Verify transcript is stored in global dictionary
+        // Verify prompt session registry stores agent metadata
         let prompt_id = authorship_log.prompts.keys().next().unwrap();
         let stored_prompt = authorship_log.prompts.get(prompt_id).unwrap();
-        assert_eq!(stored_prompt.messages.len(), 2);
         assert_eq!(stored_prompt.agent_id.tool, "cursor");
         assert_eq!(stored_prompt.agent_id.id, "session-abc123");
     }
@@ -1349,10 +1327,10 @@ mod tests {
         let file_entries = &authorship_log.files["src/main.rs"];
         assert_eq!(file_entries.len(), 2);
 
-        // Both should reference different prompt ids
+        // Both should reference different prompt session ids
         let mut prompts: Vec<String> = file_entries
             .iter()
-            .map(|a| a.prompt_key.clone().expect("prompt expected"))
+            .map(|a| a.prompt_session_id.clone().expect("prompt expected"))
             .collect();
         prompts.sort();
         prompts.dedup();
