@@ -15,8 +15,6 @@ pub struct Author {
     pub email: String,
 }
 
-// Deprecated: previous attribution structure removed in favor of explicit Author with optional prompt reference
-
 /// Represents either a single line or a range of lines
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LineRange {
