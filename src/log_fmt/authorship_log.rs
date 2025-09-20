@@ -1,4 +1,5 @@
 use crate::log_fmt::working_log::{AgentId, Checkpoint, Line};
+use crate::log_fmt::transcript::Message;
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer, ser::SerializeSeq};
@@ -383,6 +384,7 @@ impl<'de> serde::Deserialize<'de> for AttributionEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
     pub agent_id: AgentId,
+    pub messages: Vec<Message>,
 }
 
 /// Per-file attributions are arrays of compact entries
@@ -457,12 +459,17 @@ impl AuthorshipLog {
             let (session_id_opt, turn_opt) = match (&checkpoint.agent_id, &checkpoint.transcript) {
                 (Some(agent), Some(transcript)) => {
                     let session_id = agent.id.clone();
-                    authorship_log
+                    // Insert or update the prompt session transcript
+                    let entry = authorship_log
                         .prompts
                         .entry(session_id.clone())
                         .or_insert(PromptRecord {
                             agent_id: agent.clone(),
+                            messages: transcript.messages().to_vec(),
                         });
+                    if entry.messages.len() < transcript.messages().len() {
+                        entry.messages = transcript.messages().to_vec();
+                    }
                     let turn = (transcript.messages().len().saturating_sub(1)) as u32;
                     (Some(session_id), Some(turn))
                 }

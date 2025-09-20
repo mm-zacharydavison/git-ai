@@ -387,8 +387,11 @@ fn clear_working_log_diffs(repo: &Repository, base_commit: &str) -> Result<(), G
     for reference in repo.references()? {
         let reference = reference?;
         if let Some(name) = reference.name() {
-            if name.starts_with(&format!("refs/{}ai-working-log/diffs/{}-", crate::git::refs::DEFAULT_REFSPEC, base_commit))
-            {
+            if name.starts_with(&format!(
+                "refs/{}ai-working-log/diffs/{}-",
+                crate::git::refs::DEFAULT_REFSPEC,
+                base_commit
+            )) {
                 put_reference(repo, name, "", "Cleared working log diff")?;
             }
         }
