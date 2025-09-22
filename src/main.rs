@@ -200,6 +200,7 @@ fn handle_checkpoint(args: &[String]) {
                     model: model.clone(),
                     prompt_id: prompt_id.clone(),
                     prompt_path: prompt_path.clone(),
+                    workspace_id: None,
                 }) {
                     Ok(agent_run) => {
                         agent_run_result = Some(agent_run);

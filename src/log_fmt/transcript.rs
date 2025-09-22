@@ -189,6 +189,7 @@ mod tests {
         // Verify we parsed some messages
         assert!(!transcript.messages().is_empty());
 
+        println!("Transcript: {:?}", transcript);
         // Print the parsed transcript for inspection
         println!("Parsed {} messages:", transcript.messages().len());
         for (i, message) in transcript.messages().iter().enumerate() {
