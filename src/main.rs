@@ -713,6 +713,9 @@ fn print_help() {
     eprintln!("    Presets: claude, cursor");
     eprintln!("    --author <name>       Override default author");
     eprintln!("    --model <model>       Override default model");
+    eprintln!("    --prompt <json>       Override default prompt with JSON");
+    eprintln!("    --prompt-path <path>  Override default prompt with file path");
+    eprintln!("    --prompt-id <id>      Override default prompt with ID");
     eprintln!("    --show-working-log    Display current working log");
     eprintln!("    --reset               Reset working log");
     eprintln!("  blame         [override] git blame with AI authorship tracking");
