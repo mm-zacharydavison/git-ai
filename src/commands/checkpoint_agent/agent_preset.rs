@@ -8,7 +8,6 @@ use crate::{
 use rusqlite::{Connection, OpenFlags};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct AgentCheckpointFlags {
     #[allow(dead_code)]
@@ -304,46 +303,31 @@ impl CursorPreset {
         global_db_path: &Path,
         composer_id: &str,
     ) -> Result<Option<AiTranscript>, GitAiError> {
-        eprintln!("Debug: Attempting to extract transcript from composer payload");
-        eprintln!(
-            "Debug: Data keys: {:?}",
-            data.as_object().map(|o| o.keys().collect::<Vec<_>>())
-        );
-
-        // Let's also check what the actual data structure looks like
-        if let Some(obj) = data.as_object() {
-            if let Some(text_val) = obj.get("text") {
-                eprintln!(
-                    "Debug: Root text field type: {:?}, value: {:?}",
-                    text_val, text_val
-                );
-            }
-            if let Some(rich_text_val) = obj.get("richText") {
-                eprintln!(
-                    "Debug: Root richText field type: {:?}, value length: {}",
-                    rich_text_val,
-                    if let Some(s) = rich_text_val.as_str() {
-                        s.len()
-                    } else {
-                        0
-                    }
+        // Debug: print top-level keys and presence of known fields
+        if cfg!(test) {
+            if let Some(obj) = data.as_object() {
+                let keys: Vec<&String> = obj.keys().take(12).collect();
+                println!(
+                    "[cursor debug] payload keys (first 12): {:?}; has conversation: {}, conversationMap: {}, fullConversationHeadersOnly: {}",
+                    keys,
+                    data.get("conversation").is_some(),
+                    data.get("conversationMap").is_some(),
+                    data.get("fullConversationHeadersOnly").is_some()
                 );
             }
         }
-
         // Try conversation array (main format)
         if let Some(conv) = data.get("conversation").and_then(|v| v.as_array()) {
-            eprintln!(
-                "Debug: Found conversation array with {} entries",
-                conv.len()
-            );
             let mut transcript = AiTranscript::new();
-            for (i, entry) in conv.iter().enumerate() {
-                eprintln!(
-                    "Debug: Entry {} keys: {:?}",
-                    i,
-                    entry.as_object().map(|o| o.keys().collect::<Vec<_>>())
-                );
+            for (idx, entry) in conv.iter().enumerate() {
+                if cfg!(test) && idx < 3 {
+                    println!(
+                        "[cursor debug] conversation entry {}: {}",
+                        idx,
+                        serde_json::to_string_pretty(entry)
+                            .unwrap_or_else(|_| "<unprintable>".to_string())
+                    );
+                }
                 // Try different text field names
                 let text_opt = entry
                     .get("text")
@@ -354,81 +338,119 @@ impl CursorPreset {
                     .filter(|s| !s.is_empty());
 
                 if let Some(text) = text_opt {
-                    eprintln!("Debug: Found text in entry {}: {} chars", i, text.len());
                     // Heuristic: type 1 => user, type 2 => assistant (observed from data)
                     let role = entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                    eprintln!("Debug: Entry {} role: {}", i, role);
                     if role == 1 {
                         transcript.add_message(Message::user(text));
                     } else {
                         transcript.add_message(Message::assistant(text));
                     }
-                } else {
-                    eprintln!("Debug: No text found in entry {}", i);
-                    // Let's see what's actually in this entry
-                    eprintln!("Debug: Entry {} full content: {:?}", i, entry);
+                }
+
+                // Additionally handle Claude-like content arrays that may include tool_use
+                if let Some(content_array) = entry.get("content").and_then(|v| v.as_array()) {
+                    for item in content_array {
+                        match item.get("type").and_then(|v| v.as_str()) {
+                            Some("text") => {
+                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                    let trimmed = text.trim();
+                                    if !trimmed.is_empty() {
+                                        // Use role heuristic again
+                                        let role =
+                                            entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                                        if role == 1 {
+                                            transcript
+                                                .add_message(Message::user(trimmed.to_string()));
+                                        } else {
+                                            transcript.add_message(Message::assistant(
+                                                trimmed.to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Some("tool_use") => {
+                                let name_opt = item.get("name").and_then(|v| v.as_str());
+                                let input_val = item.get("input").cloned();
+                                if let (Some(name), Some(input)) = (name_opt, input_val) {
+                                    transcript
+                                        .add_message(Message::tool_use(name.to_string(), input));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             if !transcript.messages.is_empty() {
-                eprintln!(
-                    "Debug: Successfully extracted {} messages from conversation array",
-                    transcript.messages.len()
-                );
                 return Ok(Some(transcript));
-            } else {
-                eprintln!("Debug: No messages extracted from conversation array");
             }
-        } else {
-            eprintln!("Debug: No conversation array found");
         }
 
         // Try conversationMap (newer format)
         if let Some(conv_map) = data.get("conversationMap").and_then(|v| v.as_object()) {
-            eprintln!(
-                "Debug: Found conversationMap with {} entries",
-                conv_map.len()
-            );
             let mut transcript = AiTranscript::new();
-            for (bubble_id, entry) in conv_map.iter() {
-                eprintln!(
-                    "Debug: Bubble {} keys: {:?}",
-                    bubble_id,
-                    entry.as_object().map(|o| o.keys().collect::<Vec<_>>())
-                );
+            for (key, entry) in conv_map.iter() {
+                if cfg!(test) {
+                    println!(
+                        "[cursor debug] conversationMap entry key {}: {}",
+                        key,
+                        serde_json::to_string_pretty(entry)
+                            .unwrap_or_else(|_| "<unprintable>".to_string())
+                    );
+                }
                 let text_opt = entry
                     .get("text")
                     .and_then(|v| v.as_str())
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
                 if let Some(text) = text_opt {
-                    eprintln!(
-                        "Debug: Found text in bubble {}: {} chars",
-                        bubble_id,
-                        text.len()
-                    );
                     // Heuristic: type 1 => user, type 2 => assistant (observed from data)
                     let role = entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                    eprintln!("Debug: Bubble {} role: {}", bubble_id, role);
                     if role == 1 {
                         transcript.add_message(Message::user(text));
                     } else {
                         transcript.add_message(Message::assistant(text));
                     }
-                } else {
-                    eprintln!("Debug: No text found in bubble {}", bubble_id);
+                }
+
+                // Handle content arrays here too
+                if let Some(content_array) = entry.get("content").and_then(|v| v.as_array()) {
+                    for item in content_array {
+                        match item.get("type").and_then(|v| v.as_str()) {
+                            Some("text") => {
+                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                    let trimmed = text.trim();
+                                    if !trimmed.is_empty() {
+                                        let role =
+                                            entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                                        if role == 1 {
+                                            transcript
+                                                .add_message(Message::user(trimmed.to_string()));
+                                        } else {
+                                            transcript.add_message(Message::assistant(
+                                                trimmed.to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Some("tool_use") => {
+                                let name_opt = item.get("name").and_then(|v| v.as_str());
+                                let input_val = item.get("input").cloned();
+                                if let (Some(name), Some(input)) = (name_opt, input_val) {
+                                    transcript
+                                        .add_message(Message::tool_use(name.to_string(), input));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             if !transcript.messages.is_empty() {
-                eprintln!(
-                    "Debug: Successfully extracted {} messages from conversationMap",
-                    transcript.messages.len()
-                );
                 return Ok(Some(transcript));
-            } else {
-                eprintln!("Debug: No messages extracted from conversationMap");
             }
-        } else {
-            eprintln!("Debug: No conversationMap found");
         }
 
         // Try fullConversationHeadersOnly - these contain bubble IDs that we need to fetch
@@ -436,29 +458,25 @@ impl CursorPreset {
             .get("fullConversationHeadersOnly")
             .and_then(|v| v.as_array())
         {
-            eprintln!(
-                "Debug: Found fullConversationHeadersOnly array with {} entries",
-                conv.len()
-            );
-            eprintln!("Debug: Attempting to fetch bubble content for each header");
-
             let mut transcript = AiTranscript::new();
-            for (i, header) in conv.iter().enumerate() {
+            for header in conv.iter() {
                 if let Some(bubble_id) = header.get("bubbleId").and_then(|v| v.as_str()) {
-                    eprintln!("Debug: Fetching bubble {} for header {}", bubble_id, i);
                     if let Ok(Some(bubble_content)) =
                         Self::fetch_bubble_content_from_db(global_db_path, composer_id, bubble_id)
                     {
+                        if cfg!(test) {
+                            println!(
+                                "[cursor debug] bubble header: {}; content: {}",
+                                serde_json::to_string_pretty(header)
+                                    .unwrap_or_else(|_| "<unprintable>".to_string()),
+                                serde_json::to_string_pretty(&bubble_content)
+                                    .unwrap_or_else(|_| "<unprintable>".to_string())
+                            );
+                        }
                         if let Some(text) = bubble_content.get("text").and_then(|v| v.as_str()) {
                             let trimmed = text.trim();
                             if !trimmed.is_empty() {
-                                eprintln!(
-                                    "Debug: Found text in bubble {}: {} chars",
-                                    bubble_id,
-                                    trimmed.len()
-                                );
                                 let role = header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                                eprintln!("Debug: Bubble {} role: {}", bubble_id, role);
                                 if role == 1 {
                                     transcript.add_message(Message::user(trimmed.to_string()));
                                 } else {
@@ -466,62 +484,78 @@ impl CursorPreset {
                                 }
                             }
                         }
-                    } else {
-                        eprintln!("Debug: Could not fetch bubble content for {}", bubble_id);
+
+                        // Try bubble content arrays for tool_use
+                        if let Some(content_array) =
+                            bubble_content.get("content").and_then(|v| v.as_array())
+                        {
+                            for item in content_array {
+                                match item.get("type").and_then(|v| v.as_str()) {
+                                    Some("text") => {
+                                        if let Some(text) =
+                                            item.get("text").and_then(|v| v.as_str())
+                                        {
+                                            let trimmed = text.trim();
+                                            if !trimmed.is_empty() {
+                                                let role = header
+                                                    .get("type")
+                                                    .and_then(|v| v.as_i64())
+                                                    .unwrap_or(0);
+                                                if role == 1 {
+                                                    transcript.add_message(Message::user(
+                                                        trimmed.to_string(),
+                                                    ));
+                                                } else {
+                                                    transcript.add_message(Message::assistant(
+                                                        trimmed.to_string(),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Some("tool_use") => {
+                                        let name_opt = item.get("name").and_then(|v| v.as_str());
+                                        let input_val = item.get("input").cloned();
+                                        if let (Some(name), Some(input)) = (name_opt, input_val) {
+                                            transcript.add_message(Message::tool_use(
+                                                name.to_string(),
+                                                input,
+                                            ));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             if !transcript.messages.is_empty() {
-                eprintln!(
-                    "Debug: Successfully extracted {} messages from bubble content",
-                    transcript.messages.len()
-                );
                 return Ok(Some(transcript));
-            } else {
-                eprintln!("Debug: No messages extracted from bubble content");
             }
-        } else {
-            eprintln!("Debug: No fullConversationHeadersOnly array found");
         }
 
         // Try root-level text field
         if let Some(text) = data.get("text").and_then(|v| v.as_str()) {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                eprintln!(
-                    "Debug: Found root-level text field with {} chars",
-                    trimmed.len()
-                );
                 let mut transcript = AiTranscript::new();
                 transcript.add_message(Message::user(trimmed.to_string()));
-                eprintln!("Debug: Successfully extracted transcript from root-level text field");
                 return Ok(Some(transcript));
             }
-        } else {
-            eprintln!("Debug: No root-level text field found");
         }
 
         // Try root-level richText field
         if let Some(rich_text) = data.get("richText").and_then(|v| v.as_str()) {
             let trimmed = rich_text.trim();
             if !trimmed.is_empty() {
-                eprintln!(
-                    "Debug: Found root-level richText field with {} chars",
-                    trimmed.len()
-                );
                 let mut transcript = AiTranscript::new();
                 transcript.add_message(Message::user(trimmed.to_string()));
-                eprintln!(
-                    "Debug: Successfully extracted transcript from root-level richText field"
-                );
                 return Ok(Some(transcript));
             }
-        } else {
-            eprintln!("Debug: No root-level richText field found");
         }
 
-        eprintln!("Debug: Failed to extract any transcript");
         Ok(None)
     }
 
@@ -554,14 +588,6 @@ impl CursorPreset {
         }
 
         Ok(None)
-    }
-
-    fn fetch_bubble_content(
-        data: &serde_json::Value,
-        bubble_id: &str,
-    ) -> Option<serde_json::Value> {
-        // This function is no longer used since we fetch from database directly
-        None
     }
 }
 
@@ -605,14 +631,6 @@ impl AgentCheckpointPreset for CursorPreset {
         // Get the 5 latest conversations
         let conversations = Self::get_latest_conversations(&global_db, Some(5))?;
 
-        eprintln!("Debug: Found {} conversations", conversations.len());
-        for (i, conv) in conversations.iter().enumerate() {
-            eprintln!(
-                "Debug: Conversation {}: ID={}, title={}, message_count={}",
-                i, conv.composer_id, conv.title, conv.message_count
-            );
-        }
-
         if conversations.is_empty() {
             return Err(GitAiError::PresetError(
                 "No Cursor conversations found".to_string(),
@@ -621,11 +639,6 @@ impl AgentCheckpointPreset for CursorPreset {
 
         // Use the first (most recent) conversation
         let latest_conversation = &conversations[0];
-
-        eprintln!(
-            "Debug: Using conversation with ID: {}",
-            latest_conversation.composer_id
-        );
         let payload = Self::fetch_composer_payload(&global_db, &latest_conversation.composer_id)?;
         let transcript = Self::transcript_from_composer_payload(
             &payload,
@@ -651,7 +664,6 @@ impl AgentCheckpointPreset for CursorPreset {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn cursor_preset_prints_transcript() {
         let preset = CursorPreset;

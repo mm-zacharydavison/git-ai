@@ -15,7 +15,7 @@ use std::process::Command;
 use utils::debug_log;
 
 use crate::commands::checkpoint_agent::agent_preset::{
-    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset,
+    AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
 };
 use crate::git::refs::DEFAULT_REFSPEC;
 
@@ -200,6 +200,23 @@ fn handle_checkpoint(args: &[String]) {
                     model: model.clone(),
                     prompt_id: prompt_id.clone(),
                     prompt_path: prompt_path.clone(),
+                    workspace_id: None,
+                }) {
+                    Ok(agent_run) => {
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Error running Claude preset: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "cursor" => {
+                match CursorPreset.run(AgentCheckpointFlags {
+                    transcript: None,
+                    model: None,
+                    prompt_id: None,
+                    prompt_path: None,
                     workspace_id: None,
                 }) {
                     Ok(agent_run) => {
