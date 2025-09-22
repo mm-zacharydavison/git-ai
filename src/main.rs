@@ -710,11 +710,9 @@ fn print_help() {
     eprintln!("");
     eprintln!("Commands:");
     eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
-    eprintln!("    Presets: claude, codex, cursor-cli");
+    eprintln!("    Presets: claude, cursor");
     eprintln!("    --author <name>       Override default author");
     eprintln!("    --model <model>       Override default model");
-    eprintln!("    --prompt <json>       Override default prompt (JSON string)");
-    eprintln!("    --transcript          Enable transcript mode (required for claude preset)");
     eprintln!("    --show-working-log    Display current working log");
     eprintln!("    --reset               Reset working log");
     eprintln!("  blame         [override] git blame with AI authorship tracking");
