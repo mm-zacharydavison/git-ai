@@ -514,6 +514,9 @@ impl AuthorshipLog {
                     }
                 }
                 if !added_lines.is_empty() {
+                    // Ensure deterministic, duplicate-free line numbers before compression
+                    added_lines.sort_unstable();
+                    added_lines.dedup();
                     // Determine author key and optional prompt reference
                     let author_struct = Author {
                         username: checkpoint.author.clone(),
