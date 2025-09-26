@@ -1,6 +1,7 @@
+use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::refs::{get_reference, put_reference};
-use crate::log_fmt::working_log::{AgentMetadata, Checkpoint, Line, WorkingLogEntry};
+use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::utils::debug_log;
 use git2::{Repository, StatusOptions};
 use sha2::{Digest, Sha256};
@@ -14,8 +15,9 @@ pub fn run(
     show_working_log: bool,
     reset: bool,
     quiet: bool,
-    model: Option<&str>,
-    human_author: Option<&str>,
+    _model: Option<&str>,
+    _human_author: Option<&str>,
+    agent_run_result: Option<AgentRunResult>,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
@@ -53,13 +55,6 @@ pub fn run(
                 debug_log(&format!("Checkpoint {}: {}", i + 1, checkpoint.snapshot));
                 debug_log(&format!("  Diff: {}", checkpoint.diff));
                 debug_log(&format!("  Author: {}", checkpoint.author));
-                if let Some(metadata) = &checkpoint.agent_metadata {
-                    debug_log("  Agent Metadata:");
-                    debug_log(&format!("    Model: {}", metadata.model));
-                    if let Some(human_author) = &metadata.human_author {
-                        debug_log(&format!("    Human Author: {}", human_author));
-                    }
-                }
                 debug_log("  Entries:");
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
@@ -114,25 +109,22 @@ pub fn run(
         )?
     };
 
-    let checkpoint = if let Some(model) = model {
-        let agent_metadata = AgentMetadata {
-            model: model.to_string(),
-            human_author: human_author.map(|s| s.to_string()),
-        };
-        Checkpoint::new_with_metadata(
-            base_commit.clone(),
-            combined_hash.clone(),
-            author.to_string(),
-            entries.clone(),
-            agent_metadata,
-        )
+    let mut checkpoint = Checkpoint::new(
+        base_commit.clone(),
+        combined_hash.clone(),
+        author.to_string(),
+        entries.clone(),
+    );
+
+    // Set transcript and agent_id if provided
+    if let Some(agent_run) = &agent_run_result {
+        checkpoint.transcript = Some(agent_run.transcript.clone());
+        checkpoint.agent_id = Some(agent_run.agent_id.clone());
+    }
+    let agent_tool = if let Some(agent_run_result) = &agent_run_result {
+        Some(agent_run_result.agent_id.tool.as_str())
     } else {
-        Checkpoint::new(
-            base_commit.clone(),
-            combined_hash.clone(),
-            author.to_string(),
-            entries.clone(),
-        )
+        None
     };
 
     working_log.push(checkpoint);
@@ -165,9 +157,15 @@ pub fn run(
     };
 
     if !quiet {
+        let log_author = agent_tool.unwrap_or(author);
         eprintln!(
-            "{} changed {} of the {} file(s) that have changed since the last {}",
-            author,
+            "{}{} changed {} of the {} file(s) that have changed since the last {}",
+            if agent_run_result.is_some() {
+                "AI: "
+            } else {
+                "Human: "
+            },
+            log_author,
             entries.len(),
             files.len(),
             label
@@ -301,51 +299,85 @@ fn get_or_create_working_log(
 fn get_initial_checkpoint_entries(
     repo: &Repository,
     files: &[String],
-    base_commit: &str,
+    _base_commit: &str,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
+    // Diff working directory against HEAD tree for each file
+    let head_commit = repo
+        .head()
+        .ok()
+        .and_then(|h| h.target())
+        .and_then(|oid| repo.find_commit(oid).ok());
+    let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
+
     for file_path in files {
-        let repo_workdir = repo.workdir().unwrap_or_else(|| Path::new("."));
+        let repo_workdir = repo.workdir().unwrap();
         let abs_path = repo_workdir.join(file_path);
 
-        let current_content = if abs_path.exists() {
-            match std::fs::read(&abs_path) {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                Err(_) => String::new(),
-            }
-        } else {
-            String::new()
-        };
-
-        let base_content = if base_commit == "initial" {
-            String::new()
-        } else {
-            match git2::Oid::from_str(base_commit) {
-                Ok(oid) => {
-                    let commit = repo.find_commit(oid)?;
-                    let tree = commit.tree()?;
-                    match tree.get_path(Path::new(file_path)) {
-                        Ok(entry) => {
-                            let blob = repo.find_blob(entry.id())?;
-                            String::from_utf8_lossy(blob.content()).to_string()
-                        }
-                        Err(_) => String::new(),
+        // Previous content from HEAD tree if present, otherwise empty
+        let previous_content = if let Some(tree) = &head_tree {
+            match tree.get_path(std::path::Path::new(file_path)) {
+                Ok(entry) => {
+                    if let Ok(blob) = repo.find_blob(entry.id()) {
+                        String::from_utf8_lossy(blob.content()).to_string()
+                    } else {
+                        String::new()
                     }
                 }
                 Err(_) => String::new(),
             }
+        } else {
+            String::new()
         };
 
-        if current_content != base_content {
-            let (added_lines, deleted_lines) = get_changed_lines(&base_content, &current_content)?;
-            if !added_lines.is_empty() || !deleted_lines.is_empty() {
-                entries.push(WorkingLogEntry::new(
-                    file_path.clone(),
-                    added_lines,
-                    deleted_lines,
-                ));
+        // Current content from filesystem
+        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+        // Normalize trailing newlines to avoid spurious inserts
+        let prev_norm = if previous_content.ends_with('\n') {
+            previous_content.clone()
+        } else {
+            format!("{}\n", previous_content)
+        };
+        let curr_norm = if current_content.ends_with('\n') {
+            current_content.clone()
+        } else {
+            format!("{}\n", current_content)
+        };
+
+        let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
+        let mut added_lines = Vec::new();
+        let mut deleted_lines = Vec::new();
+        let mut current_line = 1u32;
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Equal => {
+                    current_line += change.value().lines().count() as u32;
+                }
+                ChangeTag::Delete => {
+                    let delete_start = current_line;
+                    let delete_count = change.value().lines().count() as u32;
+                    let delete_end = delete_start + delete_count - 1;
+                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                }
+                ChangeTag::Insert => {
+                    let insert_start = current_line;
+                    let insert_count = change.value().lines().count() as u32;
+                    let insert_end = insert_start + insert_count - 1;
+                    added_lines.push(Line::Range(insert_start, insert_end));
+                    current_line += insert_count;
+                }
             }
+        }
+
+        if !added_lines.is_empty() || !deleted_lines.is_empty() {
+            entries.push(WorkingLogEntry::new(
+                file_path.clone(),
+                added_lines,
+                deleted_lines,
+            ));
         }
     }
 
@@ -362,351 +394,100 @@ fn get_subsequent_checkpoint_entries(
     let mut entries = Vec::new();
 
     for file_path in files {
-        let repo_workdir = repo.workdir().unwrap_or_else(|| Path::new("."));
+        let repo_workdir = repo.workdir().unwrap();
         let abs_path = repo_workdir.join(file_path);
-        let current_content = if abs_path.exists() {
-            // Read file as bytes first, then convert to string with UTF-8 lossy conversion
-            match std::fs::read(&abs_path) {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                Err(_) => String::new(), // If we can't read the file, treat as empty
-            }
+
+        // Read the content from the ai-working-log/diffs reference
+        let file_hash = &file_hashes[file_path];
+        let ref_name = format!("ai-working-log/diffs/{}-{}", base_commit, file_hash);
+        let previous_content = get_reference(repo, &ref_name).unwrap_or_default();
+
+        // Read current content directly from the file system
+        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+        // Normalize by ensuring trailing newline to avoid off-by-one when appending lines
+        let prev_norm = if previous_content.ends_with('\n') {
+            previous_content.clone()
         } else {
-            String::new()
+            format!("{}\n", previous_content)
+        };
+        let curr_norm = if current_content.ends_with('\n') {
+            current_content.clone()
+        } else {
+            format!("{}\n", current_content)
         };
 
-        // Get the previous state from refs using previous_commit, or fall back to base commit
-        let previous_content = if let Some(file_hash) = file_hashes.get(file_path) {
-            if let Some(prev_commit) = previous_commit {
-                let ref_name = format!("ai-working-log/diffs/{}-{}", prev_commit, file_hash);
-                match get_reference(repo, &ref_name) {
-                    Ok(content) => content,
-                    Err(_) => {
-                        // Fall back to base commit tree
-                        if base_commit == "initial" {
-                            String::new() // No base commit (initial commit)
-                        } else {
-                            match git2::Oid::from_str(base_commit) {
-                                Ok(oid) => {
-                                    let commit = repo.find_commit(oid)?;
-                                    let tree = commit.tree()?;
-                                    match tree.get_path(Path::new(file_path)) {
-                                        Ok(entry) => {
-                                            let blob = repo.find_blob(entry.id())?;
-                                            String::from_utf8_lossy(blob.content()).to_string()
-                                        }
-                                        Err(_) => String::new(), // File doesn't exist in base commit
-                                    }
-                                }
-                                Err(_) => String::new(), // Invalid commit hash
-                            }
-                        }
-                    }
-                }
-            } else {
-                // No previous commit, fall back to base commit tree
-                if base_commit == "initial" {
-                    String::new() // No base commit (initial commit)
-                } else {
-                    match git2::Oid::from_str(base_commit) {
-                        Ok(oid) => {
-                            let commit = repo.find_commit(oid)?;
-                            let tree = commit.tree()?;
-                            match tree.get_path(Path::new(file_path)) {
-                                Ok(entry) => {
-                                    let blob = repo.find_blob(entry.id())?;
-                                    String::from_utf8_lossy(blob.content()).to_string()
-                                }
-                                Err(_) => String::new(), // File doesn't exist in base commit
-                            }
-                        }
-                        Err(_) => String::new(), // Invalid commit hash
-                    }
-                }
-            }
-        } else {
-            String::new() // No file hash found
-        };
+        let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
+        let mut added_lines = Vec::new();
+        let mut deleted_lines = Vec::new();
+        let mut current_line = 1u32;
 
-        // If content changed, create diff and track changed lines
-        if current_content != previous_content {
-            let (added_lines, deleted_lines) =
-                get_changed_lines(&previous_content, &current_content)?;
-            if !added_lines.is_empty() || !deleted_lines.is_empty() {
-                entries.push(WorkingLogEntry::new(
-                    file_path.clone(),
-                    added_lines,
-                    deleted_lines,
-                ));
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Equal => {
+                    current_line += change.value().lines().count() as u32;
+                }
+                ChangeTag::Delete => {
+                    let delete_start = current_line;
+                    let delete_count = change.value().lines().count() as u32;
+                    let delete_end = delete_start + delete_count - 1;
+                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                }
+                ChangeTag::Insert => {
+                    let insert_start = current_line;
+                    let insert_count = change.value().lines().count() as u32;
+                    let insert_end = insert_start + insert_count - 1;
+                    added_lines.push(Line::Range(insert_start, insert_end));
+                    current_line += insert_count;
+                }
             }
+        }
+
+        if !added_lines.is_empty() || !deleted_lines.is_empty() {
+            entries.push(WorkingLogEntry::new(
+                file_path.clone(),
+                added_lines,
+                deleted_lines,
+            ));
         }
     }
 
     Ok(entries)
 }
 
-fn get_changed_lines(
-    previous_content: &str,
-    current_content: &str,
-) -> Result<(Vec<Line>, Vec<Line>), GitAiError> {
-    let mut added_lines = Vec::new();
-    let mut deleted_lines = Vec::new();
-
-    let prev_lines: Vec<&str> = previous_content.lines().collect();
-    let curr_lines: Vec<&str> = current_content.lines().collect();
-
-    let diff = TextDiff::from_slices(&prev_lines, &curr_lines);
-
-    let mut prev_line_num = 1;
-    let mut curr_line_num = 1;
-
-    for op in diff.ops() {
-        for change in diff.iter_changes(op) {
-            match change.tag() {
-                ChangeTag::Delete => {
-                    deleted_lines.push(Line::Single(prev_line_num));
-                    prev_line_num += 1;
-                }
-                ChangeTag::Insert => {
-                    added_lines.push(Line::Single(curr_line_num));
-                    curr_line_num += 1;
-                }
-                ChangeTag::Equal => {
-                    prev_line_num += 1;
-                    curr_line_num += 1;
-                }
+fn clear_working_log_diffs(repo: &Repository, base_commit: &str) -> Result<(), GitAiError> {
+    // Overwrite the refs with empty content to "clear" them
+    for reference in repo.references()? {
+        let reference = reference?;
+        if let Some(name) = reference.name() {
+            if name.starts_with(&format!(
+                "refs/{}ai-working-log/diffs/{}-",
+                crate::git::refs::DEFAULT_REFSPEC,
+                base_commit
+            )) {
+                put_reference(repo, name, "", "Cleared working log diff")?;
             }
         }
     }
-
-    // Optimize consecutive lines into ranges
-    let optimized_added_lines = optimize_line_ranges(added_lines);
-    let optimized_deleted_lines = optimize_line_ranges(deleted_lines);
-
-    Ok((optimized_added_lines, optimized_deleted_lines))
+    Ok(())
 }
 
-fn optimize_line_ranges(lines: Vec<Line>) -> Vec<Line> {
-    if lines.is_empty() {
-        return lines;
-    }
+fn is_text_file(repo: &Repository, path: &str) -> bool {
+    let repo_workdir = repo.workdir().unwrap();
+    let abs_path = repo_workdir.join(path);
 
-    let mut optimized = Vec::new();
-    let mut start = lines[0].start();
-    let mut end = lines[0].end();
-
-    for line in lines.iter().skip(1) {
-        if line.start() == end + 1 {
-            // Consecutive, extend range
-            end = line.end();
-        } else {
-            // Not consecutive, save current range and start new one
-            if start == end {
-                optimized.push(Line::Single(start));
-            } else {
-                optimized.push(Line::Range(start, end));
-            }
-            start = line.start();
-            end = line.end();
-        }
-    }
-
-    // Add the last range
-    if start == end {
-        optimized.push(Line::Single(start));
-    } else {
-        optimized.push(Line::Range(start, end));
-    }
-
-    optimized
-}
-
-/// Check if a file is text-based using git's native approach
-fn is_text_file(repo: &Repository, file_path: &str) -> bool {
-    // Check for common binary file extensions first
-    let path = Path::new(file_path);
-    if let Some(extension) = path.extension() {
-        let ext = extension.to_string_lossy().to_lowercase();
-        let binary_extensions = [
-            "jpg",
-            "jpeg",
-            "png",
-            "gif",
-            "bmp",
-            "tiff",
-            "ico",
-            "svg",
-            "pdf",
-            "doc",
-            "docx",
-            "xls",
-            "xlsx",
-            "ppt",
-            "pptx",
-            "zip",
-            "tar",
-            "gz",
-            "bz2",
-            "xz",
-            "rar",
-            "7z",
-            "exe",
-            "dll",
-            "so",
-            "dylib",
-            "bin",
-            "obj",
-            "mp3",
-            "mp4",
-            "avi",
-            "mov",
-            "wmv",
-            "flv",
-            "mkv",
-            "db",
-            "sqlite",
-            "sqlite3",
-            "class",
-            "jar",
-            "war",
-            "ear",
-            "pyc",
-            "pyo",
-            "__pycache__",
-            "o",
-            "a",
-            "lib",
-            "dylib",
-            "so",
-            "dll",
-            "woff",
-            "woff2",
-            "ttf",
-            "otf",
-            "eot",
-            "ico",
-            "cur",
-            "ani",
-            "psd",
-            "ai",
-            "eps",
-            "indd",
-            "mpg",
-            "mpeg",
-            "wav",
-            "flac",
-            "aac",
-            "iso",
-            "img",
-            "vmdk",
-            "vdi",
-            "vhd",
-            "bak",
-            "tmp",
-            "temp",
-            "cache",
-            "log",
-        ];
-
-        if binary_extensions.contains(&ext.as_str()) {
+    if let Ok(metadata) = std::fs::metadata(&abs_path) {
+        if !metadata.is_file() {
             return false;
         }
-    }
-
-    // First check if the file exists in the working directory
-    if Path::new(file_path).exists() {
-        // Read a sample of the file to check for null bytes and other binary indicators
-        if let Ok(bytes) = std::fs::read(file_path) {
-            // Check for null bytes in the first 8KB (git's default sample size)
-            let sample_size = std::cmp::min(bytes.len(), 8192);
-            if sample_size > 0 {
-                let sample = &bytes[..sample_size];
-
-                // Check for null bytes
-                if sample.contains(&0) {
-                    return false; // Contains null bytes, likely binary
-                }
-
-                // Check for high percentage of control characters (excluding common ones like \n, \r, \t)
-                let control_chars = sample
-                    .iter()
-                    .filter(|&&b| {
-                        b < 32 && b != 9 && b != 10 && b != 13 // Not tab, newline, or carriage return
-                    })
-                    .count();
-
-                if control_chars > sample_size / 4 {
-                    return false; // Too many control characters, likely binary
-                }
-            }
-        }
     } else {
-        // File doesn't exist in working directory, check if it exists in HEAD
-        if let Ok(head) = repo.head() {
-            if let Some(target) = head.target() {
-                if let Ok(commit) = repo.find_commit(target) {
-                    if let Ok(tree) = commit.tree() {
-                        if let Ok(entry) = tree.get_path(Path::new(file_path)) {
-                            // Check if the blob in git is binary
-                            if let Ok(blob) = repo.find_blob(entry.id()) {
-                                let content = blob.content();
-                                let sample_size = std::cmp::min(content.len(), 8192);
-                                if sample_size > 0 {
-                                    let sample = &content[..sample_size];
-
-                                    // Check for null bytes
-                                    if sample.contains(&0) {
-                                        return false; // Contains null bytes, likely binary
-                                    }
-
-                                    // Check for high percentage of control characters
-                                    let control_chars = sample
-                                        .iter()
-                                        .filter(|&&b| b < 32 && b != 9 && b != 10 && b != 13)
-                                        .count();
-
-                                    if control_chars > sample_size / 4 {
-                                        return false; // Too many control characters, likely binary
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        return false; // If metadata can't be read, treat as non-text
     }
 
-    true
-}
-
-/// Clear all ai-working-log/diffs references for a specific base commit
-/// This is called when the --reset flag is used to clean up old diff references
-fn clear_working_log_diffs(repo: &Repository, base_commit: &str) -> Result<(), GitAiError> {
-    // Use git CLI to list and remove references that match the pattern
-    let output = std::process::Command::new("git")
-        .args([
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/ai-working-log/diffs/",
-        ])
-        .current_dir(repo.workdir().unwrap_or_else(|| Path::new(".")))
-        .output()?;
-
-    if output.status.success() {
-        let refs_output = String::from_utf8_lossy(&output.stdout);
-        let prefix = format!("refs/ai-working-log/diffs/{}-", base_commit);
-
-        for line in refs_output.lines() {
-            let ref_name = line.trim();
-            if ref_name.starts_with(&prefix) {
-                // Remove the reference using git CLI
-                let _ = std::process::Command::new("git")
-                    .args(["update-ref", "-d", ref_name])
-                    .current_dir(repo.workdir().unwrap_or_else(|| Path::new(".")))
-                    .output();
-            }
-        }
+    if let Ok(content) = std::fs::read(&abs_path) {
+        // Consider a file text if it contains no null bytes
+        !content.contains(&0)
+    } else {
+        false
     }
-
-    Ok(())
 }

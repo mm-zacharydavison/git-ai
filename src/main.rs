@@ -4,6 +4,9 @@ mod git;
 mod log_fmt;
 mod utils;
 
+// aidan test
+// next aidan line
+
 use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
@@ -11,6 +14,9 @@ use std::io::{IsTerminal, Write};
 use std::process::Command;
 use utils::debug_log;
 
+use crate::commands::checkpoint_agent::agent_preset::{
+    AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
+};
 use crate::git::refs::DEFAULT_REFSPEC;
 
 #[derive(Parser)]
@@ -38,11 +44,11 @@ fn main() {
         .unwrap_or("git-ai".to_string());
 
     let cli = Cli::parse();
-
     if cli.args.is_empty() {
-        // No arguments provided, show appropriate help
         if binary_name == "git" {
             // User called 'git' (via alias), show git help
+            //
+            //
             proxy_to_git(&["help".to_string()]);
         } else {
             // User called 'git-ai', show git-ai specific help
@@ -83,6 +89,26 @@ fn main() {
         "push" => {
             handle_push(args);
         }
+        "install-hooks" => {
+            // This command only works when called as git-ai, not as git alias
+            if binary_name == "git" {
+                eprintln!(
+                    "Error: install-hooks command is only available when called as 'git-ai', not as 'git'"
+                );
+                std::process::exit(1);
+            }
+
+            // This command is not ready for production - only allow in debug builds
+            if !cfg!(debug_assertions) {
+                eprintln!("Error: install-hooks command is not ready for production");
+                std::process::exit(1);
+            }
+
+            if let Err(e) = commands::install_hooks::run(args) {
+                eprintln!("Install hooks failed: {}", e);
+                std::process::exit(1);
+            }
+        }
         _ => {
             debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
@@ -97,6 +123,9 @@ fn handle_checkpoint(args: &[String]) {
     let mut show_working_log = false;
     let mut reset = false;
     let mut model = None;
+    let mut prompt_json = None;
+    let mut prompt_path = None;
+    let mut prompt_id = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -127,11 +156,79 @@ fn handle_checkpoint(args: &[String]) {
                     std::process::exit(1);
                 }
             }
+            "--prompt" => {
+                if i + 1 < args.len() {
+                    prompt_json = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --prompt requires a JSON value");
+                    std::process::exit(1);
+                }
+            }
+            "--prompt-path" => {
+                if i + 1 < args.len() {
+                    prompt_path = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --prompt-path requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--prompt-id" => {
+                if i + 1 < args.len() {
+                    prompt_id = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --prompt-id requires a value");
+                    std::process::exit(1);
+                }
+            }
 
             _ => {
-                eprintln!("Unknown checkpoint argument: {}", args[i]);
-                std::process::exit(1);
+                i += 1;
             }
+        }
+    }
+
+    let mut agent_run_result = None;
+    // Handle preset arguments after parsing all flags
+    if !args.is_empty() {
+        match args[0].as_str() {
+            "claude" => {
+                match ClaudePreset.run(AgentCheckpointFlags {
+                    transcript: None,
+                    model: model.clone(),
+                    prompt_id: prompt_id.clone(),
+                    prompt_path: prompt_path.clone(),
+                    workspace_id: None,
+                }) {
+                    Ok(agent_run) => {
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Error running Claude preset: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "cursor" => {
+                match CursorPreset.run(AgentCheckpointFlags {
+                    transcript: None,
+                    model: None,
+                    prompt_id: None,
+                    prompt_path: None,
+                    workspace_id: None,
+                }) {
+                    Ok(agent_run) => {
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Error running Claude preset: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -161,7 +258,7 @@ fn handle_checkpoint(args: &[String]) {
 
     let final_author = author.as_ref().unwrap_or(&default_user_name);
 
-    if let Err(e) = commands::checkpoint(
+    if let Err(e) = commands::checkpoint::run(
         &repo,
         final_author,
         show_working_log,
@@ -169,6 +266,7 @@ fn handle_checkpoint(args: &[String]) {
         false,
         model.as_deref(),
         Some(&default_user_name),
+        agent_run_result,
     ) {
         eprintln!("Checkpoint failed: {}", e);
         std::process::exit(1);
@@ -612,12 +710,21 @@ fn print_help() {
     eprintln!("");
     eprintln!("Commands:");
     eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
+    eprintln!("    Presets: claude, cursor");
+    eprintln!("    --author <name>       Override default author");
+    eprintln!("    --model <model>       Override default model");
+    eprintln!("    --prompt <json>       Override default prompt with JSON");
+    eprintln!("    --prompt-path <path>  Override default prompt with file path");
+    eprintln!("    --prompt-id <id>      Override default prompt with ID");
+    eprintln!("    --show-working-log    Display current working log");
+    eprintln!("    --reset               Reset working log");
     eprintln!("  blame         [override] git blame with AI authorship tracking");
     eprintln!(
         "  commit        [wrapper] pass through to 'git commit' with git-ai before/after hooks"
     );
     eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
     eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
+    eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
     eprintln!("");
     std::process::exit(0);
 }

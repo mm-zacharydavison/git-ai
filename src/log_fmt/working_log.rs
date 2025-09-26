@@ -1,3 +1,4 @@
+use crate::log_fmt::transcript::AiTranscript;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -107,10 +108,10 @@ impl WorkingLogEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentMetadata {
-    pub model: String,
-    pub human_author: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentId {
+    pub tool: String, // e.g., "cursor", "windsurf"
+    pub id: String,   // id in their domain
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,7 +121,8 @@ pub struct Checkpoint {
     pub author: String,
     pub entries: Vec<WorkingLogEntry>,
     pub timestamp: u64,
-    pub agent_metadata: Option<AgentMetadata>,
+    pub transcript: Option<AiTranscript>,
+    pub agent_id: Option<AgentId>,
 }
 
 impl Checkpoint {
@@ -141,29 +143,8 @@ impl Checkpoint {
             author,
             entries,
             timestamp,
-            agent_metadata: None,
-        }
-    }
-
-    pub fn new_with_metadata(
-        snapshot: String,
-        diff: String,
-        author: String,
-        entries: Vec<WorkingLogEntry>,
-        agent_metadata: AgentMetadata,
-    ) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        Self {
-            snapshot,
-            diff,
-            author,
-            entries,
-            timestamp,
-            agent_metadata: Some(agent_metadata),
+            transcript: None,
+            agent_id: None,
         }
     }
 }
@@ -171,6 +152,7 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log_fmt::transcript::Message;
 
     #[test]
     fn test_line_serialization() {
@@ -211,7 +193,8 @@ mod tests {
             .as_secs();
         assert!(checkpoint.timestamp > 0);
         assert!(checkpoint.timestamp <= current_time);
-        assert!(checkpoint.agent_metadata.is_none());
+        assert!(checkpoint.transcript.is_none());
+        assert!(checkpoint.agent_id.is_none());
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
         let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
@@ -220,7 +203,8 @@ mod tests {
         assert_eq!(deserialized.entries.len(), 1);
         assert_eq!(deserialized.entries[0].file, "src/xyz.rs");
         assert_eq!(deserialized.timestamp, checkpoint.timestamp);
-        assert!(deserialized.agent_metadata.is_none());
+        assert!(deserialized.transcript.is_none());
+        assert!(deserialized.agent_id.is_none());
     }
 
     #[test]
@@ -296,35 +280,67 @@ mod tests {
     }
 
     #[test]
-    fn test_checkpoint_with_agent_metadata() {
+    fn test_checkpoint_with_transcript() {
         let entry = WorkingLogEntry::new("src/xyz.rs".to_string(), vec![Line::Single(1)], vec![]);
 
-        let agent_metadata = AgentMetadata {
-            model: "claude-3-sonnet".to_string(),
-            human_author: Some("john.doe".to_string()),
+        let user_message = Message::user("Please add error handling to this function".to_string());
+        let assistant_message =
+            Message::assistant("I'll add error handling to the function.".to_string());
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+        transcript.add_message(assistant_message);
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
         };
 
-        let checkpoint = Checkpoint::new_with_metadata(
+        let mut checkpoint = Checkpoint::new(
             "abc123".to_string(),
             "".to_string(),
             "claude".to_string(),
             vec![entry],
-            agent_metadata,
         );
+        checkpoint.transcript = Some(transcript);
+        checkpoint.agent_id = Some(agent_id);
 
-        assert!(checkpoint.agent_metadata.is_some());
-        let metadata = checkpoint.agent_metadata.as_ref().unwrap();
-        assert_eq!(metadata.model, "claude-3-sonnet");
-        assert_eq!(metadata.human_author.as_deref(), Some("john.doe"));
+        assert!(checkpoint.transcript.is_some());
+        assert!(checkpoint.agent_id.is_some());
+
+        let transcript_data = checkpoint.transcript.as_ref().unwrap();
+        assert_eq!(transcript_data.messages().len(), 2);
+
+        // Check first message (user)
+        match &transcript_data.messages()[0] {
+            Message::User { text } => {
+                assert_eq!(text, "Please add error handling to this function");
+            }
+            _ => panic!("Expected user message"),
+        }
+
+        // Check second message (assistant)
+        match &transcript_data.messages()[1] {
+            Message::Assistant { text } => {
+                assert_eq!(text, "I'll add error handling to the function.");
+            }
+            _ => panic!("Expected assistant message"),
+        }
+
+        let agent_data = checkpoint.agent_id.as_ref().unwrap();
+        assert_eq!(agent_data.tool, "cursor");
+        assert_eq!(agent_data.id, "session-abc123");
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
         let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.agent_metadata.is_some());
-        let deserialized_metadata = deserialized.agent_metadata.as_ref().unwrap();
-        assert_eq!(deserialized_metadata.model, "claude-3-sonnet");
-        assert_eq!(
-            deserialized_metadata.human_author.as_deref(),
-            Some("john.doe")
-        );
+        assert!(deserialized.transcript.is_some());
+        assert!(deserialized.agent_id.is_some());
+
+        let deserialized_transcript = deserialized.transcript.as_ref().unwrap();
+        assert_eq!(deserialized_transcript.messages().len(), 2);
+
+        let deserialized_agent = deserialized.agent_id.as_ref().unwrap();
+        assert_eq!(deserialized_agent.tool, "cursor");
+        assert_eq!(deserialized_agent.id, "session-abc123");
     }
 }

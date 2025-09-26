@@ -7,6 +7,7 @@ pub enum GitAiError {
     JsonError(serde_json::Error),
     Utf8Error(std::str::Utf8Error),
     FromUtf8Error(std::string::FromUtf8Error),
+    PresetError(String),
     Generic(String),
 }
 
@@ -18,6 +19,7 @@ impl fmt::Display for GitAiError {
             GitAiError::JsonError(e) => write!(f, "JSON error: {}", e),
             GitAiError::Utf8Error(e) => write!(f, "UTF-8 error: {}", e),
             GitAiError::FromUtf8Error(e) => write!(f, "From UTF-8 error: {}", e),
+            GitAiError::PresetError(e) => write!(f, "Preset error: {}", e),
             GitAiError::Generic(e) => write!(f, "Generic error: {}", e),
         }
     }

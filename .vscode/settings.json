@@ -1,3 +1,5 @@
 {
-    "cursorGitAi.enableCheckpointLogging": false
+    "cursorGitAi.enableCheckpointLogging": false,
+    "cursor.composer.shouldChimeAfterChatFinishes": false,
+    "editor.accessibilitySupport": "off"
 }

@@ -2,6 +2,14 @@ import * as vscode from "vscode";
 import debounce from "lodash.debounce";
 import { exec } from "child_process";
 
+// Store the git-ai version for later use
+let gitAiVersion: string | null = null;
+
+// Function to get the stored git-ai version
+export function getGitAiVersion(): string | null {
+  return gitAiVersion;
+}
+
 interface ChangeEvent {
   timestamp: number;
   contentChanges: readonly vscode.TextDocumentContentChangeEvent[];
@@ -300,6 +308,9 @@ export function activate(context: vscode.ExtensionContext) {
       );
       // not installed. do nothing
     } else {
+      // Save the version for later use
+      gitAiVersion = stdout.split(" ")[1].trim();
+
       const aiDetector = new AIDetector();
       // Listen for text document changes
       const textDocumentChangeDisposable =
@@ -310,7 +321,7 @@ export function activate(context: vscode.ExtensionContext) {
       context.subscriptions.push(textDocumentChangeDisposable);
       // Show startup notification
       vscode.window.showInformationMessage(
-        `🤖 AI Code Detector is now active!`
+        `🤖 AI Code Detector is now active! (git-ai v${gitAiVersion})`
       );
     }
   });
@@ -343,7 +354,10 @@ export function checkpoint(author: "human" | "ai") {
     }
 
     exec(
-      `git-ai checkpoint ${author === "ai" ? "--author 'Cursor'" : ""}`,
+      gitAiVersion?.startsWith("1.")
+        ? `git-ai checkpoint ${author === "ai" ? "cursor" : ""}`
+        : // legacy pre 1.0.0
+          `git-ai checkpoint ${author === "ai" ? "--author cursor" : ""}`,
       { cwd: workspaceRoot },
       (error, stdout, stderr) => {
         if (error) {

@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::log_fmt::authorship_log::AuthorshipLog;
+use crate::log_fmt::authorship_log::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
 use crate::log_fmt::working_log::Checkpoint;
 use git2::Repository;
 use serde_json;
@@ -62,7 +62,24 @@ pub fn get_reference_as_authorship_log(
     ref_name: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
     let content = get_reference(repo, ref_name)?;
-    let authorship_log = serde_json::from_str(&content)?;
+
+    // First, try to parse just the schema_version to check compatibility
+    let version_check: serde_json::Value = serde_json::from_str(&content)?;
+    if let Some(schema_version) = version_check.get("schema_version").and_then(|v| v.as_str()) {
+        if schema_version != AUTHORSHIP_LOG_VERSION {
+            return Err(GitAiError::Generic(format!(
+                "Unsupported authorship log version: {} (expected: {})",
+                schema_version, AUTHORSHIP_LOG_VERSION
+            )));
+        }
+    } else {
+        return Err(GitAiError::Generic(
+            "No schema_version found in authorship log".to_string(),
+        ));
+    }
+
+    // If version is correct, try to parse the full structure
+    let authorship_log: AuthorshipLog = serde_json::from_str(&content)?;
     Ok(authorship_log)
 }
 

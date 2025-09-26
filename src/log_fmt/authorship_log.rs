@@ -1,12 +1,20 @@
-use crate::log_fmt::working_log::{AgentMetadata, Checkpoint, Line};
+use crate::log_fmt::transcript::Message;
+use crate::log_fmt::working_log::{AgentId, Checkpoint, Line};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer, ser::SerializeSeq};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Semantic version for the authorship log format
-pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/0.0.1";
+// 2.0.0 being used since some users have wip 1.0.0 in git history already
+pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/2.0.0";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Author {
+    pub username: String,
+    pub email: String,
+}
 
 /// Represents either a single line or a range of lines
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,99 +200,25 @@ impl<'de> serde::Deserialize<'de> for LineRange {
     }
 }
 
-/// Represents a line range with its author
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthoredRange {
-    /// Line range [start, end] (inclusive)
-    pub range: (u32, u32),
-    /// Author of this line range
-    pub author: String,
-}
+// Deprecated legacy structures removed in favor of compact format
 
-#[allow(dead_code)]
-impl AuthoredRange {
-    pub fn new(start: u32, end: u32, author: String) -> Self {
-        Self {
-            range: (start, end),
-            author,
-        }
-    }
-
-    pub fn start(&self) -> u32 {
-        self.range.0
-    }
-
-    pub fn end(&self) -> u32 {
-        self.range.1
-    }
-
-    /// Check if this range overlaps with another range
-    pub fn overlaps(&self, other: &AuthoredRange) -> bool {
-        self.start() <= other.end() && other.start() <= self.end()
-    }
-
-    /// Check if this range contains a specific line
-    pub fn contains(&self, line: u32) -> bool {
-        line >= self.start() && line <= self.end()
-    }
-}
-
-impl fmt::Display for AuthoredRange {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.start() == self.end() {
-            write!(f, "[{}, \"{}\"]", self.start(), self.author)
-        } else {
-            write!(
-                f,
-                "[[{}, {}], \"{}\"]",
-                self.start(),
-                self.end(),
-                self.author
-            )
-        }
-    }
-}
-
-/// Represents an author with their line ranges
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthorEntry {
-    pub author: String,
+/// Compact per-file attribution entry (v2): [lines, author_key, prompt_session_id?, prompt_turn?]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttributionEntry {
     pub lines: Vec<LineRange>,
-    pub agent_metadata: Option<AgentMetadata>,
+    pub author_key: String,
+    pub prompt_session_id: Option<String>,
+    pub prompt_turn: Option<u32>,
 }
 
-impl PartialEq for AuthorEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.author == other.author && self.lines == other.lines
-        // Note: We don't compare agent_metadata since AgentMetadata doesn't implement Eq
-    }
-}
-
-impl AuthorEntry {
-    #[allow(dead_code)]
-    pub fn new(author: String) -> Self {
-        Self {
-            author,
-            lines: Vec::new(),
-            agent_metadata: None,
-        }
-    }
-
-    pub fn new_with_metadata(author: String, agent_metadata: Option<AgentMetadata>) -> Self {
-        Self {
-            author,
-            lines: Vec::new(),
-            agent_metadata,
-        }
-    }
-
-    pub fn add_lines(&mut self, lines: &[LineRange]) {
+impl AttributionEntry {
+    fn add_lines(&mut self, lines: &[LineRange]) {
         self.lines.extend(lines.iter().cloned());
         self.lines.sort();
         self.deduplicate_and_merge_ranges();
     }
 
-    pub fn remove_lines(&mut self, to_remove: &[LineRange]) {
+    fn remove_lines(&mut self, to_remove: &[LineRange]) {
         let mut new_lines = Vec::new();
         for existing_range in &self.lines {
             let mut remaining = Vec::new();
@@ -296,42 +230,28 @@ impl AuthorEntry {
         self.lines = new_lines;
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }
 
-    pub fn get_author_for_line(&self, line: u32) -> Option<&str> {
-        for range in &self.lines {
-            if range.contains(line) {
-                return Some(&self.author);
-            }
-        }
-        None
+    fn contains_line(&self, line: u32) -> bool {
+        self.lines.iter().any(|r| r.contains(line))
     }
 
-    /// Deduplicate and merge overlapping/adjacent ranges
     fn deduplicate_and_merge_ranges(&mut self) {
         if self.lines.is_empty() {
             return;
         }
-
-        // First, deduplicate identical ranges
         self.lines.dedup();
-
-        // Keep merging until no more merges are possible
         loop {
             let mut merged_any = false;
             let mut i = 0;
-
             while i < self.lines.len() {
                 let mut j = i + 1;
                 let mut merged_with = None;
-
-                // Look for a range that can be merged with the current one
                 while j < self.lines.len() {
-                    if self.ranges_can_merge(&self.lines[i], &self.lines[j]) {
-                        // Merge the ranges
-                        let merged = self.merge_ranges(&self.lines[i], &self.lines[j]);
+                    if Self::ranges_can_merge(&self.lines[i], &self.lines[j]) {
+                        let merged = Self::merge_ranges(&self.lines[i], &self.lines[j]);
                         self.lines[i] = merged;
                         merged_with = Some(j);
                         merged_any = true;
@@ -339,22 +259,16 @@ impl AuthorEntry {
                     }
                     j += 1;
                 }
-
                 if let Some(j) = merged_with {
-                    // Remove the merged range
                     self.lines.remove(j);
                 } else {
                     i += 1;
                 }
             }
-
-            // If no merges happened in this pass, we're done
             if !merged_any {
                 break;
             }
         }
-
-        // Ensure the final result is sorted by start line number
         self.lines.sort_by(|a, b| {
             let start_a = match a {
                 LineRange::Single(l) => *l,
@@ -368,30 +282,22 @@ impl AuthorEntry {
         });
     }
 
-    /// Check if two ranges can be merged (overlapping or adjacent)
-    fn ranges_can_merge(&self, range1: &LineRange, range2: &LineRange) -> bool {
+    fn ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
         match (range1, range2) {
-            (LineRange::Single(l1), LineRange::Single(l2)) => {
-                // Adjacent single lines
-                l1.abs_diff(*l2) <= 1
-            }
+            (LineRange::Single(l1), LineRange::Single(l2)) => l1.abs_diff(*l2) <= 1,
             (LineRange::Single(l), LineRange::Range(start, end)) => {
-                // Single line adjacent to or overlapping with range
                 *l >= start.saturating_sub(1) && *l <= end + 1
             }
             (LineRange::Range(start, end), LineRange::Single(l)) => {
-                // Range adjacent to or overlapping with single line
                 *l >= start.saturating_sub(1) && *l <= end + 1
             }
             (LineRange::Range(start1, end1), LineRange::Range(start2, end2)) => {
-                // Two ranges overlap or are adjacent
                 start1 <= &(end2 + 1) && start2 <= &(end1 + 1)
             }
         }
     }
 
-    /// Merge two ranges that can be merged
-    fn merge_ranges(&self, range1: &LineRange, range2: &LineRange) -> LineRange {
+    fn merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
         let (start1, end1) = match range1 {
             LineRange::Single(l) => (*l, *l),
             LineRange::Range(start, end) => (*start, *end),
@@ -400,10 +306,8 @@ impl AuthorEntry {
             LineRange::Single(l) => (*l, *l),
             LineRange::Range(start, end) => (*start, *end),
         };
-
         let merged_start = start1.min(start2);
         let merged_end = end1.max(end2);
-
         if merged_start == merged_end {
             LineRange::Single(merged_start)
         } else {
@@ -412,122 +316,86 @@ impl AuthorEntry {
     }
 }
 
-/// Per-file authorship: author -> set of line numbers (sorted, unique)
-#[derive(Debug, Clone, PartialEq)]
-pub struct FileAuthorship {
-    pub file: String,
-    pub authors: Vec<AuthorEntry>,
-}
-
-impl serde::Serialize for FileAuthorship {
+impl serde::Serialize for AttributionEntry {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("FileAuthorship", 2)?;
-        state.serialize_field("file", &self.file)?;
-        state.serialize_field("authors", &self.authors)?;
-        state.end()
+        use serde::ser::SerializeSeq;
+        let len = if self.prompt_session_id.is_some() {
+            4
+        } else {
+            2
+        };
+        let mut seq = serializer.serialize_seq(Some(len))?;
+        seq.serialize_element(&self.lines)?;
+        seq.serialize_element(&self.author_key)?;
+        if let Some(session) = &self.prompt_session_id {
+            seq.serialize_element(session)?;
+            seq.serialize_element(&self.prompt_turn.unwrap_or(0))?;
+        }
+        seq.end()
     }
 }
 
-impl<'de> serde::Deserialize<'de> for FileAuthorship {
+impl<'de> serde::Deserialize<'de> for AttributionEntry {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de>,
+        D: Deserializer<'de>,
     {
-        #[derive(serde::Deserialize)]
-        struct FileAuthorshipHelper {
-            file: String,
-            authors: Vec<AuthorEntry>,
+        struct VisitorImpl;
+        impl<'de> Visitor<'de> for VisitorImpl {
+            type Value = AttributionEntry;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an array: [lines, author_key, prompt_session_id?, prompt_turn?]")
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let lines: Vec<LineRange> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let author_key: String = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                // Optional session id
+                let prompt_session_id: Option<String> = seq.next_element()?;
+                // Optional turn index (only meaningful if session id present)
+                let prompt_turn: Option<u32> = if prompt_session_id.is_some() {
+                    // If missing, default to 0
+                    Some(seq.next_element()?.unwrap_or(0))
+                } else {
+                    None
+                };
+                Ok(AttributionEntry {
+                    lines,
+                    author_key,
+                    prompt_session_id,
+                    prompt_turn,
+                })
+            }
         }
-        let helper = FileAuthorshipHelper::deserialize(deserializer)?;
-        Ok(FileAuthorship {
-            file: helper.file,
-            authors: helper.authors,
-        })
+        deserializer.deserialize_any(VisitorImpl)
     }
 }
 
-impl FileAuthorship {
-    pub fn new(file: String) -> Self {
-        Self {
-            file,
-            authors: Vec::new(),
-        }
-    }
-
-    /// Add lines for an author, removing them from all other authors
-    pub fn add_lines(
-        &mut self,
-        author: &str,
-        lines: &[u32],
-        agent_metadata: Option<AgentMetadata>,
-    ) {
-        // Create a single range to remove from all other authors
-        let lines_to_remove = LineRange::compress_lines(lines);
-
-        // Remove these lines from all other authors
-        for other_author in &mut self.authors {
-            other_author.remove_lines(&lines_to_remove);
-        }
-
-        // Add to this author with compression
-        if let Some(entry) = self.authors.iter_mut().find(|a| a.author == author) {
-            entry.add_lines(&lines_to_remove);
-            // Update agent metadata if provided and not already set
-            if agent_metadata.is_some() && entry.agent_metadata.is_none() {
-                entry.agent_metadata = agent_metadata;
-            }
-        } else {
-            // Create new author entry
-            let mut new_entry = AuthorEntry::new_with_metadata(author.to_string(), agent_metadata);
-            new_entry.add_lines(&lines_to_remove);
-            self.authors.push(new_entry);
-        }
-    }
-
-    /// Check if this file has any authorship information
-    pub fn is_empty(&self) -> bool {
-        self.authors.iter().all(|a| a.is_empty())
-    }
-
-    pub fn get_author(&self, line: u32) -> Option<&str> {
-        // Check authors in reverse order (most recent first)
-        for author in self.authors.iter().rev() {
-            if let Some(author) = author.get_author_for_line(line) {
-                return Some(author);
-            }
-        }
-        None
-    }
+/// Prompt session details stored in the top-level prompts map keyed by AgentId.id (UUID)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptRecord {
+    pub agent_id: AgentId,
+    pub messages: Vec<Message>,
 }
 
-impl fmt::Display for FileAuthorship {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.file)?;
-        for author in &self.authors {
-            write!(f, "\n  Author: {}", author.author)?;
-            if let Some(ref metadata) = author.agent_metadata {
-                write!(f, " (model: {}", metadata.model)?;
-                if let Some(ref human_author) = metadata.human_author {
-                    write!(f, ", human: {}", human_author)?;
-                }
-                write!(f, ")")?;
-            }
-            for range in &author.lines {
-                write!(f, " {}", range)?;
-            }
-        }
-        Ok(())
-    }
-}
+/// Per-file attributions are arrays of compact entries
+pub type FileAttributions = Vec<AttributionEntry>;
 
-/// Complete authorship log for all files
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorshipLog {
-    pub files: BTreeMap<String, FileAuthorship>,
+    pub files: BTreeMap<String, FileAttributions>,
+    pub authors: BTreeMap<String, Author>,
+    /// Map of prompt session UUID -> AgentId
+    pub prompts: BTreeMap<String, PromptRecord>,
     pub schema_version: String,
 }
 
@@ -535,32 +403,90 @@ impl AuthorshipLog {
     pub fn new() -> Self {
         Self {
             files: BTreeMap::new(),
+            authors: BTreeMap::new(),
+            prompts: BTreeMap::new(),
             schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
         }
     }
 
-    pub fn get_or_create_file(&mut self, file: &str) -> &mut FileAuthorship {
-        self.files
-            .entry(file.to_string())
-            .or_insert_with(|| FileAuthorship::new(file.to_string()))
+    pub fn get_or_create_file(&mut self, file: &str) -> &mut FileAttributions {
+        self.files.entry(file.to_string()).or_insert_with(Vec::new)
+    }
+
+    /// Lookup the author and optional prompt for a given file and line
+    pub fn get_line_attribution(
+        &self,
+        file: &str,
+        line: u32,
+    ) -> Option<(&Author, Option<(&PromptRecord, u32)>)> {
+        let entries = self.files.get(file)?;
+        // Prefer later entries (latest wins)
+        for e in entries.iter().rev() {
+            // Manual contains check to keep AttributionEntry internals private
+            let contains = e.lines.iter().any(|r| r.contains(line));
+            if contains {
+                if let Some(author) = self.authors.get(&e.author_key) {
+                    let prompt = match (&e.prompt_session_id, e.prompt_turn) {
+                        (Some(session), Some(turn)) => self.prompts.get(session).map(|p| (p, turn)),
+                        _ => None,
+                    };
+                    return Some((author, prompt));
+                }
+            }
+        }
+        None
+    }
+
+    // Prompt hashing removed in v2; authorship log references prompts by AgentId.id and turn index
+
+    /// Generate a stable author key based on username and email
+    fn generate_author_key(author: &Author) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(author.username.as_bytes());
+        hasher.update(b"|");
+        hasher.update(author.email.as_bytes());
+        let full = format!("{:x}", hasher.finalize());
+        full.chars().take(8).collect()
     }
 
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
         let mut authorship_log = AuthorshipLog::new();
+
+        // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
+            // If there is an agent session, record it by its UUID (AgentId.id)
+            let (session_id_opt, turn_opt) =
+                match (&checkpoint.agent_id, &checkpoint.transcript) {
+                    (Some(agent), Some(transcript)) => {
+                        let session_id = agent.id.clone();
+                        // Insert or update the prompt session transcript
+                        let entry = authorship_log.prompts.entry(session_id.clone()).or_insert(
+                            PromptRecord {
+                                agent_id: agent.clone(),
+                                messages: transcript.messages().to_vec(),
+                            },
+                        );
+                        if entry.messages.len() < transcript.messages().len() {
+                            entry.messages = transcript.messages().to_vec();
+                        }
+                        let turn = (transcript.messages().len().saturating_sub(1)) as u32;
+                        (Some(session_id), Some(turn))
+                    }
+                    _ => (None, None),
+                };
             for entry in &checkpoint.entries {
-                let file_auth = authorship_log.get_or_create_file(&entry.file);
-
                 // Process deletions first (remove lines from all authors)
-                for line in &entry.deleted_lines {
-                    let to_remove = match line {
-                        Line::Single(l) => LineRange::Single(*l),
-                        Line::Range(start, end) => LineRange::Range(*start, *end),
-                    };
-
-                    for author in &mut file_auth.authors {
-                        author.remove_lines(&[to_remove.clone()]);
+                {
+                    let file_entries = authorship_log.get_or_create_file(&entry.file);
+                    for line in &entry.deleted_lines {
+                        let to_remove = match line {
+                            Line::Single(l) => LineRange::Single(*l),
+                            Line::Range(start, end) => LineRange::Range(*start, *end),
+                        };
+                        for record in file_entries.iter_mut() {
+                            record.remove_lines(&[to_remove.clone()]);
+                        }
                     }
                 }
 
@@ -577,16 +503,50 @@ impl AuthorshipLog {
                     }
                 }
                 if !added_lines.is_empty() {
-                    file_auth.add_lines(
-                        &checkpoint.author,
-                        &added_lines,
-                        checkpoint.agent_metadata.clone(),
-                    );
+                    // Determine author key and optional prompt reference
+                    let author_struct = Author {
+                        username: checkpoint.author.clone(),
+                        email: "".to_string(),
+                    };
+                    let key = Self::generate_author_key(&author_struct);
+                    if !authorship_log.authors.contains_key(&key) {
+                        authorship_log.authors.insert(key.clone(), author_struct);
+                    }
+                    let author_key = key;
+                    let prompt_session_id = session_id_opt.clone();
+                    let prompt_turn = turn_opt;
+
+                    // Create a single range to remove from all other entries
+                    let lines_to_remove = LineRange::compress_lines(&added_lines);
+
+                    // Remove these lines from all other entries and add new attribution
+                    let file_entries = authorship_log.get_or_create_file(&entry.file);
+                    for rec in file_entries.iter_mut() {
+                        rec.remove_lines(&lines_to_remove);
+                    }
+                    if let Some(rec) = file_entries.iter_mut().find(|r| {
+                        r.author_key == author_key
+                            && r.prompt_session_id == prompt_session_id
+                            && r.prompt_turn == prompt_turn
+                    }) {
+                        rec.add_lines(&lines_to_remove);
+                    } else {
+                        let mut new_rec = AttributionEntry {
+                            lines: Vec::new(),
+                            author_key: author_key.clone(),
+                            prompt_session_id: prompt_session_id.clone(),
+                            prompt_turn: prompt_turn,
+                        };
+                        new_rec.add_lines(&lines_to_remove);
+                        file_entries.push(new_rec);
+                    }
                 }
             }
         }
-        // Remove empty files
-        authorship_log.files.retain(|_, f| !f.is_empty());
+        // Remove empty files/entries
+        authorship_log
+            .files
+            .retain(|_, entries| entries.iter().any(|e| !e.is_empty()));
         authorship_log
     }
 }
@@ -597,10 +557,21 @@ impl Default for AuthorshipLog {
     }
 }
 
+// Display intentionally minimal for compact format
 impl fmt::Display for AuthorshipLog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (_file_path, file_auth) in &self.files {
-            writeln!(f, "{}", file_auth)?;
+        for (file_path, entries) in &self.files {
+            write!(f, "{}", file_path)?;
+            for e in entries {
+                write!(
+                    f,
+                    "\n  {:?} {} {}",
+                    e.lines,
+                    e.author_key,
+                    e.prompt_session_id.as_deref().unwrap_or("")
+                )?;
+            }
+            writeln!(f)?;
         }
         Ok(())
     }
@@ -611,38 +582,55 @@ mod tests {
     use super::*;
     use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 
-    #[test]
-    fn test_authored_range_creation() {
-        let range = AuthoredRange::new(1, 10, "claude".to_string());
-        assert_eq!(range.start(), 1);
-        assert_eq!(range.end(), 10);
-        assert_eq!(range.author, "claude");
-    }
-
-    #[test]
-    fn test_authored_range_overlaps() {
-        let range1 = AuthoredRange::new(1, 10, "claude".to_string());
-        let range2 = AuthoredRange::new(5, 15, "user".to_string());
-        let range3 = AuthoredRange::new(20, 30, "claude".to_string());
-
-        assert!(range1.overlaps(&range2));
-        assert!(range2.overlaps(&range1));
-        assert!(!range1.overlaps(&range3));
-        assert!(!range3.overlaps(&range1));
+    fn resolve_username(log: &AuthorshipLog, file: &str, line: u32) -> Option<String> {
+        log.get_line_attribution(file, line)
+            .map(|(author, _)| author.username.clone())
     }
 
     #[test]
     fn test_file_authorship_add_lines() {
-        let mut file_auth = FileAuthorship::new("src/test.rs".to_string());
-        file_auth.add_lines("claude", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], None);
-        assert_eq!(file_auth.get_author(5), Some("claude"));
-        file_auth.add_lines("aidan", &[5, 6, 50], None);
-        assert_eq!(file_auth.get_author(5), Some("aidan"));
-        assert_eq!(file_auth.get_author(6), Some("aidan"));
-        assert_eq!(file_auth.get_author(50), Some("aidan"));
-        assert_eq!(file_auth.get_author(4), Some("claude"));
-        assert_eq!(file_auth.get_author(7), Some("claude"));
-        assert_eq!(file_auth.get_author(100), None);
+        // Simulate two checkpoints: claude adds 1-10, then aidan adds 5,6,50
+        let entry1 =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
+        let checkpoint1 = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry1],
+        );
+        let entry2 = WorkingLogEntry::new(
+            "src/test.rs".to_string(),
+            vec![Line::Single(5), Line::Single(6), Line::Single(50)],
+            vec![],
+        );
+        let checkpoint2 = Checkpoint::new(
+            "def456".to_string(),
+            "".to_string(),
+            "aidan".to_string(),
+            vec![entry2],
+        );
+        let log = AuthorshipLog::from_working_log(&[checkpoint1, checkpoint2]);
+        assert_eq!(
+            resolve_username(&log, "src/test.rs", 5),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&log, "src/test.rs", 6),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&log, "src/test.rs", 50),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&log, "src/test.rs", 4),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&log, "src/test.rs", 7),
+            Some("claude".to_string())
+        );
+        assert_eq!(resolve_username(&log, "src/test.rs", 100), None);
     }
 
     #[test]
@@ -668,13 +656,27 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-        assert_eq!(file_auth.get_author(5), Some("aidan"));
-        assert_eq!(file_auth.get_author(6), Some("aidan"));
-        assert_eq!(file_auth.get_author(50), Some("aidan"));
-        assert_eq!(file_auth.get_author(4), Some("claude"));
-        assert_eq!(file_auth.get_author(7), Some("claude"));
-        assert_eq!(file_auth.get_author(100), None);
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 5),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 6),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 50),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 4),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 7),
+            Some("claude".to_string())
+        );
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 100), None);
     }
 
     #[test]
@@ -700,13 +702,18 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-        assert_eq!(file_auth.get_author(5), None);
-        assert_eq!(file_auth.get_author(8), None);
-        assert_eq!(file_auth.get_author(9), None);
-        assert_eq!(file_auth.get_author(10), None);
-        assert_eq!(file_auth.get_author(4), Some("claude"));
-        assert_eq!(file_auth.get_author(6), Some("claude"));
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 5), None);
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 8), None);
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 9), None);
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 10), None);
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 4),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 6),
+            Some("claude".to_string())
+        );
     }
 
     #[test]
@@ -729,17 +736,33 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
         // Lines 1-7: claude
-        assert_eq!(file_auth.get_author(1), Some("claude"));
-        assert_eq!(file_auth.get_author(7), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 1),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 7),
+            Some("claude".to_string())
+        );
         // Lines 8-12: aidan
-        assert_eq!(file_auth.get_author(8), Some("aidan"));
-        assert_eq!(file_auth.get_author(12), Some("aidan"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 8),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 12),
+            Some("aidan".to_string())
+        );
         // Lines 13-20: claude
-        assert_eq!(file_auth.get_author(13), Some("claude"));
-        assert_eq!(file_auth.get_author(20), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 13),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 20),
+            Some("claude".to_string())
+        );
     }
 
     #[test]
@@ -762,17 +785,27 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
         // Lines 1-7: claude
-        assert_eq!(file_auth.get_author(1), Some("claude"));
-        assert_eq!(file_auth.get_author(7), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 1),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 7),
+            Some("claude".to_string())
+        );
         // Lines 8-12: deleted (None)
-        assert_eq!(file_auth.get_author(8), None);
-        assert_eq!(file_auth.get_author(12), None);
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 8), None);
+        assert_eq!(resolve_username(&authorship_log, "src/test.rs", 12), None);
         // Lines 13-20: claude
-        assert_eq!(file_auth.get_author(13), Some("claude"));
-        assert_eq!(file_auth.get_author(20), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 13),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 20),
+            Some("claude".to_string())
+        );
     }
 
     #[test]
@@ -803,29 +836,42 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2, checkpoint3];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
-        // Debug: print the actual authorship data
-        println!("Debug: File authorship data:");
-        for author in &file_auth.authors {
-            println!("  Author: {}", author.author);
-            for range in &author.lines {
-                println!("    Range: {}", range);
-            }
-        }
-
         // Lines 1-4: claude
-        assert_eq!(file_auth.get_author(1), Some("claude"));
-        assert_eq!(file_auth.get_author(4), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 1),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 4),
+            Some("claude".to_string())
+        );
         // Lines 5-9: aidan
-        assert_eq!(file_auth.get_author(5), Some("aidan"));
-        assert_eq!(file_auth.get_author(9), Some("aidan"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 5),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 9),
+            Some("aidan".to_string())
+        );
         // Lines 10-20: user (overwrites both claude and aidan)
-        assert_eq!(file_auth.get_author(10), Some("user"));
-        assert_eq!(file_auth.get_author(20), Some("user"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 10),
+            Some("user".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 20),
+            Some("user".to_string())
+        );
         // Lines 21-30: claude
-        assert_eq!(file_auth.get_author(21), Some("claude"));
-        assert_eq!(file_auth.get_author(30), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 21),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 30),
+            Some("claude".to_string())
+        );
     }
 
     #[test]
@@ -851,19 +897,44 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
         // Specific lines taken by aidan
-        assert_eq!(file_auth.get_author(5), Some("aidan"));
-        assert_eq!(file_auth.get_author(10), Some("aidan"));
-        assert_eq!(file_auth.get_author(15), Some("aidan"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 5),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 10),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 15),
+            Some("aidan".to_string())
+        );
         // Other lines still claude
-        assert_eq!(file_auth.get_author(4), Some("claude"));
-        assert_eq!(file_auth.get_author(6), Some("claude"));
-        assert_eq!(file_auth.get_author(9), Some("claude"));
-        assert_eq!(file_auth.get_author(11), Some("claude"));
-        assert_eq!(file_auth.get_author(14), Some("claude"));
-        assert_eq!(file_auth.get_author(16), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 4),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 6),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 9),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 11),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 14),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 16),
+            Some("claude".to_string())
+        );
     }
 
     #[test]
@@ -889,14 +960,24 @@ mod tests {
         );
         let checkpoints = vec![checkpoint1, checkpoint2];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
         // Boundary lines taken by aidan
-        assert_eq!(file_auth.get_author(1), Some("aidan"));
-        assert_eq!(file_auth.get_author(10), Some("aidan"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 1),
+            Some("aidan".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 10),
+            Some("aidan".to_string())
+        );
         // Middle lines still claude
-        assert_eq!(file_auth.get_author(5), Some("claude"));
-        assert_eq!(file_auth.get_author(9), Some("claude"));
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 5),
+            Some("claude".to_string())
+        );
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 9),
+            Some("claude".to_string())
+        );
     }
 
     #[test]
@@ -915,32 +996,25 @@ mod tests {
         );
         let checkpoints = vec![checkpoint];
         let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-
-        // The file should have authorship information
         assert!(
             authorship_log
                 .files
                 .contains_key("src/commands/post_commit.rs")
         );
-        let file_auth = &authorship_log.files["src/commands/post_commit.rs"];
-
         // Lines 86-89 and 98-102 should be authored by "aidan"
-        assert_eq!(file_auth.get_author(86), Some("aidan"));
-        assert_eq!(file_auth.get_author(87), Some("aidan"));
-        assert_eq!(file_auth.get_author(88), Some("aidan"));
-        assert_eq!(file_auth.get_author(89), Some("aidan"));
-        assert_eq!(file_auth.get_author(98), Some("aidan"));
-        assert_eq!(file_auth.get_author(99), Some("aidan"));
-        assert_eq!(file_auth.get_author(100), Some("aidan"));
-        assert_eq!(file_auth.get_author(101), Some("aidan"));
-        assert_eq!(file_auth.get_author(102), Some("aidan"));
-
+        for n in [86, 87, 88, 89, 98, 99, 100, 101, 102] {
+            assert_eq!(
+                resolve_username(&authorship_log, "src/commands/post_commit.rs", n),
+                Some("aidan".to_string())
+            );
+        }
         // Lines outside the added ranges should not have authorship
-        assert_eq!(file_auth.get_author(85), None);
-        assert_eq!(file_auth.get_author(90), None);
-        assert_eq!(file_auth.get_author(97), None);
-        assert_eq!(file_auth.get_author(103), None);
-        assert_eq!(file_auth.get_author(117), None);
+        for n in [85, 90, 97, 103, 117] {
+            assert_eq!(
+                resolve_username(&authorship_log, "src/commands/post_commit.rs", n),
+                None
+            );
+        }
     }
 
     #[test]
@@ -960,188 +1034,134 @@ mod tests {
     #[test]
     fn test_new_authorship_format_serialization() {
         use serde_json;
-        let mut file_auth = FileAuthorship::new("src/test.rs".to_string());
-        file_auth.add_lines("claude", &[1, 2, 3, 4, 5], None);
-        file_auth.add_lines("aidan", &[6, 7, 8], None);
-
-        let json = serde_json::to_string(&file_auth).unwrap();
-        println!("Serialized format: {}", json);
-
-        // Verify the structure matches the new format
-        let deserialized: FileAuthorship = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.file, "src/test.rs");
-        assert_eq!(deserialized.authors.len(), 2);
-
-        // Check that authors are in the expected format
-        let claude_entry = deserialized
-            .authors
-            .iter()
-            .find(|a| a.author == "claude")
-            .unwrap();
-        let aidan_entry = deserialized
-            .authors
-            .iter()
-            .find(|a| a.author == "aidan")
-            .unwrap();
-
-        assert_eq!(claude_entry.lines.len(), 1); // Should be compressed to one range
-        assert_eq!(aidan_entry.lines.len(), 1); // Should be compressed to one range
-    }
-
-    #[test]
-    fn test_agent_metadata_integration() {
-        use crate::log_fmt::working_log::AgentMetadata;
-
-        let entry =
-            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
-
-        let agent_metadata = AgentMetadata {
-            model: "claude-3-sonnet".to_string(),
-            human_author: Some("john.doe".to_string()),
+        // Serialize a single attribution entry in compact array form
+        let entry = AttributionEntry {
+            lines: vec![LineRange::Range(1, 5)],
+            author_key: "a1b2c3d4".to_string(),
+            prompt_session_id: Some("session-uuid-1234".to_string()),
+            prompt_turn: Some(3),
         };
-
-        let checkpoint = Checkpoint::new_with_metadata(
-            "abc123".to_string(),
-            "".to_string(),
-            "claude".to_string(),
-            vec![entry],
-            agent_metadata,
-        );
-
-        let checkpoints = vec![checkpoint];
-        let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
-        let file_auth = &authorship_log.files["src/test.rs"];
-
-        // Check that the author entry has the agent metadata
-        let claude_entry = file_auth
-            .authors
-            .iter()
-            .find(|a| a.author == "claude")
-            .unwrap();
-        assert!(claude_entry.agent_metadata.is_some());
-
-        let metadata = claude_entry.agent_metadata.as_ref().unwrap();
-        assert_eq!(metadata.model, "claude-3-sonnet");
-        assert_eq!(metadata.human_author.as_deref(), Some("john.doe"));
-
-        // Verify that lines are still attributed correctly
-        assert_eq!(file_auth.get_author(5), Some("claude"));
+        let json = serde_json::to_string(&entry).unwrap();
+        println!("Serialized format: {}", json);
+        // Expect array start with lines array and prompt session with turn
+        assert!(json.starts_with("[[[1,5]],\"a1b2c3d4\",\"session-uuid-1234\",3]"));
     }
 
     #[test]
     fn test_deduplicate_identical_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Add the same range multiple times
-        author_entry.add_lines(&[LineRange::Range(1, 5)]);
-        author_entry.add_lines(&[LineRange::Range(1, 5)]);
-        author_entry.add_lines(&[LineRange::Range(1, 5)]);
-
-        // Should only have one range after deduplication
-        assert_eq!(author_entry.lines.len(), 1);
-        assert_eq!(author_entry.lines[0], LineRange::Range(1, 5));
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
+        entry.add_lines(&[LineRange::Range(1, 5)]);
+        entry.add_lines(&[LineRange::Range(1, 5)]);
+        entry.add_lines(&[LineRange::Range(1, 5)]);
+        assert_eq!(entry.lines.len(), 1);
+        assert_eq!(entry.lines[0], LineRange::Range(1, 5));
     }
 
     #[test]
     fn test_merge_adjacent_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Add adjacent ranges
-        author_entry.add_lines(&[LineRange::Range(1, 5)]);
-        author_entry.add_lines(&[LineRange::Range(6, 10)]);
-
-        // Should be merged into one range
-        assert_eq!(author_entry.lines.len(), 1);
-        assert_eq!(author_entry.lines[0], LineRange::Range(1, 10));
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
+        entry.add_lines(&[LineRange::Range(1, 5)]);
+        entry.add_lines(&[LineRange::Range(6, 10)]);
+        assert_eq!(entry.lines.len(), 1);
+        assert_eq!(entry.lines[0], LineRange::Range(1, 10));
     }
 
     #[test]
     fn test_merge_overlapping_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Add overlapping ranges
-        author_entry.add_lines(&[LineRange::Range(1, 8)]);
-        author_entry.add_lines(&[LineRange::Range(5, 12)]);
-
-        // Should be merged into one range
-        assert_eq!(author_entry.lines.len(), 1);
-        assert_eq!(author_entry.lines[0], LineRange::Range(1, 12));
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
+        entry.add_lines(&[LineRange::Range(1, 8)]);
+        entry.add_lines(&[LineRange::Range(5, 12)]);
+        assert_eq!(entry.lines.len(), 1);
+        assert_eq!(entry.lines[0], LineRange::Range(1, 12));
     }
 
     #[test]
     fn test_merge_single_lines_with_ranges() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Add a range and adjacent single lines
-        author_entry.add_lines(&[LineRange::Range(1, 5)]);
-        author_entry.add_lines(&[LineRange::Single(6)]);
-        author_entry.add_lines(&[LineRange::Single(7)]);
-
-        // Should be merged into one range
-        assert_eq!(author_entry.lines.len(), 1);
-        assert_eq!(author_entry.lines[0], LineRange::Range(1, 7));
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
+        entry.add_lines(&[LineRange::Range(1, 5)]);
+        entry.add_lines(&[LineRange::Single(6)]);
+        entry.add_lines(&[LineRange::Single(7)]);
+        assert_eq!(entry.lines.len(), 1);
+        assert_eq!(entry.lines[0], LineRange::Range(1, 7));
     }
 
     #[test]
     fn test_merge_adjacent_single_lines() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Add adjacent single lines
-        author_entry.add_lines(&[LineRange::Single(5)]);
-        author_entry.add_lines(&[LineRange::Single(6)]);
-        author_entry.add_lines(&[LineRange::Single(7)]);
-
-        // Should be merged into one range
-        assert_eq!(author_entry.lines.len(), 1);
-        assert_eq!(author_entry.lines[0], LineRange::Range(5, 7));
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
+        entry.add_lines(&[LineRange::Single(5)]);
+        entry.add_lines(&[LineRange::Single(6)]);
+        entry.add_lines(&[LineRange::Single(7)]);
+        assert_eq!(entry.lines.len(), 1);
+        assert_eq!(entry.lines[0], LineRange::Range(5, 7));
     }
 
     #[test]
     fn test_complex_merging_scenario() {
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Add a complex mix of ranges and single lines
-        author_entry.add_lines(&[LineRange::Range(1, 3)]);
-        author_entry.add_lines(&[LineRange::Single(4)]);
-        author_entry.add_lines(&[LineRange::Range(5, 7)]);
-        author_entry.add_lines(&[LineRange::Single(8)]);
-        author_entry.add_lines(&[LineRange::Range(10, 12)]);
-        author_entry.add_lines(&[LineRange::Single(13)]);
-        author_entry.add_lines(&[LineRange::Single(14)]);
-
-        // Should result in two ranges: [1,8] and [10,14]
-        assert_eq!(author_entry.lines.len(), 2);
-        assert_eq!(author_entry.lines[0], LineRange::Range(1, 8));
-        assert_eq!(author_entry.lines[1], LineRange::Range(10, 14));
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
+        entry.add_lines(&[LineRange::Range(1, 3)]);
+        entry.add_lines(&[LineRange::Single(4)]);
+        entry.add_lines(&[LineRange::Range(5, 7)]);
+        entry.add_lines(&[LineRange::Single(8)]);
+        entry.add_lines(&[LineRange::Range(10, 12)]);
+        entry.add_lines(&[LineRange::Single(13)]);
+        entry.add_lines(&[LineRange::Single(14)]);
+        assert_eq!(entry.lines.len(), 2);
+        assert_eq!(entry.lines[0], LineRange::Range(1, 8));
+        assert_eq!(entry.lines[1], LineRange::Range(10, 14));
     }
 
     #[test]
     fn test_duplicate_ranges_issue_fix() {
-        // This test simulates the exact issue reported: massive amounts of duplicate line ranges
-        let mut author_entry = AuthorEntry::new("claude".to_string());
-
-        // Simulate the same range being added hundreds of times (like in the reported issue)
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "a".to_string(),
+            prompt_session_id: None,
+            prompt_turn: None,
+        };
         for _ in 0..100 {
-            author_entry.add_lines(&[LineRange::Range(412, 414)]);
+            entry.add_lines(&[LineRange::Range(412, 414)]);
         }
         for _ in 0..100 {
-            author_entry.add_lines(&[LineRange::Single(420)]);
+            entry.add_lines(&[LineRange::Single(420)]);
         }
         for _ in 0..100 {
-            author_entry.add_lines(&[LineRange::Range(423, 424)]);
+            entry.add_lines(&[LineRange::Range(423, 424)]);
         }
-
-        // After deduplication and merging, we should have only 3 unique ranges
-        assert_eq!(author_entry.lines.len(), 3);
-
-        // The ranges should be sorted by their start position
-        // Range(412, 414) comes first, then Single(420), then Range(423, 424)
-        assert_eq!(author_entry.lines[0], LineRange::Range(412, 414));
-        assert_eq!(author_entry.lines[1], LineRange::Single(420));
-        assert_eq!(author_entry.lines[2], LineRange::Range(423, 424));
-
-        // Verify that the ranges are properly sorted by start line number
-        let start_lines: Vec<u32> = author_entry
+        assert_eq!(entry.lines.len(), 3);
+        assert_eq!(entry.lines[0], LineRange::Range(412, 414));
+        assert_eq!(entry.lines[1], LineRange::Single(420));
+        assert_eq!(entry.lines[2], LineRange::Range(423, 424));
+        let start_lines: Vec<u32> = entry
             .lines
             .iter()
             .map(|range| match range {
@@ -1150,5 +1170,234 @@ mod tests {
             })
             .collect();
         assert_eq!(start_lines, vec![412, 420, 423]);
+    }
+
+    #[test]
+    fn test_prompt_attribution_in_authorship_log() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::AgentId;
+
+        let entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
+
+        let user_message = Message::user("Please add error handling to this function".to_string());
+        let assistant_message =
+            Message::assistant("I'll add error handling to the function.".to_string());
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+        transcript.add_message(assistant_message);
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
+        };
+
+        let mut checkpoint = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
+        checkpoint.transcript = Some(transcript);
+        checkpoint.agent_id = Some(agent_id);
+
+        let checkpoints = vec![checkpoint];
+        let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
+        let entries = &authorship_log.files["src/test.rs"];
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.prompt_session_id.as_deref(), Some("session-abc123"));
+        assert_eq!(e.prompt_turn, Some(1));
+        // Check prompt registry stores the agent session
+        let prompt = authorship_log.prompts.get("session-abc123").unwrap();
+        assert_eq!(prompt.agent_id.tool, "cursor");
+        assert_eq!(prompt.agent_id.id, "session-abc123");
+
+        // Verify that lines are still attributed correctly (username)
+        let who = resolve_username(&authorship_log, "src/test.rs", 5).unwrap();
+        assert_eq!(who, "claude");
+    }
+
+    #[test]
+    fn test_authorship_log_json_example() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::AgentId;
+
+        // Create a checkpoint with a transcript
+        let user_message = Message::user("Please add error handling to this function".to_string());
+        let assistant_message = Message::assistant(
+            "I'll add comprehensive error handling with try-catch blocks".to_string(),
+        );
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+        transcript.add_message(assistant_message);
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
+        };
+
+        let checkpoint = Checkpoint {
+            snapshot: "abc123".to_string(),
+            diff: "diff content".to_string(),
+            author: "john.doe".to_string(),
+            timestamp: 1234567890,
+            entries: vec![crate::log_fmt::working_log::WorkingLogEntry {
+                file: "src/main.rs".to_string(),
+                added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
+                deleted_lines: vec![],
+            }],
+            transcript: Some(transcript),
+            agent_id: Some(agent_id),
+        };
+
+        // Convert to authorship log
+        let authorship_log = AuthorshipLog::from_working_log(&[checkpoint]);
+
+        // Serialize to JSON to show the format
+        let json = serde_json::to_string_pretty(&authorship_log).unwrap();
+        println!("Authorship Log JSON Example:");
+        println!("{}", json);
+
+        // Verify the structure
+        assert_eq!(authorship_log.files.len(), 1);
+        assert_eq!(authorship_log.prompts.len(), 1);
+        assert!(authorship_log.files.contains_key("src/main.rs"));
+
+        // Verify prompt session registry stores agent metadata
+        let prompt_id = authorship_log.prompts.keys().next().unwrap();
+        let stored_prompt = authorship_log.prompts.get(prompt_id).unwrap();
+        assert_eq!(stored_prompt.agent_id.tool, "cursor");
+        assert_eq!(stored_prompt.agent_id.id, "session-abc123");
+    }
+
+    #[test]
+    fn test_multiple_prompts_same_tool_separate_entries() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::AgentId;
+
+        // Create two different transcripts from the same tool (cursor)
+        let mut transcript1 = AiTranscript::new();
+        transcript1.add_message(Message::user("Add error handling".to_string()));
+
+        let agent_id1 = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-abc123".to_string(),
+        };
+
+        let mut transcript2 = AiTranscript::new();
+        transcript2.add_message(Message::user("Add logging".to_string()));
+
+        let agent_id2 = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-xyz789".to_string(),
+        };
+
+        // Create two checkpoints with different transcripts
+        let checkpoint1 = Checkpoint {
+            snapshot: "abc123".to_string(),
+            diff: "diff1".to_string(),
+            author: "john.doe".to_string(),
+            timestamp: 1234567890,
+            entries: vec![crate::log_fmt::working_log::WorkingLogEntry {
+                file: "src/main.rs".to_string(),
+                added_lines: vec![crate::log_fmt::working_log::Line::Range(5, 10)],
+                deleted_lines: vec![],
+            }],
+            transcript: Some(transcript1),
+            agent_id: Some(agent_id1),
+        };
+
+        let checkpoint2 = Checkpoint {
+            snapshot: "xyz789".to_string(),
+            diff: "diff2".to_string(),
+            author: "john.doe".to_string(),
+            timestamp: 1234567891,
+            entries: vec![crate::log_fmt::working_log::WorkingLogEntry {
+                file: "src/main.rs".to_string(),
+                added_lines: vec![crate::log_fmt::working_log::Line::Range(15, 20)],
+                deleted_lines: vec![],
+            }],
+            transcript: Some(transcript2),
+            agent_id: Some(agent_id2),
+        };
+
+        // Convert to authorship log
+        let authorship_log = AuthorshipLog::from_working_log(&[checkpoint1, checkpoint2]);
+
+        // Should have two separate attribution entries for the same human with different prompts
+        let file_entries = &authorship_log.files["src/main.rs"];
+        assert_eq!(file_entries.len(), 2);
+
+        // Both should reference different prompt session ids
+        let mut prompts: Vec<String> = file_entries
+            .iter()
+            .map(|a| a.prompt_session_id.clone().expect("prompt expected"))
+            .collect();
+        prompts.sort();
+        prompts.dedup();
+        assert_eq!(prompts.len(), 2);
+
+        // Verify prompts are stored separately
+        assert_eq!(authorship_log.prompts.len(), 2);
+
+        // Show the JSON output to demonstrate multiple cursor entries
+        let json = serde_json::to_string_pretty(&authorship_log).unwrap();
+        println!("Multiple Prompts Same Tool JSON Example:");
+        println!("{}", json);
+    }
+
+    #[test]
+    fn test_mixed_human_and_agent_attribution() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::AgentId;
+
+        // Human-written entry
+        let human_entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 5)], vec![]);
+        let human_checkpoint = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "john.doe".to_string(),
+            vec![human_entry],
+        );
+
+        // AI-generated entry
+        let ai_entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(6, 10)], vec![]);
+        let user_message = Message::user("Add error handling".to_string());
+
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(user_message);
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session-xyz789".to_string(),
+        };
+
+        let mut ai_checkpoint = Checkpoint::new(
+            "def456".to_string(),
+            "".to_string(),
+            "claude".to_string(),
+            vec![ai_entry],
+        );
+        ai_checkpoint.transcript = Some(transcript);
+        ai_checkpoint.agent_id = Some(agent_id);
+
+        let checkpoints = vec![human_checkpoint, ai_checkpoint];
+        let authorship_log = AuthorshipLog::from_working_log(&checkpoints);
+        let entries = &authorship_log.files["src/test.rs"];
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 3),
+            Some("john.doe".to_string())
+        );
+        // AI-assisted lines still map to the same human username internally
+        assert_eq!(
+            resolve_username(&authorship_log, "src/test.rs", 8),
+            Some("claude".to_string())
+        );
     }
 }
