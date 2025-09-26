@@ -8,12 +8,6 @@ pub fn run(_args: &[String]) -> Result<(), GitAiError> {
 
 async fn async_run() -> Result<(), GitAiError> {
     check_claude_code().await;
-    // check_codex().await;
-
-    // check_windsurf().await;
-    // check_cursor().await;
-    // check_github_copilot().await;
-
     Ok(())
 }
 

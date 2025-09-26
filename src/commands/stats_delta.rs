@@ -111,7 +111,8 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 
             if get_reference(repo, &authorship_ref).is_err() {
                 // No authorship log exists, create one
-                let authorship_log = AuthorshipLog::from_working_log(&working_log);
+                let authorship_log =
+                    AuthorshipLog::from_working_log_with_base_commit(&working_log, commit_hash);
 
                 // Serialize the authorship log
                 let authorship_json = serde_json::to_string(&authorship_log)?;

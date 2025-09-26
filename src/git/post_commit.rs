@@ -55,7 +55,8 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
     ));
 
     // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---
-    let authorship_log = AuthorshipLog::from_working_log(&filtered_working_log);
+    let authorship_log =
+        AuthorshipLog::from_working_log_with_base_commit(&filtered_working_log, &parent_sha);
 
     // Use pretty formatting in debug builds, single-line in release builds
     let authorship_json = if cfg!(debug_assertions) {

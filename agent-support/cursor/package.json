@@ -27,11 +27,14 @@
         "cursorGitAi.enableCheckpointLogging": {
           "type": "boolean",
           "default": false,
-          "description": "Enable notifications for AI and human edit detection"
+          "description": "Enable notifications for AI and human edit detection. ABC"
         }
       }
     },
     "commands": [
+
+
+
       {
         "command": "cursor-git-ai.pasteWithDetection",
         "title": "Paste with AI Detection"

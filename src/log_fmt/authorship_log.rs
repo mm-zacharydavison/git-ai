@@ -397,6 +397,7 @@ pub struct AuthorshipLog {
     /// Map of prompt session UUID -> AgentId
     pub prompts: BTreeMap<String, PromptRecord>,
     pub schema_version: String,
+    pub base_commit_sha: String,
 }
 
 impl AuthorshipLog {
@@ -406,6 +407,7 @@ impl AuthorshipLog {
             authors: BTreeMap::new(),
             prompts: BTreeMap::new(),
             schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
+            base_commit_sha: String::new(),
         }
     }
 
@@ -451,7 +453,16 @@ impl AuthorshipLog {
 
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
+        Self::from_working_log_with_base_commit(checkpoints, "")
+    }
+
+    /// Convert from working log checkpoints to authorship log with base commit SHA
+    pub fn from_working_log_with_base_commit(
+        checkpoints: &[Checkpoint],
+        base_commit_sha: &str,
+    ) -> Self {
         let mut authorship_log = AuthorshipLog::new();
+        authorship_log.base_commit_sha = base_commit_sha.to_string();
 
         // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
@@ -1399,5 +1410,27 @@ mod tests {
             resolve_username(&authorship_log, "src/test.rs", 8),
             Some("claude".to_string())
         );
+    }
+
+    #[test]
+    fn test_base_commit_sha_field() {
+        let entry =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 5)], vec![]);
+        let checkpoint = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "test_user".to_string(),
+            vec![entry],
+        );
+
+        // Test with empty base commit SHA
+        let authorship_log = AuthorshipLog::from_working_log(&[checkpoint.clone()]);
+        assert_eq!(authorship_log.base_commit_sha, "");
+
+        // Test with specific base commit SHA
+        let base_sha = "dcdd5667741816262deb45aaa7958cba68a6a72a";
+        let authorship_log_with_base =
+            AuthorshipLog::from_working_log_with_base_commit(&[checkpoint], base_sha);
+        assert_eq!(authorship_log_with_base.base_commit_sha, base_sha);
     }
 }
