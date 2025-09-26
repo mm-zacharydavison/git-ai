@@ -123,7 +123,7 @@ fn handle_checkpoint(args: &[String]) {
     let mut show_working_log = false;
     let mut reset = false;
     let mut model = None;
-    let mut prompt_json = None;
+    let mut _prompt_json = None;
     let mut prompt_path = None;
     let mut prompt_id = None;
 
@@ -158,7 +158,7 @@ fn handle_checkpoint(args: &[String]) {
             }
             "--prompt" => {
                 if i + 1 < args.len() {
-                    prompt_json = Some(args[i + 1].clone());
+                    _prompt_json = Some(args[i + 1].clone());
                     i += 2;
                 } else {
                     eprintln!("Error: --prompt requires a JSON value");

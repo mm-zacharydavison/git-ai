@@ -45,6 +45,7 @@ async fn check_claude_code() {
     }
 }
 
+#[allow(dead_code)]
 async fn check_codex() {
     let spinner = Spinner::new("Codex: checking install");
     spinner.start();
@@ -62,6 +63,7 @@ async fn check_codex() {
     }
 }
 
+#[allow(dead_code)]
 async fn check_windsurf() {
     let spinner = Spinner::new("Windsurf: checking status");
     spinner.start();
@@ -72,6 +74,7 @@ async fn check_windsurf() {
     spinner.error("Windsurf: Not installed");
 }
 
+#[allow(dead_code)]
 async fn check_cursor() {
     let spinner = Spinner::new("Cursor: checking status");
     spinner.start();
@@ -82,6 +85,7 @@ async fn check_cursor() {
     spinner.success("Cursor: Ready");
 }
 
+#[allow(dead_code)]
 async fn check_github_copilot() {
     let spinner = Spinner::new("GitHub Copilot: verifying");
     spinner.start();
@@ -154,6 +158,7 @@ impl Spinner {
         println!("\x1b[32m✓ {}\x1b[0m", message);
     }
 
+    #[allow(dead_code)]
     fn error(&self, message: &'static str) {
         // Clear spinner and show error with red X and red text
         self.pb.finish_and_clear();

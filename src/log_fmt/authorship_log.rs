@@ -234,6 +234,7 @@ impl AttributionEntry {
         self.lines.is_empty()
     }
 
+    #[allow(dead_code)]
     fn contains_line(&self, line: u32) -> bool {
         self.lines.iter().any(|r| r.contains(line))
     }
@@ -452,6 +453,7 @@ impl AuthorshipLog {
     }
 
     /// Convert from working log checkpoints to authorship log
+    #[allow(dead_code)]
     pub fn from_working_log(checkpoints: &[Checkpoint]) -> Self {
         Self::from_working_log_with_base_commit(checkpoints, "")
     }

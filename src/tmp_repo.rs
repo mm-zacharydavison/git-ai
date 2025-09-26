@@ -1,4 +1,4 @@
-use crate::commands::{blame, checkpoint};
+use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::post_commit::post_commit;
 use git2::{Repository, Signature};

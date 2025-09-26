@@ -388,7 +388,7 @@ fn get_subsequent_checkpoint_entries(
     repo: &Repository,
     files: &[String],
     file_hashes: &HashMap<String, String>,
-    previous_commit: Option<&str>,
+    _previous_commit: Option<&str>,
     base_commit: &str,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();

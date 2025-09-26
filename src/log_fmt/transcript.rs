@@ -33,6 +33,7 @@ impl Message {
     }
 
     /// Get the text content if this is a user or assistant message
+    #[allow(dead_code)]
     pub fn text(&self) -> Option<&String> {
         match self {
             Message::User { text } | Message::Assistant { text } => Some(text),
@@ -41,6 +42,7 @@ impl Message {
     }
 
     /// Check if this is a tool use message
+    #[allow(dead_code)]
     pub fn is_tool_use(&self) -> bool {
         matches!(self, Message::ToolUse { .. })
     }
@@ -71,6 +73,7 @@ impl AiTranscript {
     }
 
     /// Filter out tool use messages
+    #[allow(dead_code)]
     pub fn without_tool_use(&self) -> Self {
         let filtered_messages: Vec<Message> = self
             .messages
@@ -129,7 +132,7 @@ impl AiTranscript {
                                         }
                                     }
                                     Some("tool_use") => {
-                                        if let (Some(name), Some(input)) =
+                                        if let (Some(name), Some(_input)) =
                                             (item["name"].as_str(), item["input"].as_object())
                                         {
                                             transcript.add_message(Message::tool_use(
@@ -152,6 +155,7 @@ impl AiTranscript {
     }
 
     /// Convert transcript to JSONL format
+    #[allow(dead_code)]
     pub fn to_jsonl(&self) -> Result<String, serde_json::Error> {
         let mut jsonl = String::new();
 
