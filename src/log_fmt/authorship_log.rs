@@ -212,13 +212,13 @@ pub struct AttributionEntry {
 }
 
 impl AttributionEntry {
-    fn add_lines(&mut self, lines: &[LineRange]) {
+    pub fn add_lines(&mut self, lines: &[LineRange]) {
         self.lines.extend(lines.iter().cloned());
         self.lines.sort();
         self.deduplicate_and_merge_ranges();
     }
 
-    fn remove_lines(&mut self, to_remove: &[LineRange]) {
+    pub fn remove_lines(&mut self, to_remove: &[LineRange]) {
         let mut new_lines = Vec::new();
         for existing_range in &self.lines {
             let mut remaining = Vec::new();
@@ -230,7 +230,7 @@ impl AttributionEntry {
         self.lines = new_lines;
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }
 
@@ -443,7 +443,7 @@ impl AuthorshipLog {
     // Prompt hashing removed in v2; authorship log references prompts by AgentId.id and turn index
 
     /// Generate a stable author key based on username and email
-    fn generate_author_key(author: &Author) -> String {
+    pub fn generate_author_key(author: &Author) -> String {
         let mut hasher = Sha256::new();
         hasher.update(author.username.as_bytes());
         hasher.update(b"|");
