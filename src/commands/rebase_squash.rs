@@ -463,12 +463,13 @@ fn run_blame_in_context(
     );
 
     // Find the hanging commit
-    let _hanging_commit = repo.find_commit(Oid::from_str(hanging_commit_sha)?)?;
+    let hanging_commit = repo.find_commit(Oid::from_str(hanging_commit_sha)?)?;
 
     // Create blame options for the specific line
     let mut blame_opts = BlameOptions::new();
     blame_opts.min_line(line_number as usize);
     blame_opts.max_line(line_number as usize);
+    blame_opts.newest_commit(hanging_commit.id()); // Set the hanging commit as the newest commit for blame
 
     // Run blame on the file in the context of the hanging commit
     let blame = repo.blame_file(std::path::Path::new(file_path), Some(&mut blame_opts))?;
