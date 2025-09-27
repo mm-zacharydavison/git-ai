@@ -616,7 +616,7 @@ mod tests {
     use git2::Repository;
 
     #[test]
-    fn test_hello_world() {
+    fn test_in_order() {
         let repo = Repository::discover("/Users/aidancunniffe/Desktop/git-ai-test").unwrap();
 
         let new_sha = "78788430844d8ccc064e7da1327c374402efc232";
@@ -628,7 +628,27 @@ mod tests {
             &destination_branch,
             &head_sha,
             &new_sha,
-            true,
+            false,
+        )
+        .unwrap();
+
+        assert!(true);
+    }
+
+    #[test]
+    fn test_with_out_of_band_commits() {
+        let repo = Repository::discover("/Users/aidancunniffe/Desktop/git-ai-test").unwrap();
+
+        let new_sha = "09b999d49bf248aabb2cd9ef987e030551b7002e";
+        let destination_branch = "origin/main";
+        let head_sha = "87be297c9bebb904d877bc856c34419eeb0e979c"; // The HEAD of the original squashed commits
+
+        rewrite_authorship_after_squash_or_rebase(
+            &repo,
+            &destination_branch,
+            &head_sha,
+            &new_sha,
+            false,
         )
         .unwrap();
 
