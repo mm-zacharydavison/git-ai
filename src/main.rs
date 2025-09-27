@@ -109,6 +109,17 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        "squash-authorship" => {
+            // This command only works when called as git-ai, not as git alias
+            if binary_name == "git" {
+                eprintln!(
+                    "Error: squash-authorship command is only available when called as 'git-ai', not as 'git'"
+                );
+                std::process::exit(1);
+            }
+
+            commands::rebase_authorship::handle_squash_authorship(args);
+        }
         _ => {
             debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
@@ -725,6 +736,9 @@ fn print_help() {
     eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
     eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
     eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
+    eprintln!("  squash-authorship [new] Generate authorship from squashed commits");
+    eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
+    eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("");
     std::process::exit(0);
 }

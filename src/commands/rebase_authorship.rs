@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::git::find_repository;
 use crate::log_fmt::authorship_log::AuthorshipLog;
 use crate::utils::print_diff;
 use git2::{Oid, Repository};
@@ -32,18 +33,9 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // Step 2: Build the old_shas path from head_sha to origin_base
     let old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
 
-    println!("origin_base: {}", origin_base);
-    println!(
-        "Built commit path with {} commits: {:?}",
-        old_shas.len(),
-        old_shas
-    );
-
     // Step 3: Get the parent of the new commit
     let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
     let new_commit_parent = new_commit.parent(0)?;
-
-    println!("new_commit_parent: {}", new_commit_parent.id());
 
     // Step 4: Compute a diff between origin_base and new_commit_parent. Sometimes it's the same
     // sha. that's ok
@@ -56,11 +48,6 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
 
     // Print the diff in a readable format
-    print_diff(
-        &diff,
-        &format!("origin_base ({})", origin_base),
-        &format!("new_commit_parent ({})", new_commit_parent.id()),
-    );
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -70,8 +57,6 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         &new_commit_parent.id().to_string(),
         head_sha, // HEAD of old shas history
     )?;
-
-    println!("Created hanging commit: {}", hanging_commit_sha);
 
     // Step 5: Now get the diff between between new_commit and new_commit_parent.
     // We want just the changes between the two commits.
@@ -86,12 +71,12 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         &hanging_commit_sha,
     )?;
 
-    println!("Reconstructed authorship log with {:?}", new_authorship_log);
+    // println!("Reconstructed authorship log with {:?}", new_authorship_log);
 
     // Step (Last): Delete the hanging commit
 
     delete_hanging_commit(repo, &hanging_commit_sha)?;
-    println!("Deleted hanging commit: {}", hanging_commit_sha);
+    // println!("Deleted hanging commit: {}", hanging_commit_sha);
 
     if !dry_run {
         // Step (Save): Save the authorship log with the new sha as its id
@@ -459,10 +444,10 @@ fn run_blame_in_context(
     use crate::git::refs::get_reference_as_authorship_log;
     use git2::{BlameOptions, Oid};
 
-    println!(
-        "Running blame in context for line {} in file {}",
-        line_number, file_path
-    );
+    // println!(
+    //     "Running blame in context for line {} in file {}",
+    //     line_number, file_path
+    // );
 
     // Find the hanging commit
     let hanging_commit = repo.find_commit(Oid::from_str(hanging_commit_sha)?)?;
@@ -610,6 +595,82 @@ fn build_commit_path_to_base(
     Ok(commits)
 }
 
+pub fn handle_squash_authorship(args: &[String]) {
+    // Parse squash-authorship-specific arguments
+    let mut dry_run = false;
+    let mut branch = None;
+    let mut new_sha = None;
+    let mut old_sha = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dry-run" => {
+                dry_run = true;
+                i += 1;
+            }
+            _ => {
+                // Positional arguments: branch, new_sha, old_sha
+                if branch.is_none() {
+                    branch = Some(args[i].clone());
+                } else if new_sha.is_none() {
+                    new_sha = Some(args[i].clone());
+                } else if old_sha.is_none() {
+                    old_sha = Some(args[i].clone());
+                } else {
+                    eprintln!("Unknown squash-authorship argument: {}", args[i]);
+                    std::process::exit(1);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    // Validate required arguments
+    let branch = match branch {
+        Some(b) => b,
+        None => {
+            eprintln!("Error: branch argument is required");
+            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
+            std::process::exit(1);
+        }
+    };
+
+    let new_sha = match new_sha {
+        Some(s) => s,
+        None => {
+            eprintln!("Error: new_sha argument is required");
+            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
+            std::process::exit(1);
+        }
+    };
+
+    let old_sha = match old_sha {
+        Some(s) => s,
+        None => {
+            eprintln!("Error: old_sha argument is required");
+            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
+            std::process::exit(1);
+        }
+    };
+
+    // Find the git repository
+    let repo = match find_repository() {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) =
+        rewrite_authorship_after_squash_or_rebase(&repo, &branch, &old_sha, &new_sha, dry_run)
+    {
+        eprintln!("Squash authorship failed: {}", e);
+        std::process::exit(1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,7 +690,7 @@ mod tests {
             &destination_branch,
             &head_sha,
             &new_sha,
-            false,
+            true,
         )
         .unwrap();
 
@@ -649,7 +710,7 @@ mod tests {
             &destination_branch,
             &head_sha,
             &new_sha,
-            false,
+            true,
         )
         .unwrap();
 
