@@ -614,16 +614,17 @@ fn build_commit_path_to_base(
 mod tests {
     use super::*;
     use git2::Repository;
+    use insta::assert_debug_snapshot;
 
     #[test]
     fn test_in_order() {
-        let repo = Repository::discover("/Users/aidancunniffe/Desktop/git-ai-test").unwrap();
+        let repo = Repository::discover("tests/gitflow-repo").unwrap();
 
         let new_sha = "78788430844d8ccc064e7da1327c374402efc232";
         let destination_branch = "origin/main";
-        let head_sha = "bd57bd9e25df41cf1f6c2875b787b3b4b01cbe5b"; // The HEAD of the original squashed commits
+        let head_sha: &'static str = "bd57bd9e25df41cf1f6c2875b787b3b4b01cbe5b"; // The HEAD of the original squashed commits
 
-        rewrite_authorship_after_squash_or_rebase(
+        let authorship_log = rewrite_authorship_after_squash_or_rebase(
             &repo,
             &destination_branch,
             &head_sha,
@@ -632,18 +633,18 @@ mod tests {
         )
         .unwrap();
 
-        assert!(true);
+        assert_debug_snapshot!(authorship_log);
     }
 
     #[test]
     fn test_with_out_of_band_commits() {
-        let repo = Repository::discover("/Users/aidancunniffe/Desktop/git-ai-test").unwrap();
+        let repo = Repository::discover("tests/gitflow-repo").unwrap();
 
         let new_sha = "09b999d49bf248aabb2cd9ef987e030551b7002e";
         let destination_branch = "origin/main";
         let head_sha = "87be297c9bebb904d877bc856c34419eeb0e979c"; // The HEAD of the original squashed commits
 
-        rewrite_authorship_after_squash_or_rebase(
+        let authorship_log = rewrite_authorship_after_squash_or_rebase(
             &repo,
             &destination_branch,
             &head_sha,
@@ -652,6 +653,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(true);
+        assert_debug_snapshot!(authorship_log);
     }
 }

@@ -1,0 +1,39 @@
+---
+source: src/commands/rebase_authorship.rs
+expression: authorship_log
+---
+AuthorshipLog {
+    files: {
+        "abc.ts": [
+            AttributionEntry {
+                lines: [
+                    Single(
+                        1,
+                    ),
+                    Single(
+                        5,
+                    ),
+                    Single(
+                        9,
+                    ),
+                    Range(
+                        12,
+                        34,
+                    ),
+                ],
+                author_key: "e1cb90d1",
+                prompt_session_id: None,
+                prompt_turn: None,
+            },
+        ],
+    },
+    authors: {
+        "e1cb90d1": Author {
+            username: "Aidan Cunniffe",
+            email: "acunniffe@gmail.com",
+        },
+    },
+    prompts: {},
+    schema_version: "authorship/2.0.0",
+    base_commit_sha: "",
+}
