@@ -369,7 +369,7 @@ impl TmpRepo {
 
     /// Merges a branch into the current branch using real git CLI, always picking 'theirs' in conflicts
     pub fn merge_branch(&self, branch_name: &str, message: &str) -> Result<(), GitAiError> {
-        let output = Command::new("git")
+        let output = Command::new(crate::config::Config::get().git_cmd())
             .current_dir(&self.path)
             .args(&["merge", branch_name, "-m", message, "-X", "theirs"])
             .output()
@@ -393,7 +393,7 @@ impl TmpRepo {
         // First, get the current commit SHA before rebase
         // let old_sha = self.head_commit_sha()?;
 
-        let mut rebase = Command::new("git")
+        let mut rebase = Command::new(crate::config::Config::get().git_cmd())
             .current_dir(&self.path)
             .args(&["rebase", onto_branch])
             .output()
@@ -406,19 +406,19 @@ impl TmpRepo {
             // Find conflicted files (for our tests, just lines.md)
             let conflicted_file = self.path.join("lines.md");
             // Overwrite with theirs (the branch we're rebasing onto)
-            let theirs_content = Command::new("git")
+            let theirs_content = Command::new(crate::config::Config::get().git_cmd())
                 .current_dir(&self.path)
                 .args(&["show", &format!("{}:lines.md", onto_branch)])
                 .output()
                 .map_err(|e| GitAiError::Generic(format!("Failed to get theirs: {}", e)))?;
             fs::write(&conflicted_file, &theirs_content.stdout)?;
             // Add and continue
-            Command::new("git")
+            Command::new(crate::config::Config::get().git_cmd())
                 .current_dir(&self.path)
                 .args(&["add", "lines.md"])
                 .output()
                 .map_err(|e| GitAiError::Generic(format!("Failed to git add: {}", e)))?;
-            rebase = Command::new("git")
+            rebase = Command::new(crate::config::Config::get().git_cmd())
                 .current_dir(&self.path)
                 .args(&["rebase", "--continue"])
                 .output()
