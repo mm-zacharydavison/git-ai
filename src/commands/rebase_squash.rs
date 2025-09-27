@@ -7,14 +7,14 @@ use similar::{ChangeTag, TextDiff};
 
 /// Rewrite authorship log after a squash merge or rebase
 ///
-/// This function handles the complex case where multiple commits (old_shas) have been
-/// squashed into a single new commit (new_sha). It preserves AI authorship attribution
+/// This function handles the complex case where multiple commits from a linear history
+/// have been squashed into a single new commit (new_sha). It preserves AI authorship attribution
 /// by analyzing the diff and applying blame logic to identify which lines were originally
 /// authored by AI.
 ///
 /// # Arguments
 /// * `repo` - Git repository
-/// * `old_shas` - Array of commit SHAs that were squashed (in chronological order, oldest first)
+/// * `head_sha` - SHA of the HEAD commit of the original history that was squashed
 /// * `new_sha` - SHA of the new squash commit
 ///
 /// # Returns
@@ -22,28 +22,30 @@ use similar::{ChangeTag, TextDiff};
 pub fn rewrite_authorship_after_squash_or_rebase(
     repo: &Repository,
     _destination_branch: &str,
-    old_shas: &[&str],
+    head_sha: &str,
     new_sha: &str,
     dry_run: bool,
 ) -> Result<AuthorshipLog, GitAiError> {
-    if old_shas.is_empty() {
-        return Err(GitAiError::Generic(
-            "No old commit SHAs provided".to_string(),
-        ));
-    }
-
     // Step 1: Find the common origin base
-    // @TODO - validate that this is on destination branch.
-    let origin_base = find_common_origin_base(repo, old_shas, new_sha)?;
+    let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
+
+    // Step 2: Build the old_shas path from head_sha to origin_base
+    let old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
 
     println!("origin_base: {}", origin_base);
-    // Step 2: Get the parent of the new commit
+    println!(
+        "Built commit path with {} commits: {:?}",
+        old_shas.len(),
+        old_shas
+    );
+
+    // Step 3: Get the parent of the new commit
     let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
     let new_commit_parent = new_commit.parent(0)?;
 
     println!("new_commit_parent: {}", new_commit_parent.id());
 
-    // Step 3: Compute a diff between origin_base and new_commit_parent. Sometimes it's the same
+    // Step 4: Compute a diff between origin_base and new_commit_parent. Sometimes it's the same
     // sha. that's ok
     let origin_base_commit = repo.find_commit(Oid::from_str(&origin_base)?)?;
     let origin_base_tree = origin_base_commit.tree()?;
@@ -60,13 +62,13 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         &format!("new_commit_parent ({})", new_commit_parent.id()),
     );
 
-    // Step 4: Take this diff and apply it to the HEAD of the old shas history.
+    // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
     let hanging_commit_sha = apply_diff_as_merge_commit(
         repo,
         &origin_base,
         &new_commit_parent.id().to_string(),
-        &old_shas[0], // HEAD of old shas history
+        head_sha, // HEAD of old shas history
     )?;
 
     println!("Created hanging commit: {}", hanging_commit_sha);
@@ -525,19 +527,87 @@ fn run_blame_in_context(
     }
 }
 
-/// Find the common origin base between the old commits and the new commit's branch
-fn find_common_origin_base(
+/// Find the common origin base between the head commit and the new commit's branch
+fn find_common_origin_base_from_head(
     repo: &Repository,
-    old_shas: &[&str],
+    head_sha: &str,
     new_sha: &str,
 ) -> Result<String, GitAiError> {
     let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
-    let oldest_old_commit = repo.find_commit(Oid::from_str(&old_shas[&old_shas.len() - 1])?)?;
+    let head_commit = repo.find_commit(Oid::from_str(head_sha)?)?;
 
-    // Find the merge base between the oldest old commit and the new commit
-    let merge_base = repo.merge_base(oldest_old_commit.id(), new_commit.id())?;
+    // Find the merge base between the head commit and the new commit
+    let merge_base = repo.merge_base(head_commit.id(), new_commit.id())?;
 
     Ok(merge_base.to_string())
+}
+
+/// Build a path of commit SHAs from head_sha to the origin base
+///
+/// This function walks the commit history from head_sha backwards until it reaches
+/// the origin_base, collecting all commit SHAs in the path. If no valid linear path
+/// exists (incompatible lineage), it returns an error.
+///
+/// # Arguments
+/// * `repo` - Git repository
+/// * `head_sha` - SHA of the HEAD commit to start from
+/// * `origin_base` - SHA of the origin base commit to walk to
+///
+/// # Returns
+/// A vector of commit SHAs in chronological order (oldest first) representing
+/// the path from just after origin_base to head_sha
+fn build_commit_path_to_base(
+    repo: &Repository,
+    head_sha: &str,
+    origin_base: &str,
+) -> Result<Vec<String>, GitAiError> {
+    let head_commit = repo.find_commit(Oid::from_str(head_sha)?)?;
+    let origin_base_oid = Oid::from_str(origin_base)?;
+
+    let mut commits = Vec::new();
+    let mut current_commit = head_commit;
+
+    // Walk backwards from head to origin_base
+    loop {
+        // If we've reached the origin base, we're done
+        if current_commit.id() == origin_base_oid {
+            break;
+        }
+
+        // Add current commit to our path
+        commits.push(current_commit.id().to_string());
+
+        // Move to parent commit
+        match current_commit.parent(0) {
+            Ok(parent) => current_commit = parent,
+            Err(_) => {
+                return Err(GitAiError::Generic(format!(
+                    "Incompatible lineage: no path from {} to {}. Reached end of history without finding origin base.",
+                    head_sha, origin_base
+                )));
+            }
+        }
+
+        // Safety check: avoid infinite loops in case of circular references
+        if commits.len() > 10000 {
+            return Err(GitAiError::Generic(
+                "Incompatible lineage: path too long, possible circular reference".to_string(),
+            ));
+        }
+    }
+
+    // If we have no commits, head_sha and origin_base are the same
+    if commits.is_empty() {
+        return Err(GitAiError::Generic(format!(
+            "Incompatible lineage: head_sha ({}) and origin_base ({}) are the same commit",
+            head_sha, origin_base
+        )));
+    }
+
+    // Reverse to get chronological order (oldest first)
+    commits.reverse();
+
+    Ok(commits)
 }
 
 #[cfg(test)]
@@ -549,18 +619,15 @@ mod tests {
     fn test_hello_world() {
         let repo = Repository::discover("/Users/aidancunniffe/Desktop/git-ai-test").unwrap();
 
-        let destination_sha = "78788430844d8ccc064e7da1327c374402efc232";
+        let new_sha = "78788430844d8ccc064e7da1327c374402efc232";
         let destination_branch = "origin/main";
-        let old_shas = vec![
-            "b2b120e5784b1cfa7805c6dd51571626ccbf2942",
-            "bd57bd9e25df41cf1f6c2875b787b3b4b01cbe5b",
-        ];
+        let head_sha = "bd57bd9e25df41cf1f6c2875b787b3b4b01cbe5b"; // The HEAD of the original squashed commits
 
         rewrite_authorship_after_squash_or_rebase(
             &repo,
             &destination_branch,
-            &old_shas,
-            &destination_sha,
+            &head_sha,
+            &new_sha,
             true,
         )
         .unwrap();
