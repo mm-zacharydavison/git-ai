@@ -379,6 +379,8 @@ impl<'de> serde::Deserialize<'de> for AttributionEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
     pub agent_id: AgentId,
+    // pub model: Option<String>,
+    // pub human_author: Option<String>,
     pub messages: Vec<Message>,
 }
 

@@ -31,7 +31,6 @@ pub fn run(
         Err(_) => "initial".to_string(),
     };
 
-    // aidan
     let files = get_all_files(repo)?;
     let mut working_log = if reset {
         // If reset flag is set, start with an empty working log
@@ -40,7 +39,6 @@ pub fn run(
         get_or_create_working_log(repo, &base_commit)?
     };
 
-    // Clear ai-working-log/diffs references when reset is true
     if reset {
         clear_working_log_diffs(repo, &base_commit)?;
     }
@@ -55,6 +53,14 @@ pub fn run(
                 debug_log(&format!("Checkpoint {}: {}", i + 1, checkpoint.snapshot));
                 debug_log(&format!("  Diff: {}", checkpoint.diff));
                 debug_log(&format!("  Author: {}", checkpoint.author));
+                debug_log(&format!(
+                    "  Agent ID: {}",
+                    checkpoint
+                        .agent_id
+                        .as_ref()
+                        .map(|id| id.tool.clone())
+                        .unwrap_or_default()
+                ));
                 debug_log("  Entries:");
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
