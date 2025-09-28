@@ -112,6 +112,7 @@ impl WorkingLogEntry {
 pub struct AgentId {
     pub tool: String, // e.g., "cursor", "windsurf"
     pub id: String,   // id in their domain
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +294,7 @@ mod tests {
 
         let agent_id = AgentId {
             tool: "cursor".to_string(),
+            model: "gpt-4o".to_string(),
             id: "session-abc123".to_string(),
         };
 

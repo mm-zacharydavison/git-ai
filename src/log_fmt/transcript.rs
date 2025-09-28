@@ -87,6 +87,83 @@ impl AiTranscript {
         }
     }
 
+    /// Parse a Claude Code JSONL file into a transcript and extract model info
+    pub fn from_claude_code_jsonl_with_model(
+        jsonl_content: &str,
+    ) -> Result<(Self, Option<String>), serde_json::Error> {
+        let mut transcript = AiTranscript::new();
+        let mut model = None;
+
+        for line in jsonl_content.lines() {
+            if !line.trim().is_empty() {
+                // Parse the raw JSONL entry
+                let raw_entry: serde_json::Value = serde_json::from_str(line)?;
+
+                // Extract model from assistant messages if we haven't found it yet
+                if model.is_none() && raw_entry["type"].as_str() == Some("assistant") {
+                    if let Some(model_str) = raw_entry["message"]["model"].as_str() {
+                        model = Some(model_str.to_string());
+                    }
+                }
+
+                // Extract messages based on the type
+                match raw_entry["type"].as_str() {
+                    Some("user") => {
+                        // Handle user messages
+                        if let Some(content) = raw_entry["message"]["content"].as_str() {
+                            if !content.trim().is_empty() {
+                                transcript.add_message(Message::user(content.to_string()));
+                            }
+                        } else if let Some(content_array) =
+                            raw_entry["message"]["content"].as_array()
+                        {
+                            // Handle user messages with content array (like tool results)
+                            for item in content_array {
+                                if let Some(text) = item["content"].as_str() {
+                                    if !text.trim().is_empty() {
+                                        transcript.add_message(Message::user(text.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some("assistant") => {
+                        // Handle assistant messages
+                        if let Some(content_array) = raw_entry["message"]["content"].as_array() {
+                            for item in content_array {
+                                match item["type"].as_str() {
+                                    Some("text") => {
+                                        if let Some(text) = item["text"].as_str() {
+                                            if !text.trim().is_empty() {
+                                                transcript.add_message(Message::assistant(
+                                                    text.to_string(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    Some("tool_use") => {
+                                        if let (Some(name), Some(_input)) =
+                                            (item["name"].as_str(), item["input"].as_object())
+                                        {
+                                            transcript.add_message(Message::tool_use(
+                                                name.to_string(),
+                                                item["input"].clone(),
+                                            ));
+                                        }
+                                    }
+                                    _ => continue, // Skip unknown content types
+                                }
+                            }
+                        }
+                    }
+                    _ => continue, // Skip unknown message types
+                }
+            }
+        }
+
+        Ok((transcript, model))
+    }
+
     /// Parse a Claude Code JSONL file into a transcript
     pub fn from_claude_code_jsonl(jsonl_content: &str) -> Result<Self, serde_json::Error> {
         let mut transcript = AiTranscript::new();
@@ -194,6 +271,40 @@ mod tests {
         assert!(!transcript.messages().is_empty());
 
         println!("Transcript: {:?}", transcript);
+        // Print the parsed transcript for inspection
+        println!("Parsed {} messages:", transcript.messages().len());
+        for (i, message) in transcript.messages().iter().enumerate() {
+            match message {
+                Message::User { text } => println!("{}: User: {}", i, text),
+                Message::Assistant { text } => println!("{}: Assistant: {}", i, text),
+                Message::ToolUse { name, input } => {
+                    println!("{}: ToolUse: {} with input: {:?}", i, name, input)
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_example_claude_code_jsonl_with_model() {
+        let jsonl_content = fs::read_to_string(
+            "src/commands/checkpoint_agent/claude_code/test_data/example-claude-code.jsonl",
+        )
+        .expect("Failed to read example JSONL file");
+
+        let (transcript, model) = AiTranscript::from_claude_code_jsonl_with_model(&jsonl_content)
+            .expect("Failed to parse JSONL");
+
+        // Verify we parsed some messages
+        assert!(!transcript.messages().is_empty());
+
+        // Verify we extracted the model
+        assert!(model.is_some());
+        let model_name = model.unwrap();
+        println!("Extracted model: {}", model_name);
+
+        // Based on the example file, we should get claude-sonnet-4-20250514
+        assert_eq!(model_name, "claude-sonnet-4-20250514");
+
         // Print the parsed transcript for inspection
         println!("Parsed {} messages:", transcript.messages().len());
         for (i, message) in transcript.messages().iter().enumerate() {

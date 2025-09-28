@@ -379,8 +379,8 @@ impl<'de> serde::Deserialize<'de> for AttributionEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
     pub agent_id: AgentId,
-    // pub model: Option<String>,
-    // pub human_author: Option<String>,
+    pub model: Option<String>,
+    pub human_author: Option<String>,
     pub messages: Vec<Message>,
 }
 
@@ -473,6 +473,8 @@ impl AuthorshipLog {
                         let entry = authorship_log.prompts.entry(session_id.clone()).or_insert(
                             PromptRecord {
                                 agent_id: agent.clone(),
+                                model: Some(agent.model.clone()),
+                                human_author: None, // TODO: Extract from git config or other source
                                 messages: transcript.messages().to_vec(),
                             },
                         );
@@ -1243,6 +1245,7 @@ mod tests {
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: "session-abc123".to_string(),
+            model: "claude-3-sonnet".to_string(),
         };
 
         let mut checkpoint = Checkpoint::new(
@@ -1289,6 +1292,7 @@ mod tests {
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: "session-abc123".to_string(),
+            model: "claude-3-sonnet".to_string(),
         };
 
         let checkpoint = Checkpoint {
@@ -1337,6 +1341,7 @@ mod tests {
         let agent_id1 = AgentId {
             tool: "cursor".to_string(),
             id: "session-abc123".to_string(),
+            model: "claude-3-sonnet".to_string(),
         };
 
         let mut transcript2 = AiTranscript::new();
@@ -1345,6 +1350,7 @@ mod tests {
         let agent_id2 = AgentId {
             tool: "cursor".to_string(),
             id: "session-xyz789".to_string(),
+            model: "gpt-4".to_string(),
         };
 
         // Create two checkpoints with different transcripts
@@ -1427,6 +1433,7 @@ mod tests {
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: "session-xyz789".to_string(),
+            model: "claude-3-sonnet".to_string(),
         };
 
         let mut ai_checkpoint = Checkpoint::new(

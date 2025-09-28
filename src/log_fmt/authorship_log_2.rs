@@ -467,7 +467,10 @@ mod tests {
                 agent_id: crate::log_fmt::working_log::AgentId {
                     tool: "cursor".to_string(),
                     id: "session_123".to_string(),
+                    model: "claude-3-sonnet".to_string(),
                 },
+                model: Some("claude-3-sonnet".to_string()),
+                human_author: None,
                 messages: vec![],
             },
         );
