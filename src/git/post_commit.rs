@@ -55,13 +55,31 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
         filtered_working_log.len()
     ));
 
+    // Get git user information for human_author field
+    let human_author = match repo.config() {
+        Ok(config) => {
+            let name = config
+                .get_string("user.name")
+                .unwrap_or_else(|_| "unknown".to_string());
+            let email = config
+                .get_string("user.email")
+                .unwrap_or_else(|_| "".to_string());
+            Some(format!("{} <{}>", name, email))
+        }
+        Err(_) => None,
+    };
+
     // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---
-    let authorship_log =
-        AuthorshipLog::from_working_log_with_base_commit(&filtered_working_log, &parent_sha);
+    let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
+        &filtered_working_log,
+        &parent_sha,
+        human_author.as_deref(),
+    );
 
     // Convert to new format and serialize
     let v3_log = AuthorshipLogV3::from_authorship_log(&authorship_log);
-    let authorship_json = v3_log.serialize_to_string()
+    let authorship_json = v3_log
+        .serialize_to_string()
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
     let ref_name = format!("ai/authorship/{}", commit_sha);

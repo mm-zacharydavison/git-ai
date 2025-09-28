@@ -356,16 +356,12 @@ fn reconstruct_authorship_from_diff(
 
             // Parse the prompt key to extract author and prompt info
             let parts: Vec<&str> = prompt_key.split(':').collect();
-            let (author_key, prompt_session_id, prompt_turn) = if parts.len() == 3 {
-                // Has prompt info: "author_key:prompt_id:turn"
-                (
-                    parts[0].to_string(),
-                    Some(parts[1].to_string()),
-                    Some(parts[2].parse::<u32>().unwrap_or(0)),
-                )
+            let (author_key, prompt_session_id) = if parts.len() == 2 {
+                // Has prompt info: "author_key:prompt_id"
+                (parts[0].to_string(), Some(parts[1].to_string()))
             } else {
                 // No prompt info: just "author_key"
-                (prompt_key.clone(), None, None)
+                (prompt_key.clone(), None)
             };
 
             // Find the author info from the original entries
@@ -406,7 +402,6 @@ fn reconstruct_authorship_from_diff(
                 lines: ranges,
                 author_key,
                 prompt_session_id,
-                prompt_turn,
             });
         }
     }
@@ -490,7 +485,7 @@ fn run_blame_in_context(
         // Get the line attribution from the AI authorship log
         if let Some((author, prompt)) = authorship_log.get_line_attribution(file_path, line_number)
         {
-            Ok(Some((author.clone(), prompt.map(|(p, t)| (p.clone(), t)))))
+            Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
             let commit = repo.find_commit(commit_id)?;

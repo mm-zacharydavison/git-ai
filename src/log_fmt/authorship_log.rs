@@ -153,7 +153,6 @@ pub struct AttributionEntry {
     pub lines: Vec<LineRange>,
     pub author_key: String,
     pub prompt_session_id: Option<String>,
-    pub prompt_turn: Option<u32>,
 }
 
 impl AttributionEntry {
@@ -299,7 +298,7 @@ impl AuthorshipLog {
         &self,
         file: &str,
         line: u32,
-    ) -> Option<(&Author, Option<(&PromptRecord, u32)>)> {
+    ) -> Option<(&Author, Option<&PromptRecord>)> {
         let entries = self.files.get(file)?;
         // Prefer later entries (latest wins)
         for e in entries.iter().rev() {
@@ -307,10 +306,10 @@ impl AuthorshipLog {
             let contains = e.lines.iter().any(|r| r.contains(line));
             if contains {
                 if let Some(author) = self.authors.get(&e.author_key) {
-                    let prompt = match (&e.prompt_session_id, e.prompt_turn) {
-                        (Some(session), Some(turn)) => self.prompts.get(session).map(|p| (p, turn)),
-                        _ => None,
-                    };
+                    let prompt = e
+                        .prompt_session_id
+                        .as_ref()
+                        .and_then(|session| self.prompts.get(session));
                     return Some((author, prompt));
                 }
             }
@@ -341,13 +340,22 @@ impl AuthorshipLog {
         checkpoints: &[Checkpoint],
         base_commit_sha: &str,
     ) -> Self {
+        Self::from_working_log_with_base_commit_and_human_author(checkpoints, base_commit_sha, None)
+    }
+
+    /// Convert from working log checkpoints to authorship log with base commit SHA and human author
+    pub fn from_working_log_with_base_commit_and_human_author(
+        checkpoints: &[Checkpoint],
+        base_commit_sha: &str,
+        human_author: Option<&str>,
+    ) -> Self {
         let mut authorship_log = AuthorshipLog::new();
         authorship_log.base_commit_sha = base_commit_sha.to_string();
 
         // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
             // If there is an agent session, record it by its UUID (AgentId.id)
-            let (session_id_opt, turn_opt) =
+            let session_id_opt =
                 match (&checkpoint.agent_id, &checkpoint.transcript) {
                     (Some(agent), Some(transcript)) => {
                         let session_id = agent.id.clone();
@@ -356,17 +364,16 @@ impl AuthorshipLog {
                             PromptRecord {
                                 agent_id: agent.clone(),
                                 model: Some(agent.model.clone()),
-                                human_author: None, // TODO: Extract from git config or other source
+                                human_author: human_author.map(|s| s.to_string()),
                                 messages: transcript.messages().to_vec(),
                             },
                         );
                         if entry.messages.len() < transcript.messages().len() {
                             entry.messages = transcript.messages().to_vec();
                         }
-                        let turn = (transcript.messages().len().saturating_sub(1)) as u32;
-                        (Some(session_id), Some(turn))
+                        Some(session_id)
                     }
-                    _ => (None, None),
+                    _ => None,
                 };
             for entry in &checkpoint.entries {
                 // Process deletions first (remove lines from all authors)
@@ -410,7 +417,6 @@ impl AuthorshipLog {
                     }
                     let author_key = key;
                     let prompt_session_id = session_id_opt.clone();
-                    let prompt_turn = turn_opt;
 
                     // Create a single range to remove from all other entries
                     let lines_to_remove = LineRange::compress_lines(&added_lines);
@@ -421,9 +427,7 @@ impl AuthorshipLog {
                         rec.remove_lines(&lines_to_remove);
                     }
                     if let Some(rec) = file_entries.iter_mut().find(|r| {
-                        r.author_key == author_key
-                            && r.prompt_session_id == prompt_session_id
-                            && r.prompt_turn == prompt_turn
+                        r.author_key == author_key && r.prompt_session_id == prompt_session_id
                     }) {
                         rec.add_lines(&lines_to_remove);
                     } else {
@@ -431,7 +435,6 @@ impl AuthorshipLog {
                             lines: Vec::new(),
                             author_key: author_key.clone(),
                             prompt_session_id: prompt_session_id.clone(),
-                            prompt_turn: prompt_turn,
                         };
                         new_rec.add_lines(&lines_to_remove);
                         file_entries.push(new_rec);
@@ -899,7 +902,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 5)]);
         entry.add_lines(&[LineRange::Range(1, 5)]);
@@ -914,7 +916,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 5)]);
         entry.add_lines(&[LineRange::Range(6, 10)]);
@@ -928,7 +929,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 8)]);
         entry.add_lines(&[LineRange::Range(5, 12)]);
@@ -942,7 +942,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 5)]);
         entry.add_lines(&[LineRange::Single(6)]);
@@ -957,7 +956,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Single(5)]);
         entry.add_lines(&[LineRange::Single(6)]);
@@ -972,7 +970,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         entry.add_lines(&[LineRange::Range(1, 3)]);
         entry.add_lines(&[LineRange::Single(4)]);
@@ -992,7 +989,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "a".to_string(),
             prompt_session_id: None,
-            prompt_turn: None,
         };
         for _ in 0..100 {
             entry.add_lines(&[LineRange::Range(412, 414)]);
@@ -1025,7 +1021,6 @@ mod tests {
             lines: Vec::new(),
             author_key: "e892bede".to_string(),
             prompt_session_id: Some("bacce5c7-2718-45ef-8364-b916522bcde3".to_string()),
-            prompt_turn: Some(6),
         };
 
         // Add the same ranges many times (like in the user's example)
@@ -1095,7 +1090,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let e = &entries[0];
         assert_eq!(e.prompt_session_id.as_deref(), Some("session-abc123"));
-        assert_eq!(e.prompt_turn, Some(1));
         // Check prompt registry stores the agent session
         let prompt = authorship_log.prompts.get("session-abc123").unwrap();
         assert_eq!(prompt.agent_id.tool, "cursor");

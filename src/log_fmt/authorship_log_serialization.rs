@@ -86,6 +86,77 @@ impl AuthorshipLogV3 {
         }
     }
 
+    /// Merge overlapping and adjacent line ranges
+    fn merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+
+        let mut sorted_ranges = ranges.to_vec();
+        sorted_ranges.sort_by(|a, b| {
+            let a_start = match a {
+                LineRange::Single(line) => *line,
+                LineRange::Range(start, _) => *start,
+            };
+            let b_start = match b {
+                LineRange::Single(line) => *line,
+                LineRange::Range(start, _) => *start,
+            };
+            a_start.cmp(&b_start)
+        });
+
+        let mut merged = Vec::new();
+        for current in sorted_ranges {
+            if let Some(last) = merged.last_mut() {
+                if Self::ranges_can_merge(last, &current) {
+                    *last = Self::merge_ranges(last, &current);
+                } else {
+                    merged.push(current);
+                }
+            } else {
+                merged.push(current);
+            }
+        }
+
+        merged
+    }
+
+    /// Check if two ranges can be merged (overlapping or adjacent)
+    fn ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
+        let (start1, end1) = match range1 {
+            LineRange::Single(line) => (*line, *line),
+            LineRange::Range(start, end) => (*start, *end),
+        };
+        let (start2, end2) = match range2 {
+            LineRange::Single(line) => (*line, *line),
+            LineRange::Range(start, end) => (*start, *end),
+        };
+
+        // Ranges can merge if they overlap or are adjacent
+        start1 <= end2 + 1 && start2 <= end1 + 1
+    }
+
+    /// Merge two ranges into one
+    fn merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
+        let (start1, end1) = match range1 {
+            LineRange::Single(line) => (*line, *line),
+            LineRange::Range(start, end) => (*start, *end),
+        };
+        let (start2, end2) = match range2 {
+            LineRange::Single(line) => (*line, *line),
+            LineRange::Range(start, end) => (*start, *end),
+        };
+
+        let start = start1.min(start2);
+        let end = end1.max(end2);
+
+        if start == end {
+            LineRange::Single(start)
+        } else {
+            LineRange::Range(start, end)
+        }
+    }
+
     /// Convert from the old AuthorshipLog format to the new format
     pub fn from_authorship_log(log: &AuthorshipLog) -> Self {
         let mut v3_log = Self::new();
@@ -100,16 +171,31 @@ impl AuthorshipLogV3 {
         for (file_path, attributions) in &log.files {
             let mut file_attestation = FileAttestation::new(file_path.clone());
 
+            // Group attributions by prompt session ID to merge line ranges
+            let mut session_ranges: BTreeMap<String, Vec<LineRange>> = BTreeMap::new();
+
             for attribution in attributions {
                 // Only process AI-generated content - skip human content
                 if let Some(session_id) = &attribution.prompt_session_id {
-                    // Hash always corresponds to a prompt in the prompts section
-                    // Use session ID as the hash - this maps to an entry in prompts
-                    let hash = session_id.clone();
-                    let entry = AttestationEntry::new(hash, attribution.lines.clone());
-                    file_attestation.add_entry(entry);
+                    session_ranges
+                        .entry(session_id.clone())
+                        .or_insert_with(Vec::new)
+                        .extend(attribution.lines.iter().cloned());
                 }
                 // Skip entries without prompt_session_id (human content)
+            }
+
+            // Create attestation entries for each unique session ID
+            for (session_id, mut line_ranges) in session_ranges {
+                // Sort and deduplicate line ranges
+                line_ranges.sort();
+                line_ranges.dedup();
+
+                // Merge overlapping/adjacent ranges
+                let merged_ranges = Self::merge_line_ranges(&line_ranges);
+
+                let entry = AttestationEntry::new(session_id, merged_ranges);
+                file_attestation.add_entry(entry);
             }
 
             if !file_attestation.entries.is_empty() {
@@ -203,7 +289,7 @@ impl AuthorshipLogV3 {
         &self,
         file: &str,
         line: u32,
-    ) -> Option<(&Author, Option<(&PromptRecord, u32)>)> {
+    ) -> Option<(&Author, Option<&PromptRecord>)> {
         // Find the file attestation
         let file_attestation = self.attestations.iter().find(|f| f.file_path == file)?;
 
@@ -227,8 +313,8 @@ impl AuthorshipLogV3 {
                     });
 
                     if let Some(author) = author {
-                        // Return author and prompt info (turn is always 0 for V3 format)
-                        return Some((author, Some((prompt_record, 0))));
+                        // Return author and prompt info
+                        return Some((author, Some(prompt_record)));
                     }
                 }
             }
@@ -617,5 +703,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_no_attestations() {
+        // Test that serialization and deserialization work correctly when there are no attestations
+        let mut log = AuthorshipLogV3::new();
+        log.metadata.base_commit_sha = "abc123".to_string();
+
+        // Add some metadata but no attestations
+        log.metadata.authors.insert(
+            "author1".to_string(),
+            Author {
+                username: "alice".to_string(),
+                email: "alice@example.com".to_string(),
+            },
+        );
+
+        log.metadata.prompts.insert(
+            "prompt1".to_string(),
+            crate::log_fmt::authorship_log::PromptRecord {
+                agent_id: crate::log_fmt::working_log::AgentId {
+                    tool: "cursor".to_string(),
+                    id: "session_123".to_string(),
+                    model: "claude-3-sonnet".to_string(),
+                },
+                model: Some("claude-3-sonnet".to_string()),
+                human_author: None,
+                messages: vec![],
+            },
+        );
+
+        // Serialize and verify the format
+        let serialized = log.serialize_to_string().unwrap();
+        assert_debug_snapshot!(serialized);
+
+        // Test roundtrip: deserialize and verify structure matches
+        let deserialized = AuthorshipLogV3::deserialize_from_string(&serialized).unwrap();
+        assert_debug_snapshot!(deserialized);
+
+        // Verify that the deserialized log has the same metadata but no attestations
+        assert_eq!(deserialized.metadata.base_commit_sha, "abc123");
+        assert_eq!(deserialized.metadata.authors.len(), 1);
+        assert_eq!(deserialized.metadata.prompts.len(), 1);
+        assert_eq!(deserialized.attestations.len(), 0);
     }
 }

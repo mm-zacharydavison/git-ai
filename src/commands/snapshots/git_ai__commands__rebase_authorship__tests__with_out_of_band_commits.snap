@@ -26,7 +26,6 @@ AuthorshipLog {
                 ],
                 author_key: "e1cb90d1",
                 prompt_session_id: None,
-                prompt_turn: None,
             },
         ],
     },

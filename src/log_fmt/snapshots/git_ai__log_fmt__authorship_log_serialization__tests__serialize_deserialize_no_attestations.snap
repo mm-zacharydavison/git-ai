@@ -1,0 +1,5 @@
+---
+source: src/log_fmt/authorship_log_serialization.rs
+expression: serialized
+---
+"---\n{\n  \"schema_version\": \"authorship/3.0.0\",\n  \"base_commit_sha\": \"abc123\",\n  \"authors\": {\n    \"author1\": {\n      \"username\": \"alice\",\n      \"email\": \"alice@example.com\"\n    }\n  },\n  \"prompts\": {\n    \"prompt1\": {\n      \"agent_id\": {\n        \"tool\": \"cursor\",\n        \"id\": \"session_123\",\n        \"model\": \"claude-3-sonnet\"\n      },\n      \"model\": \"claude-3-sonnet\",\n      \"human_author\": null,\n      \"messages\": []\n    }\n  }\n}"

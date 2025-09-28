@@ -95,7 +95,6 @@ pub fn get_reference_as_authorship_log_v3(
     }
 }
 
-
 pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
     let full_ref_name = format!("refs/{}", ref_name);
 
