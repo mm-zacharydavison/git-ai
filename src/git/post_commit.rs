@@ -1,6 +1,7 @@
 use crate::error::GitAiError;
 use crate::git::refs::{delete_reference, put_reference};
 use crate::log_fmt::authorship_log::AuthorshipLog;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
 use git2::Repository;
@@ -58,12 +59,10 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
     let authorship_log =
         AuthorshipLog::from_working_log_with_base_commit(&filtered_working_log, &parent_sha);
 
-    // Use pretty formatting in debug builds, single-line in release builds
-    let authorship_json = if cfg!(debug_assertions) {
-        serde_json::to_string_pretty(&authorship_log)?
-    } else {
-        serde_json::to_string(&authorship_log)?
-    };
+    // Convert to new format and serialize
+    let v3_log = AuthorshipLogV3::from_authorship_log(&authorship_log);
+    let authorship_json = v3_log.serialize_to_string()
+        .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
     let ref_name = format!("ai/authorship/{}", commit_sha);
     put_reference(

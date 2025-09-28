@@ -219,7 +219,9 @@ fn test_blame_basic_format() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 3\nLine 4\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &[]);
@@ -252,7 +254,9 @@ fn test_blame_line_range() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 5\nLine 6\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     // Test -L flag
@@ -282,7 +286,9 @@ fn test_blame_porcelain_format() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["--porcelain"]);
@@ -311,7 +317,9 @@ fn test_blame_show_email() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-e"]);
@@ -347,7 +355,9 @@ fn test_blame_show_name() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-f"]);
@@ -386,7 +396,9 @@ fn test_blame_show_number() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-n"]);
@@ -415,7 +427,9 @@ fn test_blame_suppress_author() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-s"]);
@@ -454,7 +468,9 @@ fn test_blame_long_rev() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-l"]);
@@ -504,7 +520,9 @@ fn test_blame_raw_timestamp() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-t"]);
@@ -543,7 +561,9 @@ fn test_blame_abbrev() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["--abbrev", "4"]);
@@ -572,7 +592,9 @@ fn test_blame_blank_boundary() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["-b"]);
@@ -600,7 +622,9 @@ fn test_blame_show_root() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["--root"]);
@@ -639,7 +663,7 @@ fn test_blame_show_root() {
 //         .trigger_checkpoint_with_author("test_user")
 //         .unwrap();
 //     file.append("Line 2\n").unwrap();
-//     tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+//     tmp_repo.trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor")).unwrap();
 //     tmp_repo.commit_with_message("Initial commit").unwrap();
 
 //     let git_output = run_git_blame(&repo_path, "test.txt", &["--show-stats"]);
@@ -677,7 +701,9 @@ fn test_blame_date_format() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["--date", "short"]);
@@ -715,7 +741,9 @@ fn test_blame_multiple_flags() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 4\nLine 5\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     // Test multiple flags together
@@ -762,7 +790,9 @@ fn test_blame_incremental_format() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["--incremental"]);
@@ -791,7 +821,9 @@ fn test_blame_line_porcelain() {
         .trigger_checkpoint_with_author("test_user")
         .unwrap();
     file.append("Line 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     let git_output = run_git_blame(&repo_path, "test.txt", &["--line-porcelain"]);
@@ -823,7 +855,9 @@ fn test_blame_with_ai_authorship() {
     file.append("Line 2\n").unwrap();
 
     // Second commit by AI
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     file.append("Line 3\n").unwrap();
 
     // Third commit by human
@@ -862,7 +896,8 @@ fn test_blame_with_ai_authorship() {
 
     // Verify git-ai shows AI authors where appropriate
     assert!(
-        git_ai_authors.iter().any(|a| a.contains("Claude")),
-        "Should show Claude as author"
+        git_ai_authors.iter().any(|a| a.contains("cursor")),
+        "Should show cursor as author. Got: {:?}",
+        git_ai_authors
     );
 }

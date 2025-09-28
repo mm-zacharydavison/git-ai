@@ -1,9 +1,8 @@
 use crate::error::GitAiError;
 use crate::git::find_repository;
 use crate::log_fmt::authorship_log::AuthorshipLog;
-use crate::utils::print_diff;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
 use git2::{Oid, Repository};
-use serde_json;
 use similar::{ChangeTag, TextDiff};
 
 /// Rewrite authorship log after a squash merge or rebase
@@ -80,11 +79,10 @@ pub fn rewrite_authorship_after_squash_or_rebase(
 
     if !dry_run {
         // Step (Save): Save the authorship log with the new sha as its id
-        let authorship_json = if cfg!(debug_assertions) {
-            serde_json::to_string_pretty(&new_authorship_log)?
-        } else {
-            serde_json::to_string(&new_authorship_log)?
-        };
+        let v3_log = AuthorshipLogV3::from_authorship_log(&new_authorship_log);
+        let authorship_json = v3_log
+            .serialize_to_string()
+            .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
         let ref_name = format!("ai/authorship/{}", new_sha);
         crate::git::refs::put_reference(

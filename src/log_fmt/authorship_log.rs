@@ -1,8 +1,6 @@
 use crate::log_fmt::transcript::Message;
 use crate::log_fmt::working_log::{AgentId, Checkpoint, Line};
-use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
-use serde::{Deserializer, Serializer, ser::SerializeSeq};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,7 +15,7 @@ pub struct Author {
 }
 
 /// Represents either a single line or a range of lines
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub enum LineRange {
     Single(u32),
     Range(u32, u32), // start, end (inclusive)
@@ -149,61 +147,8 @@ impl fmt::Display for LineRange {
     }
 }
 
-impl serde::Serialize for LineRange {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            LineRange::Single(l) => serializer.serialize_u32(*l),
-            LineRange::Range(start, end) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element(start)?;
-                seq.serialize_element(end)?;
-                seq.end()
-            }
-        }
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for LineRange {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct LineRangeVisitor;
-        impl<'de> Visitor<'de> for LineRangeVisitor {
-            type Value = LineRange;
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("an integer or a two-element array")
-            }
-            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(LineRange::Single(value as u32))
-            }
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                let start: u32 = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let end: u32 = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                Ok(LineRange::Range(start, end))
-            }
-        }
-        deserializer.deserialize_any(LineRangeVisitor)
-    }
-}
-
-// Deprecated legacy structures removed in favor of compact format
-
-/// Compact per-file attribution entry (v2): [lines, author_key, prompt_session_id?, prompt_turn?]
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Per-file attribution entry - used internally for processing, not for serialization
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AttributionEntry {
     pub lines: Vec<LineRange>,
     pub author_key: String,
@@ -311,70 +256,6 @@ impl AttributionEntry {
     }
 }
 
-impl serde::Serialize for AttributionEntry {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        use serde::ser::SerializeSeq;
-        let len = if self.prompt_session_id.is_some() {
-            4
-        } else {
-            2
-        };
-        let mut seq = serializer.serialize_seq(Some(len))?;
-        seq.serialize_element(&self.lines)?;
-        seq.serialize_element(&self.author_key)?;
-        if let Some(session) = &self.prompt_session_id {
-            seq.serialize_element(session)?;
-            seq.serialize_element(&self.prompt_turn.unwrap_or(0))?;
-        }
-        seq.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for AttributionEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct VisitorImpl;
-        impl<'de> Visitor<'de> for VisitorImpl {
-            type Value = AttributionEntry;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("an array: [lines, author_key, prompt_session_id?, prompt_turn?]")
-            }
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                let lines: Vec<LineRange> = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let author_key: String = seq
-                    .next_element()?
-                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                // Optional session id
-                let prompt_session_id: Option<String> = seq.next_element()?;
-                // Optional turn index (only meaningful if session id present)
-                let prompt_turn: Option<u32> = if prompt_session_id.is_some() {
-                    // If missing, default to 0
-                    Some(seq.next_element()?.unwrap_or(0))
-                } else {
-                    None
-                };
-                Ok(AttributionEntry {
-                    lines,
-                    author_key,
-                    prompt_session_id,
-                    prompt_turn,
-                })
-            }
-        }
-        deserializer.deserialize_any(VisitorImpl)
-    }
-}
-
 /// Prompt session details stored in the top-level prompts map keyed by AgentId.id (UUID)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
@@ -387,7 +268,8 @@ pub struct PromptRecord {
 /// Per-file attributions are arrays of compact entries
 pub type FileAttributions = Vec<AttributionEntry>;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Legacy authorship log format - use AuthorshipLogV3 for new serialization
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct AuthorshipLog {
     pub files: BTreeMap<String, FileAttributions>,
     pub authors: BTreeMap<String, Author>,
@@ -568,26 +450,6 @@ impl AuthorshipLog {
 impl Default for AuthorshipLog {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Display intentionally minimal for compact format
-impl fmt::Display for AuthorshipLog {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (file_path, entries) in &self.files {
-            write!(f, "{}", file_path)?;
-            for e in entries {
-                write!(
-                    f,
-                    "\n  {:?} {} {}",
-                    e.lines,
-                    e.author_key,
-                    e.prompt_session_id.as_deref().unwrap_or("")
-                )?;
-            }
-            writeln!(f)?;
-        }
-        Ok(())
     }
 }
 
@@ -1032,36 +894,6 @@ mod tests {
     }
 
     #[test]
-    fn test_line_range_compact_serialization() {
-        use serde_json;
-        let ranges = vec![
-            LineRange::Single(1),
-            LineRange::Range(2, 4),
-            LineRange::Single(19),
-        ];
-        let json = serde_json::to_string(&ranges).unwrap();
-        assert_eq!(json, "[1,[2,4],19]");
-        let deserialized: Vec<LineRange> = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, ranges);
-    }
-
-    #[test]
-    fn test_new_authorship_format_serialization() {
-        use serde_json;
-        // Serialize a single attribution entry in compact array form
-        let entry = AttributionEntry {
-            lines: vec![LineRange::Range(1, 5)],
-            author_key: "a1b2c3d4".to_string(),
-            prompt_session_id: Some("session-uuid-1234".to_string()),
-            prompt_turn: Some(3),
-        };
-        let json = serde_json::to_string(&entry).unwrap();
-        println!("Serialized format: {}", json);
-        // Expect array start with lines array and prompt session with turn
-        assert!(json.starts_with("[[[1,5]],\"a1b2c3d4\",\"session-uuid-1234\",3]"));
-    }
-
-    #[test]
     fn test_deduplicate_identical_ranges() {
         let mut entry = AttributionEntry {
             lines: Vec::new(),
@@ -1312,11 +1144,6 @@ mod tests {
         // Convert to authorship log
         let authorship_log = AuthorshipLog::from_working_log(&[checkpoint]);
 
-        // Serialize to JSON to show the format
-        let json = serde_json::to_string_pretty(&authorship_log).unwrap();
-        println!("Authorship Log JSON Example:");
-        println!("{}", json);
-
         // Verify the structure
         assert_eq!(authorship_log.files.len(), 1);
         assert_eq!(authorship_log.prompts.len(), 1);
@@ -1400,11 +1227,6 @@ mod tests {
 
         // Verify prompts are stored separately
         assert_eq!(authorship_log.prompts.len(), 2);
-
-        // Show the JSON output to demonstrate multiple cursor entries
-        let json = serde_json::to_string_pretty(&authorship_log).unwrap();
-        println!("Multiple Prompts Same Tool JSON Example:");
-        println!("{}", json);
     }
 
     #[test]

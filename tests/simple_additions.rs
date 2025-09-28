@@ -18,7 +18,9 @@ fn test_simple_additions_empty_repo() {
 
     file.append("Line 2\nLine 3\n").unwrap();
 
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
 
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
@@ -37,7 +39,9 @@ fn test_simple_additions_with_base_commit() {
         .append("NEW LINEs From Claude!\nHello\nWorld\n")
         .unwrap();
 
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
 
     tmp_repo.commit_with_message("next commit").unwrap();
 
@@ -57,7 +61,9 @@ fn test_simple_additions_on_top_of_ai_contributions() {
         .append("NEW LINEs From Claude!\nHello\nWorld\n")
         .unwrap();
 
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
 
     tmp_repo.commit_with_message("next commit 1").unwrap();
 
@@ -97,7 +103,9 @@ fn test_simple_additions_new_file_not_git_added() {
     file.append("Line 4 from Claude\nLine 5 from Claude\nLine 6 from Claude\n")
         .unwrap();
 
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
 
     // Now commit (which will add all files including the new one)
     tmp_repo

@@ -3,10 +3,10 @@ source: tests/simple_additions.rs
 expression: blame
 ---
 {
-    1: "test_user",
-    2: "test_user",
-    3: "test_user",
-    4: "Claude",
-    5: "Claude",
-    6: "Claude",
+    1: "Test User",
+    2: "Test User",
+    3: "Test User",
+    4: "cursor",
+    5: "cursor",
+    6: "cursor",
 }

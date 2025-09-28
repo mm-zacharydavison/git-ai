@@ -1,5 +1,6 @@
 use crate::error::GitAiError;
 use crate::log_fmt::authorship_log::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
+use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
 use crate::log_fmt::working_log::Checkpoint;
 use git2::Repository;
 use serde_json;
@@ -57,30 +58,52 @@ pub fn get_reference_as_working_log(
     Ok(working_log)
 }
 
+pub fn get_reference_as_authorship_log_v3(
+    repo: &Repository,
+    ref_name: &str,
+) -> Result<AuthorshipLogV3, GitAiError> {
+    let content = get_reference(repo, ref_name)?;
+
+    // Try to detect format: new text format vs old JSON format
+    if content.contains("---") {
+        // New text format - parse as AuthorshipLogV3
+        match AuthorshipLogV3::deserialize_from_string(&content) {
+            Ok(v3_log) => Ok(v3_log),
+            Err(_) => Err(GitAiError::Generic(
+                "Failed to parse new format authorship log".to_string(),
+            )),
+        }
+    } else {
+        // Old JSON format - convert to V3
+        let version_check: serde_json::Value = serde_json::from_str(&content)?;
+        if let Some(schema_version) = version_check.get("schema_version").and_then(|v| v.as_str()) {
+            if schema_version != AUTHORSHIP_LOG_VERSION {
+                return Err(GitAiError::Generic(format!(
+                    "Unsupported authorship log version: {} (expected: {})",
+                    schema_version, AUTHORSHIP_LOG_VERSION
+                )));
+            }
+        } else {
+            return Err(GitAiError::Generic(
+                "No schema_version found in authorship log".to_string(),
+            ));
+        }
+
+        // Parse old format and convert to V3
+        let authorship_log: AuthorshipLog = serde_json::from_str(&content)?;
+        Ok(AuthorshipLogV3::from_authorship_log(&authorship_log))
+    }
+}
+
+// Legacy function - deprecated, use get_reference_as_authorship_log_v3 instead
 pub fn get_reference_as_authorship_log(
     repo: &Repository,
     ref_name: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
-    let content = get_reference(repo, ref_name)?;
-
-    // First, try to parse just the schema_version to check compatibility
-    let version_check: serde_json::Value = serde_json::from_str(&content)?;
-    if let Some(schema_version) = version_check.get("schema_version").and_then(|v| v.as_str()) {
-        if schema_version != AUTHORSHIP_LOG_VERSION {
-            return Err(GitAiError::Generic(format!(
-                "Unsupported authorship log version: {} (expected: {})",
-                schema_version, AUTHORSHIP_LOG_VERSION
-            )));
-        }
-    } else {
-        return Err(GitAiError::Generic(
-            "No schema_version found in authorship log".to_string(),
-        ));
-    }
-
-    // If version is correct, try to parse the full structure
-    let authorship_log: AuthorshipLog = serde_json::from_str(&content)?;
-    Ok(authorship_log)
+    // For now, return an error to force migration to V3
+    Err(GitAiError::Generic(
+        "get_reference_as_authorship_log is deprecated. Use get_reference_as_authorship_log_v3 instead.".to_string(),
+    ))
 }
 
 pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {

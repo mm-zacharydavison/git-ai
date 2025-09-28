@@ -15,7 +15,9 @@ fn test_blame_after_merge_with_ai_contributions() {
 
     // Make changes on feature branch
     lines.append("FEATURE LINE 1\nFEATURE LINE 2\n").unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo
         .commit_with_message("feature branch changes")
         .unwrap();
@@ -55,7 +57,7 @@ fn test_blame_after_merge_with_ai_contributions() {
 //     lines
 //         .append("REBASE FEATURE LINE 1\nREBASE FEATURE LINE 2\n")
 //         .unwrap();
-//     tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+//     tmp_repo.trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor")).unwrap();
 //     tmp_repo
 //         .commit_with_message("feature branch changes")
 //         .unwrap();
@@ -94,7 +96,9 @@ fn test_blame_after_complex_merge_scenario() {
     lines
         .append("\nFEATURE A LINE 1\nFEATURE A LINE 2\n")
         .unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo.commit_with_message("feature a changes").unwrap();
 
     tmp_repo.create_branch("feature-b").unwrap();
@@ -146,7 +150,7 @@ fn test_blame_after_complex_merge_scenario() {
 
 //     // Make multiple commits on feature branch
 //     lines.append("REBASE CHAIN 1\n").unwrap();
-//     tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+//     tmp_repo.trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor")).unwrap();
 //     tmp_repo.commit_with_message("feature commit 1").unwrap();
 
 //     lines.append("REBASE CHAIN 2\n").unwrap();
@@ -194,7 +198,9 @@ fn test_blame_after_merge_conflict_resolution() {
     lines
         .replace_range(15, 16, "CONFLICT FEATURE VERSION\n")
         .unwrap();
-    tmp_repo.trigger_checkpoint_with_author("Claude").unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
     tmp_repo
         .commit_with_message("feature conflict changes")
         .unwrap();

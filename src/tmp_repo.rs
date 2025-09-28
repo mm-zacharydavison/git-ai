@@ -273,6 +273,55 @@ impl TmpRepo {
         )
     }
 
+    /// Triggers a checkpoint with AI content, creating proper prompts and agent data
+    pub fn trigger_checkpoint_with_ai(
+        &self,
+        agent_name: &str,
+        model: Option<&str>,
+        tool: Option<&str>,
+    ) -> Result<(usize, usize, usize), GitAiError> {
+        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+        use crate::log_fmt::transcript::AiTranscript;
+        use crate::log_fmt::working_log::AgentId;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Generate a unique session ID for this AI checkpoint
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let session_id = format!("test_session_{}", timestamp);
+
+        // Create agent ID
+        let agent_id = AgentId {
+            tool: tool.unwrap_or("test_tool").to_string(),
+            id: session_id.clone(),
+            model: model.unwrap_or("test_model").to_string(),
+        };
+
+        // Create a minimal transcript with empty messages (as requested)
+        let transcript = AiTranscript {
+            messages: vec![], // Default to empty as requested
+        };
+
+        // Create agent run result
+        let agent_run_result = AgentRunResult {
+            agent_id,
+            transcript,
+        };
+
+        checkpoint(
+            &self.repo,
+            agent_name,
+            false, // show_working_log
+            false, // reset
+            true,
+            model,
+            None, // human_author
+            Some(agent_run_result),
+        )
+    }
+
     /// Commits all changes with the given message and runs post-commit hook
     pub fn commit_with_message(&self, message: &str) -> Result<(), GitAiError> {
         // Add all files to the index

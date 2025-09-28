@@ -3,6 +3,7 @@ use crate::git::refs::get_reference;
 use crate::git::refs::get_reference_as_working_log;
 use crate::git::refs::put_reference;
 use crate::log_fmt::authorship_log::AuthorshipLog;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
 use git2::Repository;
 use std::collections::HashMap;
 
@@ -87,7 +88,7 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
         .collect();
 
     // Create authorship logs for direct children that don't already have one
-    let mut authorship_logs: HashMap<String, AuthorshipLog> = HashMap::new();
+    let mut authorship_logs: HashMap<String, AuthorshipLogV3> = HashMap::new();
 
     for commit_hash in &commit_hashes {
         // Get the working log for this commit
@@ -115,7 +116,10 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                     AuthorshipLog::from_working_log_with_base_commit(&working_log, commit_hash);
 
                 // Serialize the authorship log
-                let authorship_json = serde_json::to_string(&authorship_log)?;
+                let v3_log = AuthorshipLogV3::from_authorship_log(&authorship_log);
+                let authorship_json = v3_log.serialize_to_string().map_err(|_| {
+                    GitAiError::Generic("Failed to serialize authorship log".to_string())
+                })?;
 
                 // Create the authorship log reference
                 put_reference(
@@ -127,7 +131,7 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 
                 if json_output {
                     // Store the authorship log for JSON output
-                    authorship_logs.insert(child_commit.clone(), authorship_log);
+                    authorship_logs.insert(child_commit.clone(), v3_log);
                 } else {
                     // Print individual ref as before
                     println!("refs/ai/authorship{}", child_commit);
@@ -138,7 +142,15 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 
     // Output JSON if requested
     if json_output && !authorship_logs.is_empty() {
-        let json_output = serde_json::to_string(&authorship_logs)?;
+        // Convert HashMap to a serializable format
+        let mut json_map = serde_json::Map::new();
+        for (key, v3_log) in authorship_logs {
+            let serialized = v3_log.serialize_to_string().map_err(|_| {
+                GitAiError::Generic("Failed to serialize authorship log".to_string())
+            })?;
+            json_map.insert(key, serde_json::Value::String(serialized));
+        }
+        let json_output = serde_json::to_string(&json_map)?;
         println!("{}", json_output);
     }
 
