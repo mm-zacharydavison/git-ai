@@ -243,33 +243,8 @@ impl AttributionEntry {
         if self.lines.is_empty() {
             return;
         }
-        self.lines.dedup();
-        loop {
-            let mut merged_any = false;
-            let mut i = 0;
-            while i < self.lines.len() {
-                let mut j = i + 1;
-                let mut merged_with = None;
-                while j < self.lines.len() {
-                    if Self::ranges_can_merge(&self.lines[i], &self.lines[j]) {
-                        let merged = Self::merge_ranges(&self.lines[i], &self.lines[j]);
-                        self.lines[i] = merged;
-                        merged_with = Some(j);
-                        merged_any = true;
-                        break;
-                    }
-                    j += 1;
-                }
-                if let Some(j) = merged_with {
-                    self.lines.remove(j);
-                } else {
-                    i += 1;
-                }
-            }
-            if !merged_any {
-                break;
-            }
-        }
+
+        // First, sort by start position
         self.lines.sort_by(|a, b| {
             let start_a = match a {
                 LineRange::Single(l) => *l,
@@ -281,6 +256,25 @@ impl AttributionEntry {
             };
             start_a.cmp(&start_b)
         });
+
+        // Remove exact duplicates
+        self.lines.dedup();
+
+        // Merge overlapping/adjacent ranges
+        let mut merged = Vec::new();
+        for current in self.lines.drain(..) {
+            if let Some(last) = merged.last_mut() {
+                if Self::ranges_can_merge(last, &current) {
+                    *last = Self::merge_ranges(last, &current);
+                } else {
+                    merged.push(current);
+                }
+            } else {
+                merged.push(current);
+            }
+        }
+
+        self.lines = merged;
     }
 
     fn ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
@@ -1186,6 +1180,46 @@ mod tests {
             })
             .collect();
         assert_eq!(start_lines, vec![412, 420, 423]);
+    }
+
+    #[test]
+    fn test_massive_duplicate_ranges_from_long_working_log() {
+        // Simulate the issue from the user's JSON example with massive duplicates
+        let mut entry = AttributionEntry {
+            lines: Vec::new(),
+            author_key: "e892bede".to_string(),
+            prompt_session_id: Some("bacce5c7-2718-45ef-8364-b916522bcde3".to_string()),
+            prompt_turn: Some(6),
+        };
+
+        // Add the same ranges many times (like in the user's example)
+        for _ in 0..50 {
+            entry.add_lines(&[LineRange::Range(1, 5)]);
+        }
+        for _ in 0..50 {
+            entry.add_lines(&[LineRange::Single(7)]);
+        }
+        for _ in 0..50 {
+            entry.add_lines(&[LineRange::Range(9, 48)]);
+        }
+        for _ in 0..50 {
+            entry.add_lines(&[LineRange::Range(70, 71)]);
+        }
+        for _ in 0..50 {
+            entry.add_lines(&[LineRange::Range(125, 141)]);
+        }
+        for _ in 0..50 {
+            entry.add_lines(&[LineRange::Range(143, 149)]);
+        }
+
+        // Should be compressed to just 6 unique ranges
+        assert_eq!(entry.lines.len(), 6);
+        assert_eq!(entry.lines[0], LineRange::Range(1, 5));
+        assert_eq!(entry.lines[1], LineRange::Single(7));
+        assert_eq!(entry.lines[2], LineRange::Range(9, 48));
+        assert_eq!(entry.lines[3], LineRange::Range(70, 71));
+        assert_eq!(entry.lines[4], LineRange::Range(125, 141));
+        assert_eq!(entry.lines[5], LineRange::Range(143, 149));
     }
 
     #[test]
