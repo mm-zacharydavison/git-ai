@@ -92,6 +92,7 @@ fn main() {
         "install-hooks" => {
             // This command only works when called as git-ai, not as git alias
             if binary_name == "git" {
+                debug_log(&format!("binary_name: {}", binary_name));
                 eprintln!(
                     "Error: install-hooks command is only available when called as 'git-ai', not as 'git'"
                 );

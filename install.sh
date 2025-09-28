@@ -1,6 +1,7 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
+IFS=$'\n\t'
 
 # Colors for output
 RED='\033[0;31m'
@@ -118,9 +119,19 @@ mkdir -p "$INSTALL_DIR"
 
 # Download and install
 echo "Downloading git-ai..."
-if ! curl -L -o "${INSTALL_DIR}/git-ai" "$DOWNLOAD_URL"; then
-    error "Failed to download binary"
+TMP_FILE="${INSTALL_DIR}/git-ai.tmp.$$"
+if ! curl --fail --location --silent --show-error -o "$TMP_FILE" "$DOWNLOAD_URL"; then
+    rm -f "$TMP_FILE" 2>/dev/null || true
+    error "Failed to download binary (HTTP error)"
 fi
+
+# Basic validation: ensure file is not empty
+if [ ! -s "$TMP_FILE" ]; then
+    rm -f "$TMP_FILE" 2>/dev/null || true
+    error "Downloaded file is empty"
+fi
+
+mv -f "$TMP_FILE" "${INSTALL_DIR}/git-ai"
 
 # Make executable
 chmod +x "${INSTALL_DIR}/git-ai"
@@ -128,7 +139,7 @@ chmod +x "${INSTALL_DIR}/git-ai"
 ln -sf "${INSTALL_DIR}/git-ai" "${INSTALL_DIR}/git"
 
 # Remove quarantine attribute on macOS
-if [ "$OS" = "darwin" ]; then
+if [ "$OS" = "macos" ]; then
     xattr -d com.apple.quarantine "${INSTALL_DIR}/git-ai" 2>/dev/null || true
 fi
 
@@ -137,9 +148,10 @@ SHELL_INFO=$(detect_shell)
 SHELL_NAME=$(echo "$SHELL_INFO" | cut -d'|' -f1)
 CONFIG_FILE=$(echo "$SHELL_INFO" | cut -d'|' -f2)
 STD_GIT_PATH=$(detect_std_git)
-ENV_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
+PATH_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
+GIT_PATH_CMD=""
 if [ -n "$STD_GIT_PATH" ]; then
-    ENV_CMD="$ENV_CMD\nexport GIT_AI_GIT_PATH=\"$STD_GIT_PATH\""
+    GIT_PATH_CMD="export GIT_AI_GIT_PATH=\"$STD_GIT_PATH\""
 fi
 
 success "Successfully installed git-ai into ${INSTALL_DIR}"
@@ -151,16 +163,28 @@ if [[ ":$PATH:" != *"$INSTALL_DIR"* ]]; then
         # Ensure config file exists
         touch "$CONFIG_FILE"
         # Append PATH update if not already present
-        if ! grep -qs "$INSTALL_DIR" "$CONFIG_FILE"; then
+        if ! grep -qsF "$INSTALL_DIR" "$CONFIG_FILE"; then
             echo "" >> "$CONFIG_FILE"
             echo "# Added by git-ai installer on $(date)" >> "$CONFIG_FILE"
-            printf "%b\n" "$ENV_CMD" >> "$CONFIG_FILE"
+            echo "$PATH_CMD" >> "$CONFIG_FILE"
+        fi
+        if [ -n "$GIT_PATH_CMD" ] && ! grep -qsF "$GIT_PATH_CMD" "$CONFIG_FILE"; then
+            echo "$GIT_PATH_CMD" >> "$CONFIG_FILE"
         fi
         success "Updated ${CONFIG_FILE} to include ${INSTALL_DIR} in PATH"
         echo "Restart your shell or run: source \"$CONFIG_FILE\""
     else
         echo "Could not detect your shell config file."
-        echo "Please add the following line to your shell config and restart:"
-        printf "%b\n" "$ENV_CMD"
+        echo "Please add the following line(s) to your shell config and restart:"
+        echo "$PATH_CMD"
+        if [ -n "$GIT_PATH_CMD" ]; then
+            echo "$GIT_PATH_CMD"
+        fi
     fi
 fi
+
+# TODO Refactor inline
+# Install hooks
+echo "Installing hooks..."
+${INSTALL_DIR}/git-ai install-hooks
+success "Successfully installed hooks"

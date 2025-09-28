@@ -1,5 +1,9 @@
 use crate::error::GitAiError;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde_json::{json, Value};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 pub fn run(_args: &[String]) -> Result<(), GitAiError> {
     // Run async operations with smol
@@ -8,39 +12,32 @@ pub fn run(_args: &[String]) -> Result<(), GitAiError> {
 
 async fn async_run() -> Result<(), GitAiError> {
     check_claude_code().await;
+
+    // Install/update Claude Code hooks
+    let spinner = Spinner::new("Claude code: installing hooks");
+    spinner.start();
+
+    if let Err(e) = install_claude_code_hooks() {
+        // We intentionally don't fail hard for teammate workflows
+        // but we surface a message for the current user.
+        spinner.skipped("Claude code: Could not update hooks (safe to ignore)");
+        eprintln!("Note: failed to update .claude/settings.json: {}", e);
+    } else {
+        spinner.success("Claude code: Hooks installed");
+    }
+
     Ok(())
 }
 
 async fn check_claude_code() {
-    let spinner = Spinner::new("Claude code: looking for binary");
+    let spinner = Spinner::new("Claude code: checking installation");
     spinner.start();
-    spinner.wait_for(500).await;
-
-    // Step 1: Check if binary exists
-    spinner.update_message("Claude code: checking binary location");
-    spinner.wait_for(300).await;
 
     let exists = binary_exists("claude");
 
     if exists {
-        // Step 2: Check version compatibility
-        spinner.update_message("Claude code: verifying version compatibility");
-        spinner.wait_for(400).await;
-
-        // Step 3: Test functionality
-        spinner.update_message("Claude code: testing functionality");
-        spinner.wait_for(300).await;
-
-        // Step 4: Final verification
-        spinner.update_message("Claude code: final verification");
-        spinner.wait_for(200).await;
-
         spinner.success("Claude code: Installed and ready");
     } else {
-        // Show what we checked
-        spinner.update_message("Claude code: binary not found in PATH");
-        spinner.wait_for(200).await;
-
         spinner.skipped("Claude code: Not installed");
     }
 }
@@ -109,6 +106,161 @@ fn binary_exists(name: &str) -> bool {
         }
     }
     false
+}
+
+fn install_claude_code_hooks() -> Result<(), GitAiError> {
+    let settings_path = claude_settings_path();
+
+    // Ensure directory exists
+    if let Some(dir) = settings_path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+
+    // Read existing JSON if present, else start with empty object
+    let existing: Value = if settings_path.exists() {
+        let contents = fs::read_to_string(&settings_path)?;
+        if contents.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&contents)?
+        }
+    } else {
+        json!({})
+    };
+
+    // Desired hooks payload
+    let desired: Value = json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Write|Edit|MultiEdit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "git-ai checkpoint 2>/dev/null || true"
+                        }
+                    ]
+                }
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Write|Edit|MultiEdit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "git-ai checkpoint --author \"Claude Code\" 2>/dev/null || true"
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+
+    // Merge desired into existing (shallow for hooks; overwrite our specific arrays)
+    let mut merged = existing.clone();
+    {
+        let hooks_obj = desired.get("hooks").cloned().unwrap_or_else(|| json!({}));
+        let merged_hooks = merge_hooks(merged.get("hooks"), Some(&hooks_obj));
+        if let Some(h) = merged_hooks {
+            if let Some(obj) = merged.as_object_mut() {
+                obj.insert("hooks".to_string(), h);
+            }
+        }
+    }
+
+    // Write pretty JSON to file atomically
+    let pretty = serde_json::to_string_pretty(&merged)?;
+    write_atomic(&settings_path, pretty.as_bytes())?;
+    Ok(())
+}
+
+fn merge_hooks(existing: Option<&Value>, desired: Option<&Value>) -> Option<Value> {
+    let mut result = existing.cloned().unwrap_or_else(|| json!({}));
+    let desired = match desired { Some(v) => v, None => return Some(result) };
+
+    // Merge arrays by matcher for PreToolUse and PostToolUse. Append missing hooks, avoid duplicates.
+    if let Some(obj) = result.as_object_mut() {
+        for key in ["PreToolUse", "PostToolUse"].iter() {
+            let desired_arr = desired.get(*key).and_then(|v| v.as_array());
+            if desired_arr.is_none() { continue; }
+            let desired_arr = desired_arr.unwrap();
+
+            let mut existing_arr = obj
+                .get_mut(*key)
+                .and_then(|v| v.as_array_mut())
+                .cloned()
+                .unwrap_or_else(Vec::new);
+
+            // Build an index of existing entries by matcher string
+            use std::collections::HashMap;
+            let mut matcher_to_index: HashMap<String, usize> = HashMap::new();
+            for (i, item) in existing_arr.iter().enumerate() {
+                if let Some(matcher) = item.get("matcher").and_then(|m| m.as_str()) {
+                    matcher_to_index.insert(matcher.to_string(), i);
+                }
+            }
+
+            for desired_item in desired_arr {
+                let desired_matcher = desired_item.get("matcher").and_then(|m| m.as_str());
+                if desired_matcher.is_none() { continue; }
+                let desired_matcher = desired_matcher.unwrap();
+
+                // Find or create the block for this matcher
+                let target_index = if let Some(&idx) = matcher_to_index.get(desired_matcher) {
+                    idx
+                } else {
+                    // Create new block
+                    existing_arr.push(json!({
+                        "matcher": desired_matcher,
+                        "hooks": []
+                    }));
+                    let new_index = existing_arr.len() - 1;
+                    matcher_to_index.insert(desired_matcher.to_string(), new_index);
+                    new_index
+                };
+
+                // Merge hooks arrays, deduplicating by full object equality and by command string if present
+                if let Some(target_hooks) = existing_arr[target_index]
+                    .get_mut("hooks")
+                    .and_then(|h| h.as_array_mut())
+                {
+                    let desired_hooks = desired_item.get("hooks").and_then(|h| h.as_array());
+                    if let Some(desired_hooks) = desired_hooks {
+                        for d in desired_hooks {
+                            let duplicate = target_hooks.iter().any(|e| {
+                                if e == d { return true; }
+                                let dc = d.get("command").and_then(|c| c.as_str());
+                                let ec = e.get("command").and_then(|c| c.as_str());
+                                match (dc, ec) { (Some(a), Some(b)) => a == b, _ => false }
+                            });
+                            if !duplicate {
+                                target_hooks.push(d.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            obj.insert((*key).to_string(), Value::Array(existing_arr));
+        }
+    }
+    Some(result)
+}
+
+fn claude_settings_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join(".claude").join("settings.json")
+}
+
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), GitAiError> {
+    let tmp_path = path.with_extension("tmp");
+    {
+        let mut file = fs::File::create(&tmp_path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+    }
+    fs::rename(&tmp_path, path)?;
+    Ok(())
 }
 
 // Loader
