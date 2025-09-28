@@ -259,7 +259,6 @@ impl AttributionEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
     pub agent_id: AgentId,
-    pub model: Option<String>,
     pub human_author: Option<String>,
     pub messages: Vec<Message>,
 }
@@ -363,7 +362,6 @@ impl AuthorshipLog {
                         let entry = authorship_log.prompts.entry(session_id.clone()).or_insert(
                             PromptRecord {
                                 agent_id: agent.clone(),
-                                model: Some(agent.model.clone()),
                                 human_author: human_author.map(|s| s.to_string()),
                                 messages: transcript.messages().to_vec(),
                             },

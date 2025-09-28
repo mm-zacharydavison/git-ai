@@ -1,5 +1,5 @@
 ---
-source: src/log_fmt/authorship_log_2.rs
+source: src/log_fmt/authorship_log_serialization.rs
 expression: new_log
 ---
 AuthorshipLogV3 {
@@ -7,12 +7,6 @@ AuthorshipLogV3 {
     metadata: AuthorshipMetadata {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "test-commit-sha",
-        authors: {
-            "author1": Author {
-                username: "test_user",
-                email: "test@example.com",
-            },
-        },
         prompts: {},
     },
 }

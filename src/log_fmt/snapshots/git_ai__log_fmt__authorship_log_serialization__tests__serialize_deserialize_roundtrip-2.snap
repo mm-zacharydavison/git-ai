@@ -1,5 +1,5 @@
 ---
-source: src/log_fmt/authorship_log_2.rs
+source: src/log_fmt/authorship_log_serialization.rs
 expression: deserialized
 ---
 AuthorshipLogV3 {
@@ -57,12 +57,6 @@ AuthorshipLogV3 {
     metadata: AuthorshipMetadata {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "abc123",
-        authors: {
-            "xyzAbc": Author {
-                username: "alice",
-                email: "alice@example.com",
-            },
-        },
         prompts: {},
     },
 }

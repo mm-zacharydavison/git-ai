@@ -1,5 +1,5 @@
 ---
-source: src/log_fmt/authorship_log_2.rs
+source: src/log_fmt/authorship_log_serialization.rs
 expression: log
 ---
 AuthorshipLogV3 {
@@ -49,7 +49,6 @@ AuthorshipLogV3 {
     metadata: AuthorshipMetadata {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "",
-        authors: {},
         prompts: {
             "prompt_123": PromptRecord {
                 agent_id: AgentId {
@@ -57,9 +56,6 @@ AuthorshipLogV3 {
                     id: "session_123",
                     model: "claude-3-sonnet",
                 },
-                model: Some(
-                    "claude-3-sonnet",
-                ),
                 human_author: None,
                 messages: [],
             },

@@ -12,7 +12,6 @@ pub const AUTHORSHIP_LOG_V3_VERSION: &str = "authorship/3.0.0";
 pub struct AuthorshipMetadata {
     pub schema_version: String,
     pub base_commit_sha: String,
-    pub authors: BTreeMap<String, Author>,
     pub prompts: BTreeMap<String, PromptRecord>,
 }
 
@@ -21,7 +20,6 @@ impl AuthorshipMetadata {
         Self {
             schema_version: AUTHORSHIP_LOG_V3_VERSION.to_string(),
             base_commit_sha: String::new(),
-            authors: BTreeMap::new(),
             prompts: BTreeMap::new(),
         }
     }
@@ -163,7 +161,6 @@ impl AuthorshipLogV3 {
 
         // Copy metadata
         v3_log.metadata.base_commit_sha = log.base_commit_sha.clone();
-        v3_log.metadata.authors = log.authors.clone();
         v3_log.metadata.prompts = log.prompts.clone();
 
         // Convert file attributions to attestations
@@ -289,7 +286,7 @@ impl AuthorshipLogV3 {
         &self,
         file: &str,
         line: u32,
-    ) -> Option<(&Author, Option<&PromptRecord>)> {
+    ) -> Option<(Author, Option<&PromptRecord>)> {
         // Find the file attestation
         let file_attestation = self.attestations.iter().find(|f| f.file_path == file)?;
 
@@ -300,22 +297,14 @@ impl AuthorshipLogV3 {
             if contains {
                 // The hash corresponds to a prompt session ID
                 if let Some(prompt_record) = self.metadata.prompts.get(&entry.hash) {
-                    // Find the corresponding author
-                    let author = self.metadata.authors.iter().find_map(|(_, author)| {
-                        // Look for an author that matches this AI agent
-                        if author.username == "Claude"
-                            || author.username == prompt_record.agent_id.tool
-                        {
-                            Some(author)
-                        } else {
-                            None
-                        }
-                    });
+                    // Create author info from the prompt record
+                    let author = Author {
+                        username: prompt_record.agent_id.tool.clone(),
+                        email: String::new(), // AI agents don't have email
+                    };
 
-                    if let Some(author) = author {
-                        // Return author and prompt info
-                        return Some((author, Some(prompt_record)));
-                    }
+                    // Return author and prompt info
+                    return Some((author, Some(prompt_record)));
                 }
             }
         }
@@ -455,7 +444,6 @@ fn needs_quoting(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log_fmt::authorship_log::Author;
     use insta::assert_debug_snapshot;
 
     #[test]
@@ -508,15 +496,6 @@ mod tests {
         log.attestations.push(file1);
         log.attestations.push(file2);
 
-        // Add some metadata
-        log.metadata.authors.insert(
-            "xyzAbc".to_string(),
-            Author {
-                username: "alice".to_string(),
-                email: "alice@example.com".to_string(),
-            },
-        );
-
         // Serialize and snapshot the format
         let serialized = log.serialize_to_string().unwrap();
         assert_debug_snapshot!(serialized);
@@ -567,15 +546,6 @@ mod tests {
         let mut old_log = crate::log_fmt::authorship_log::AuthorshipLog::new();
         old_log.base_commit_sha = "test-commit-sha".to_string();
 
-        // Add some test data to the old format
-        old_log.authors.insert(
-            "author1".to_string(),
-            Author {
-                username: "test_user".to_string(),
-                email: "test@example.com".to_string(),
-            },
-        );
-
         // Convert to new format
         let new_log = AuthorshipLogV3::from_authorship_log(&old_log);
         assert_debug_snapshot!(new_log);
@@ -614,7 +584,6 @@ mod tests {
                     id: "session_123".to_string(),
                     model: "claude-3-sonnet".to_string(),
                 },
-                model: Some("claude-3-sonnet".to_string()),
                 human_author: None,
                 messages: vec![],
             },
@@ -676,7 +645,6 @@ mod tests {
                     id: "session_123".to_string(),
                     model: "claude-3-sonnet".to_string(),
                 },
-                model: Some("claude-3-sonnet".to_string()),
                 human_author: None,
                 messages: vec![],
             },
@@ -711,15 +679,6 @@ mod tests {
         let mut log = AuthorshipLogV3::new();
         log.metadata.base_commit_sha = "abc123".to_string();
 
-        // Add some metadata but no attestations
-        log.metadata.authors.insert(
-            "author1".to_string(),
-            Author {
-                username: "alice".to_string(),
-                email: "alice@example.com".to_string(),
-            },
-        );
-
         log.metadata.prompts.insert(
             "prompt1".to_string(),
             crate::log_fmt::authorship_log::PromptRecord {
@@ -728,7 +687,6 @@ mod tests {
                     id: "session_123".to_string(),
                     model: "claude-3-sonnet".to_string(),
                 },
-                model: Some("claude-3-sonnet".to_string()),
                 human_author: None,
                 messages: vec![],
             },
@@ -744,7 +702,6 @@ mod tests {
 
         // Verify that the deserialized log has the same metadata but no attestations
         assert_eq!(deserialized.metadata.base_commit_sha, "abc123");
-        assert_eq!(deserialized.metadata.authors.len(), 1);
         assert_eq!(deserialized.metadata.prompts.len(), 1);
         assert_eq!(deserialized.attestations.len(), 0);
     }
