@@ -1,6 +1,5 @@
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
-use crate::log_fmt::authorship_log::{AttributionEntry, Author, AuthorshipLog, LineRange};
 use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use git2::{BlameOptions, Repository};
@@ -312,73 +311,6 @@ pub fn get_git_blame_hunks(
     Ok(hunks)
 }
 
-/// Convert AuthorshipLogV3 to the old AuthorshipLog format for compatibility
-fn convert_v3_to_old_format(v3_log: &AuthorshipLogV3) -> AuthorshipLog {
-    let mut old_log = AuthorshipLog::new();
-    old_log.base_commit_sha = v3_log.metadata.base_commit_sha.clone();
-    old_log.authors = v3_log.metadata.authors.clone();
-    old_log.prompts = v3_log.metadata.prompts.clone();
-
-    // Convert attestations back to file attributions
-    for file_attestation in &v3_log.attestations {
-        let mut attributions = Vec::new();
-
-        for entry in &file_attestation.entries {
-            // The hash in V3 corresponds to a prompt session ID
-            let session_id = entry.hash.clone();
-
-            // Find the corresponding prompt to get the author
-            if let Some(prompt_record) = v3_log.metadata.prompts.get(&session_id) {
-                // Find the author key that corresponds to this prompt
-                // In V3, the author should already exist in the authors map
-                let author_key = v3_log
-                    .metadata
-                    .authors
-                    .iter()
-                    .find_map(|(key, author)| {
-                        // Look for an author that matches this AI agent
-                        if author.username == "Claude"
-                            || author.username == prompt_record.agent_id.tool
-                        {
-                            Some(key.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        // Fallback: generate key for the tool name
-                        let tool_author = Author {
-                            username: prompt_record.agent_id.tool.clone(),
-                            email: "".to_string(),
-                        };
-                        AuthorshipLog::generate_author_key(&tool_author)
-                    });
-
-                // Convert V3 line ranges to old format
-                let old_line_ranges: Vec<LineRange> =
-                    entry.line_ranges.iter().map(|lr| lr.clone()).collect();
-
-                let attribution = AttributionEntry {
-                    lines: old_line_ranges,
-                    author_key,
-                    prompt_session_id: Some(session_id),
-                    prompt_turn: Some(0), // Default to turn 0 for simplicity
-                };
-
-                attributions.push(attribution);
-            }
-        }
-
-        if !attributions.is_empty() {
-            old_log
-                .files
-                .insert(file_attestation.file_path.clone(), attributions);
-        }
-    }
-
-    old_log
-}
-
 pub fn overlay_ai_authorship(
     repo: &Repository,
     blame_hunks: &[BlameHunk],
@@ -387,7 +319,7 @@ pub fn overlay_ai_authorship(
     let mut line_authors: HashMap<u32, String> = HashMap::new();
 
     // Group hunks by commit SHA to avoid repeated lookups
-    let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLog>> = HashMap::new();
+    let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLogV3>> = HashMap::new();
 
     for hunk in blame_hunks {
         // Check if we've already looked up this commit's authorship
@@ -397,11 +329,7 @@ pub fn overlay_ai_authorship(
             // Try to get authorship log for this commit
             let ref_name = format!("ai/authorship/{}", hunk.commit_sha);
             let authorship = match get_reference_as_authorship_log_v3(repo, &ref_name) {
-                Ok(v3_log) => {
-                    // Convert V3 to old format for compatibility
-                    let old_log = convert_v3_to_old_format(&v3_log);
-                    Some(old_log)
-                }
+                Ok(v3_log) => Some(v3_log),
                 Err(_) => None, // No AI authorship data for this commit
             };
             commit_authorship_cache.insert(hunk.commit_sha.clone(), authorship.clone());

@@ -439,7 +439,7 @@ fn run_blame_in_context(
     )>,
     GitAiError,
 > {
-    use crate::git::refs::get_reference_as_authorship_log;
+    use crate::git::refs::get_reference_as_authorship_log_v3;
     use git2::{BlameOptions, Oid};
 
     // println!(
@@ -469,7 +469,7 @@ fn run_blame_in_context(
 
         // Look up the AI authorship log for this commit
         let ref_name = format!("ai/authorship/{}", commit_sha);
-        let authorship_log = match get_reference_as_authorship_log(repo, &ref_name) {
+        let authorship_log = match get_reference_as_authorship_log_v3(repo, &ref_name) {
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author

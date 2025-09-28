@@ -95,16 +95,6 @@ pub fn get_reference_as_authorship_log_v3(
     }
 }
 
-// Legacy function - deprecated, use get_reference_as_authorship_log_v3 instead
-pub fn get_reference_as_authorship_log(
-    repo: &Repository,
-    ref_name: &str,
-) -> Result<AuthorshipLog, GitAiError> {
-    // For now, return an error to force migration to V3
-    Err(GitAiError::Generic(
-        "get_reference_as_authorship_log is deprecated. Use get_reference_as_authorship_log_v3 instead.".to_string(),
-    ))
-}
 
 pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
     let full_ref_name = format!("refs/{}", ref_name);

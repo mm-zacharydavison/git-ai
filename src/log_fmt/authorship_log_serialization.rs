@@ -196,6 +196,45 @@ impl AuthorshipLogV3 {
         let content = content?;
         Self::deserialize_from_string(&content)
     }
+
+    /// Lookup the author and optional prompt for a given file and line
+    /// This is the V3 equivalent of AuthorshipLog::get_line_attribution
+    pub fn get_line_attribution(
+        &self,
+        file: &str,
+        line: u32,
+    ) -> Option<(&Author, Option<(&PromptRecord, u32)>)> {
+        // Find the file attestation
+        let file_attestation = self.attestations.iter().find(|f| f.file_path == file)?;
+
+        // Check entries in reverse order (latest wins)
+        for entry in file_attestation.entries.iter().rev() {
+            // Check if this line is covered by any of the line ranges
+            let contains = entry.line_ranges.iter().any(|range| range.contains(line));
+            if contains {
+                // The hash corresponds to a prompt session ID
+                if let Some(prompt_record) = self.metadata.prompts.get(&entry.hash) {
+                    // Find the corresponding author
+                    let author = self.metadata.authors.iter().find_map(|(_, author)| {
+                        // Look for an author that matches this AI agent
+                        if author.username == "Claude"
+                            || author.username == prompt_record.agent_id.tool
+                        {
+                            Some(author)
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some(author) = author {
+                        // Return author and prompt info (turn is always 0 for V3 format)
+                        return Some((author, Some((prompt_record, 0))));
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 impl Default for AuthorshipLogV3 {
