@@ -31,7 +31,7 @@ impl Config {
 
 fn resolve_git_path() -> String {
     // 1) Environment override
-    if let Ok(val) = env::var("GIT_AI_GIT") {
+    if let Ok(val) = env::var("GIT_AI_GIT_PATH") {
         if !val.trim().is_empty() {
             return val;
         }

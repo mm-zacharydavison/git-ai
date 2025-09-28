@@ -121,7 +121,7 @@ fn main() {
             commands::rebase_authorship::handle_squash_authorship(args);
         }
         _ => {
-            debug_log(&format!("proxying: git {}", command));
+            // debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
             proxy_to_git(&cli.args);
         }
