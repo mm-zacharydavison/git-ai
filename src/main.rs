@@ -137,6 +137,7 @@ fn handle_checkpoint(args: &[String]) {
     let mut _prompt_json = None;
     let mut prompt_path = None;
     let mut prompt_id = None;
+    let mut hook_input = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -194,6 +195,15 @@ fn handle_checkpoint(args: &[String]) {
                     std::process::exit(1);
                 }
             }
+            "--hook-input" => {
+                if i + 1 < args.len() {
+                    hook_input = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --hook-input requires a value");
+                    std::process::exit(1);
+                }
+            }
 
             _ => {
                 i += 1;
@@ -207,28 +217,22 @@ fn handle_checkpoint(args: &[String]) {
         match args[0].as_str() {
             "claude" => {
                 match ClaudePreset.run(AgentCheckpointFlags {
-                    transcript: None,
-                    model: model.clone(),
                     prompt_id: prompt_id.clone(),
-                    prompt_path: prompt_path.clone(),
-                    workspace_id: None,
+                    hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
                         agent_run_result = Some(agent_run);
                     }
                     Err(e) => {
-                        eprintln!("Error running Claude preset: {}", e);
+                        eprintln!("Claude preset error: {}", e);
                         std::process::exit(1);
                     }
                 }
             }
             "cursor" => {
                 match CursorPreset.run(AgentCheckpointFlags {
-                    transcript: None,
-                    model: None,
                     prompt_id: None,
-                    prompt_path: None,
-                    workspace_id: None,
+                    hook_input: None,
                 }) {
                     Ok(agent_run) => {
                         agent_run_result = Some(agent_run);

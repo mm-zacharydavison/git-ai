@@ -10,16 +10,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 pub struct AgentCheckpointFlags {
-    #[allow(dead_code)]
-    pub transcript: Option<String>,
-    #[allow(dead_code)]
-    pub model: Option<String>,
     pub prompt_id: Option<String>,
-    #[allow(dead_code)]
-    pub prompt_path: Option<String>,
-    // Optional Cursor workspace folder id (name under workspaceStorage)
-    #[allow(dead_code)]
-    pub workspace_id: Option<String>,
+    pub hook_input: Option<String>,
 }
 
 pub struct AgentRunResult {
@@ -36,21 +28,37 @@ pub struct ClaudePreset;
 
 impl AgentCheckpointPreset for ClaudePreset {
     fn run(&self, flags: AgentCheckpointFlags) -> Result<AgentRunResult, GitAiError> {
-        // Parse the prompt_path - it's required
-        let prompt_path = flags.prompt_path.ok_or_else(|| {
-            GitAiError::PresetError(
-                "prompt_path is required for Claude Code preset but not provided".to_string(),
-            )
+        // Parse claude_hook_stdin as JSON
+        let stdin_json = flags.hook_input.ok_or_else(|| {
+            GitAiError::PresetError("hook_input is required for Claude preset".to_string())
         })?;
+
+        let hook_data: serde_json::Value = serde_json::from_str(&stdin_json)
+            .map_err(|e| GitAiError::PresetError(format!("Invalid JSON in hook_input: {}", e)))?;
+
+        // Extract transcript_path and cwd from the JSON
+        let transcript_path = hook_data
+            .get("transcript_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError("transcript_path not found in hook_input".to_string())
+            })?;
+
+        let _cwd = hook_data
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| GitAiError::PresetError("cwd not found in hook_input".to_string()))?;
 
         // Extract the ID from the filename
         // Example: /Users/aidancunniffe/.claude/projects/-Users-aidancunniffe-Desktop-ghq/cb947e5b-246e-4253-a953-631f7e464c6b.jsonl
-        let path = Path::new(&prompt_path);
+        let path = Path::new(transcript_path);
         let filename = path
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or_else(|| {
-                GitAiError::PresetError("Could not extract filename from prompt_path".to_string())
+                GitAiError::PresetError(
+                    "Could not extract filename from transcript_path".to_string(),
+                )
             })?;
 
         // The filename should be a UUID
@@ -61,7 +69,7 @@ impl AgentCheckpointPreset for ClaudePreset {
 
         // Read the file content
         let jsonl_content =
-            std::fs::read_to_string(&prompt_path).map_err(|e| GitAiError::IoError(e))?;
+            std::fs::read_to_string(transcript_path).map_err(|e| GitAiError::IoError(e))?;
 
         // Parse into transcript
         let transcript = AiTranscript::from_claude_code_jsonl(&jsonl_content)
@@ -668,11 +676,8 @@ mod tests {
     fn cursor_preset_prints_transcript() {
         let preset = CursorPreset;
         let result = preset.run(AgentCheckpointFlags {
-            transcript: None,
-            model: None,
             prompt_id: None,
-            prompt_path: None,
-            workspace_id: None,
+            hook_input: None,
         });
 
         match result {
