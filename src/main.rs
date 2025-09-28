@@ -4,8 +4,6 @@ mod git;
 mod log_fmt;
 mod utils;
 
-// aidan test
-// next aidan line
 
 use clap::Parser;
 use git::find_repository;
