@@ -2,37 +2,94 @@
 source: src/commands/rebase_authorship.rs
 expression: authorship_log
 ---
-AuthorshipLog {
-    files: {
-        "abc.ts": [
-            AttributionEntry {
-                lines: [
-                    Single(
-                        1,
-                    ),
-                    Single(
-                        5,
-                    ),
-                    Single(
-                        9,
-                    ),
-                    Range(
-                        12,
-                        34,
-                    ),
+AuthorshipLogV3 {
+    attestations: [
+        FileAttestation {
+            file_path: "hello-world.ts",
+            entries: [
+                AttestationEntry {
+                    hash: "e9f6d77b-f181-4d85-b31b-2f8283629d27",
+                    line_ranges: [
+                        Range(
+                            10,
+                            14,
+                        ),
+                    ],
+                },
+                AttestationEntry {
+                    hash: "93ac08b3-8890-491f-85fa-6015f2c3b8b4",
+                    line_ranges: [
+                        Range(
+                            6,
+                            9,
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+    metadata: AuthorshipMetadata {
+        schema_version: "authorship/3.0.0",
+        base_commit_sha: "",
+        prompts: {
+            "93ac08b3-8890-491f-85fa-6015f2c3b8b4": PromptRecord {
+                agent_id: AgentId {
+                    tool: "claude",
+                    id: "93ac08b3-8890-491f-85fa-6015f2c3b8b4",
+                    model: "claude-sonnet-4-20250514",
+                },
+                human_author: Some(
+                    "Aidan Cunniffe <acunniffe@gmail.com>",
+                ),
+                messages: [
+                    User {
+                        text: "add an add function to @hello-world.ts ",
+                    },
+                    Assistant {
+                        text: "I'll add an add function to the hello-world.ts file.",
+                    },
+                    ToolUse {
+                        name: "Edit",
+                        input: Object {
+                            "file_path": String("/Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts"),
+                            "new_string": String("// Utilities\nfunction reverse(str: string): string {\n  return str.split('').reverse().join('');\n}\n\nfunction add(a: number, b: number): number {\n  return a + b;\n}"),
+                            "old_string": String("// Utilities\nfunction reverse(str: string): string {\n  return str.split('').reverse().join('');\n}"),
+                        },
+                    },
+                    User {
+                        text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n     1→// Utilities\n     2→function reverse(str: string): string {\n     3→  return str.split('').reverse().join('');\n     4→}\n     5→\n     6→function add(a: number, b: number): number {\n     7→  return a + b;\n     8→}\n     9→\n    10→",
+                    },
                 ],
-                author_key: "e1cb90d1",
-                prompt_session_id: None,
             },
-        ],
-    },
-    authors: {
-        "e1cb90d1": Author {
-            username: "Aidan Cunniffe",
-            email: "acunniffe@gmail.com",
+            "e9f6d77b-f181-4d85-b31b-2f8283629d27": PromptRecord {
+                agent_id: AgentId {
+                    tool: "claude",
+                    id: "e9f6d77b-f181-4d85-b31b-2f8283629d27",
+                    model: "claude-sonnet-4-20250514",
+                },
+                human_author: Some(
+                    "Aidan Cunniffe <acunniffe@gmail.com>",
+                ),
+                messages: [
+                    User {
+                        text: "add a subtract function to @hello-world.ts ",
+                    },
+                    Assistant {
+                        text: "I'll add a subtract function to the hello-world.ts file.",
+                    },
+                    ToolUse {
+                        name: "Edit",
+                        input: Object {
+                            "file_path": String("/Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts"),
+                            "new_string": String("// Add two numbers\nfunction add(a: number, b: number): number {\n  return a + b;\n}\n\n// Subtract two numbers\nfunction subtract(a: number, b: number): number {\n  return a - b;\n}"),
+                            "old_string": String("// Add two numbers\nfunction add(a: number, b: number): number {\n  return a + b;\n}"),
+                        },
+                    },
+                    User {
+                        text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n     1→// Utilities\n     2→function reverse(str: string): string {\n     3→  return str.split('').reverse().join('');\n     4→}\n     5→// Add two numbers\n     6→function add(a: number, b: number): number {\n     7→  return a + b;\n     8→}\n     9→\n    10→// Subtract two numbers\n    11→function subtract(a: number, b: number): number {\n    12→  return a - b;\n    13→}\n    14→\n    15→",
+                    },
+                ],
+            },
         },
     },
-    prompts: {},
-    schema_version: "authorship/2.0.0",
-    base_commit_sha: "",
 }
