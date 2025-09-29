@@ -1,7 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::refs::{delete_reference, put_reference};
-use crate::log_fmt::authorship_log::AuthorshipLog;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
 use git2::Repository;
@@ -76,9 +75,8 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
         human_author.as_deref(),
     );
 
-    // Convert to new format and serialize
-    let v3_log = AuthorshipLogV3::from_authorship_log(&authorship_log);
-    let authorship_json = v3_log
+    // Serialize the authorship log
+    let authorship_json = authorship_log
         .serialize_to_string()
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 

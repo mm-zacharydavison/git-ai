@@ -1,11 +1,11 @@
-use crate::log_fmt::authorship_log::{Author, AuthorshipLog, LineRange, PromptRecord};
+use crate::log_fmt::authorship_log::{Author, LineRange, PromptRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{BufRead, Write};
 
-/// New format version identifier
-pub const AUTHORSHIP_LOG_V3_VERSION: &str = "authorship/3.0.0";
+/// Authorship log format version identifier
+pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/3.0.0";
 
 /// Metadata section that goes below the divider as JSON
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,7 +18,7 @@ pub struct AuthorshipMetadata {
 impl AuthorshipMetadata {
     pub fn new() -> Self {
         Self {
-            schema_version: AUTHORSHIP_LOG_V3_VERSION.to_string(),
+            schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
             base_commit_sha: String::new(),
             prompts: BTreeMap::new(),
         }
@@ -47,6 +47,18 @@ impl AttestationEntry {
     pub fn new(hash: String, line_ranges: Vec<LineRange>) -> Self {
         Self { hash, line_ranges }
     }
+
+    pub fn remove_line_ranges(&mut self, to_remove: &[LineRange]) {
+        let mut new_lines = Vec::new();
+        for existing_range in &self.line_ranges {
+            let mut remaining = Vec::new();
+            for remove_range in to_remove {
+                remaining.extend(existing_range.remove(remove_range));
+            }
+            new_lines.extend(remaining);
+        }
+        self.line_ranges = new_lines;
+    }
 }
 
 /// Per-file attestation data
@@ -69,14 +81,23 @@ impl FileAttestation {
     }
 }
 
-/// The complete authorship log in the new format
-#[derive(Debug, Clone, PartialEq)]
-pub struct AuthorshipLogV3 {
+/// The complete authorship log format
+#[derive(Clone, PartialEq)]
+pub struct AuthorshipLog {
     pub attestations: Vec<FileAttestation>,
     pub metadata: AuthorshipMetadata,
 }
 
-impl AuthorshipLogV3 {
+impl fmt::Debug for AuthorshipLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthorshipLogV3")
+            .field("attestations", &self.attestations)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
+impl AuthorshipLog {
     pub fn new() -> Self {
         Self {
             attestations: Vec::new(),
@@ -155,52 +176,113 @@ impl AuthorshipLogV3 {
         }
     }
 
-    /// Convert from the old AuthorshipLog format to the new format
-    pub fn from_authorship_log(log: &AuthorshipLog) -> Self {
-        let mut v3_log = Self::new();
+    /// Convert from working log checkpoints to authorship log
+    pub fn from_working_log_with_base_commit_and_human_author(
+        checkpoints: &[crate::log_fmt::working_log::Checkpoint],
+        base_commit_sha: &str,
+        human_author: Option<&str>,
+    ) -> Self {
+        let mut authorship_log = Self::new();
+        authorship_log.metadata.base_commit_sha = base_commit_sha.to_string();
 
-        // Copy metadata
-        v3_log.metadata.base_commit_sha = log.base_commit_sha.clone();
-        v3_log.metadata.prompts = log.prompts.clone();
-
-        // Convert file attributions to attestations
-        // Only process AI-generated content (entries with prompt_session_id)
-        for (file_path, attributions) in &log.files {
-            let mut file_attestation = FileAttestation::new(file_path.clone());
-
-            // Group attributions by prompt session ID to merge line ranges
-            let mut session_ranges: BTreeMap<String, Vec<LineRange>> = BTreeMap::new();
-
-            for attribution in attributions {
-                // Only process AI-generated content - skip human content
-                if let Some(session_id) = &attribution.prompt_session_id {
-                    session_ranges
+        // Process checkpoints and create attributions
+        for checkpoint in checkpoints.iter() {
+            // If there is an agent session, record it by its UUID (AgentId.id)
+            let session_id_opt = match (&checkpoint.agent_id, &checkpoint.transcript) {
+                (Some(agent), Some(transcript)) => {
+                    let session_id = agent.id.clone();
+                    // Insert or update the prompt session transcript
+                    let entry = authorship_log
+                        .metadata
+                        .prompts
                         .entry(session_id.clone())
-                        .or_insert_with(Vec::new)
-                        .extend(attribution.lines.iter().cloned());
+                        .or_insert(PromptRecord {
+                            agent_id: agent.clone(),
+                            human_author: human_author.map(|s| s.to_string()),
+                            messages: transcript.messages().to_vec(),
+                        });
+                    if entry.messages.len() < transcript.messages().len() {
+                        entry.messages = transcript.messages().to_vec();
+                    }
+                    Some(session_id)
                 }
-                // Skip entries without prompt_session_id (human content)
-            }
+                _ => None,
+            };
 
-            // Create attestation entries for each unique session ID
-            for (session_id, mut line_ranges) in session_ranges {
-                // Sort and deduplicate line ranges
-                line_ranges.sort();
-                line_ranges.dedup();
+            for entry in &checkpoint.entries {
+                // Process deletions first (remove lines from all authors)
+                {
+                    let file_attestation = authorship_log.get_or_create_file(&entry.file);
+                    for line in &entry.deleted_lines {
+                        let to_remove = match line {
+                            crate::log_fmt::working_log::Line::Single(l) => LineRange::Single(*l),
+                            crate::log_fmt::working_log::Line::Range(start, end) => {
+                                LineRange::Range(*start, *end)
+                            }
+                        };
+                        for attestation_entry in file_attestation.entries.iter_mut() {
+                            attestation_entry.remove_line_ranges(&[to_remove.clone()]);
+                        }
+                    }
+                }
 
-                // Merge overlapping/adjacent ranges
-                let merged_ranges = Self::merge_line_ranges(&line_ranges);
+                // Then process additions (new author takes ownership)
+                let mut added_lines = Vec::new();
+                for line in &entry.added_lines {
+                    match line {
+                        crate::log_fmt::working_log::Line::Single(l) => added_lines.push(*l),
+                        crate::log_fmt::working_log::Line::Range(start, end) => {
+                            for l in *start..=*end {
+                                added_lines.push(l);
+                            }
+                        }
+                    }
+                }
+                if !added_lines.is_empty() {
+                    // Ensure deterministic, duplicate-free line numbers before compression
+                    added_lines.sort_unstable();
+                    added_lines.dedup();
 
-                let entry = AttestationEntry::new(session_id, merged_ranges);
-                file_attestation.add_entry(entry);
-            }
+                    // Create compressed line ranges
+                    let lines_to_remove = LineRange::compress_lines(&added_lines);
 
-            if !file_attestation.entries.is_empty() {
-                v3_log.attestations.push(file_attestation);
+                    // Only process AI-generated content (entries with prompt_session_id)
+                    if let Some(session_id) = session_id_opt.clone() {
+                        // Remove these lines from all other entries
+                        let file_attestation = authorship_log.get_or_create_file(&entry.file);
+                        for attestation_entry in file_attestation.entries.iter_mut() {
+                            attestation_entry.remove_line_ranges(&lines_to_remove);
+                        }
+
+                        // Add new attestation entry
+                        let entry = AttestationEntry::new(session_id, lines_to_remove);
+                        file_attestation.add_entry(entry);
+                    }
+                }
             }
         }
 
-        v3_log
+        // Remove empty files/entries
+        authorship_log
+            .attestations
+            .retain(|f| !f.entries.is_empty());
+        authorship_log
+    }
+
+    pub fn get_or_create_file(&mut self, file: &str) -> &mut FileAttestation {
+        // Check if file already exists
+        let exists = self.attestations.iter().any(|f| f.file_path == file);
+
+        if !exists {
+            self.attestations
+                .push(FileAttestation::new(file.to_string()));
+        }
+
+        // Now get the reference
+        self.attestations
+            .iter_mut()
+            .find(|f| f.file_path == file)
+            .unwrap()
     }
 
     /// Serialize to the new text format
@@ -281,7 +363,6 @@ impl AuthorshipLogV3 {
     }
 
     /// Lookup the author and optional prompt for a given file and line
-    /// This is the V3 equivalent of AuthorshipLog::get_line_attribution
     pub fn get_line_attribution(
         &self,
         file: &str,
@@ -312,7 +393,7 @@ impl AuthorshipLogV3 {
     }
 }
 
-impl Default for AuthorshipLogV3 {
+impl Default for AuthorshipLog {
     fn default() -> Self {
         Self::new()
     }
@@ -465,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_roundtrip() {
-        let mut log = AuthorshipLogV3::new();
+        let mut log = AuthorshipLog::new();
         log.metadata.base_commit_sha = "abc123".to_string();
 
         // Add some attestations
@@ -501,13 +582,13 @@ mod tests {
         assert_debug_snapshot!(serialized);
 
         // Test roundtrip: deserialize and verify structure matches
-        let deserialized = AuthorshipLogV3::deserialize_from_string(&serialized).unwrap();
+        let deserialized = AuthorshipLog::deserialize_from_string(&serialized).unwrap();
         assert_debug_snapshot!(deserialized);
     }
 
     #[test]
     fn test_expected_format() {
-        let mut log = AuthorshipLogV3::new();
+        let mut log = AuthorshipLog::new();
 
         let mut file1 = FileAttestation::new("src/file.xyz".to_string());
         file1.add_entry(AttestationEntry::new(
@@ -541,17 +622,6 @@ mod tests {
     }
 
     #[test]
-    fn test_conversion_from_old_format() {
-        // Test converting from the old AuthorshipLog format
-        let mut old_log = crate::log_fmt::authorship_log::AuthorshipLog::new();
-        old_log.base_commit_sha = "test-commit-sha".to_string();
-
-        // Convert to new format
-        let new_log = AuthorshipLogV3::from_authorship_log(&old_log);
-        assert_debug_snapshot!(new_log);
-    }
-
-    #[test]
     fn test_line_range_sorting() {
         // Test that ranges are sorted correctly: single ranges and ranges by lowest bound
         let ranges = vec![
@@ -572,7 +642,7 @@ mod tests {
     #[test]
     fn test_file_names_with_spaces() {
         // Test file names with spaces and special characters
-        let mut log = AuthorshipLogV3::new();
+        let mut log = AuthorshipLog::new();
 
         // Add a prompt to the metadata
         let prompt_hash = "prompt_123";
@@ -617,7 +687,7 @@ mod tests {
         assert_debug_snapshot!(serialized);
 
         // Try to deserialize - this should work if we handle escaping properly
-        let deserialized = AuthorshipLogV3::deserialize_from_string(&serialized);
+        let deserialized = AuthorshipLog::deserialize_from_string(&serialized);
         match deserialized {
             Ok(log) => {
                 println!("Deserialization successful!");
@@ -633,7 +703,7 @@ mod tests {
     #[test]
     fn test_hash_always_maps_to_prompt() {
         // Demonstrate that every hash in attestation section maps to prompts section
-        let mut log = AuthorshipLogV3::new();
+        let mut log = AuthorshipLog::new();
 
         // Add a prompt to the metadata
         let prompt_hash = "prompt_abc123";
@@ -676,7 +746,7 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_no_attestations() {
         // Test that serialization and deserialization work correctly when there are no attestations
-        let mut log = AuthorshipLogV3::new();
+        let mut log = AuthorshipLog::new();
         log.metadata.base_commit_sha = "abc123".to_string();
 
         log.metadata.prompts.insert(
@@ -697,7 +767,7 @@ mod tests {
         assert_debug_snapshot!(serialized);
 
         // Test roundtrip: deserialize and verify structure matches
-        let deserialized = AuthorshipLogV3::deserialize_from_string(&serialized).unwrap();
+        let deserialized = AuthorshipLog::deserialize_from_string(&serialized).unwrap();
         assert_debug_snapshot!(deserialized);
 
         // Verify that the deserialized log has the same metadata but no attestations

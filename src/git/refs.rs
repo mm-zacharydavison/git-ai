@@ -1,6 +1,5 @@
 use crate::error::GitAiError;
-use crate::log_fmt::authorship_log::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
-use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
+use crate::log_fmt::authorship_log_serialization::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
 use crate::log_fmt::working_log::Checkpoint;
 use git2::Repository;
 use serde_json;
@@ -61,13 +60,13 @@ pub fn get_reference_as_working_log(
 pub fn get_reference_as_authorship_log_v3(
     repo: &Repository,
     ref_name: &str,
-) -> Result<AuthorshipLogV3, GitAiError> {
+) -> Result<AuthorshipLog, GitAiError> {
     let content = get_reference(repo, ref_name)?;
 
     // Try to detect format: new text format vs old JSON format
     if content.contains("---") {
-        // New text format - parse as AuthorshipLogV3
-        match AuthorshipLogV3::deserialize_from_string(&content) {
+        // New text format - parse as AuthorshipLog
+        match AuthorshipLog::deserialize_from_string(&content) {
             Ok(v3_log) => Ok(v3_log),
             Err(_) => Err(GitAiError::Generic(
                 "Failed to parse new format authorship log".to_string(),
@@ -89,9 +88,11 @@ pub fn get_reference_as_authorship_log_v3(
             ));
         }
 
-        // Parse old format and convert to V3
-        let authorship_log: AuthorshipLog = serde_json::from_str(&content)?;
-        Ok(AuthorshipLogV3::from_authorship_log(&authorship_log))
+        // Old JSON format - this should not happen anymore since we only support v3
+        Err(GitAiError::Generic(
+            "Old JSON format authorship logs are no longer supported. Please use v3 format."
+                .to_string(),
+        ))
     }
 }
 

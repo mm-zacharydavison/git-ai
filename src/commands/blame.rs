@@ -1,6 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use git2::{BlameOptions, Repository};
 use std::collections::HashMap;
@@ -319,7 +319,7 @@ pub fn overlay_ai_authorship(
     let mut line_authors: HashMap<u32, String> = HashMap::new();
 
     // Group hunks by commit SHA to avoid repeated lookups
-    let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLogV3>> = HashMap::new();
+    let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLog>> = HashMap::new();
 
     for hunk in blame_hunks {
         // Check if we've already looked up this commit's authorship

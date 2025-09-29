@@ -1,7 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::find_repository;
-use crate::log_fmt::authorship_log::AuthorshipLog;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLogV3;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::{Oid, Repository};
 use similar::{ChangeTag, TextDiff};
 
@@ -30,7 +29,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
     // Step 2: Build the old_shas path from head_sha to origin_base
-    let old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
+    let _old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
 
     // Step 3: Get the parent of the new commit
     let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
@@ -43,7 +42,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     let new_commit_parent_tree = new_commit_parent.tree()?;
 
     // Create diff between the two trees
-    let diff =
+    let _diff =
         repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
 
     // Print the diff in a readable format
@@ -79,8 +78,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
 
     if !dry_run {
         // Step (Save): Save the authorship log with the new sha as its id
-        let v3_log = AuthorshipLogV3::from_authorship_log(&new_authorship_log);
-        let authorship_json = v3_log
+        let authorship_json = new_authorship_log
             .serialize_to_string()
             .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
@@ -288,33 +286,31 @@ fn reconstruct_authorship_from_diff(
     // Convert the collected entries into an AuthorshipLog
     let mut authorship_log = AuthorshipLog::new();
 
-    // Store original entries for later reference
-    let original_entries = authorship_entries.clone();
+    // Group entries by file and prompt session ID for efficiency
+    let mut file_attestations: HashMap<String, HashMap<String, Vec<u32>>> = HashMap::new();
+    let mut prompt_records: HashMap<String, crate::log_fmt::authorship_log::PromptRecord> =
+        HashMap::new();
 
-    // Group entries by file, author, and prompt for efficiency
-    // Use a string key to avoid hash issues with complex types
-    let mut file_authors: HashMap<String, HashMap<String, Vec<u32>>> = HashMap::new();
+    for (file_path, line_number, _author, prompt) in authorship_entries {
+        // Only process AI-generated content (entries with prompt)
+        if let Some((prompt_record, _turn)) = prompt {
+            let prompt_session_id = prompt_record.agent_id.id.clone();
 
-    for (file_path, line_number, author, prompt) in authorship_entries {
-        // Create a unique key for this author+prompt combination
-        let author_key = AuthorshipLog::generate_author_key(&author);
-        let prompt_key = if let Some((prompt_record, turn)) = prompt {
-            format!("{}:{}:{}", author_key, prompt_record.agent_id.id, turn)
-        } else {
-            author_key.clone()
-        };
+            // Store prompt record
+            prompt_records.insert(prompt_session_id.clone(), prompt_record);
 
-        file_authors
-            .entry(file_path)
-            .or_insert_with(HashMap::new)
-            .entry(prompt_key)
-            .or_insert_with(Vec::new)
-            .push(line_number);
+            file_attestations
+                .entry(file_path)
+                .or_insert_with(HashMap::new)
+                .entry(prompt_session_id)
+                .or_insert_with(Vec::new)
+                .push(line_number);
+        }
     }
 
     // Convert grouped entries to AuthorshipLog format
-    for (file_path, prompt_key_lines) in file_authors {
-        for (prompt_key, mut lines) in prompt_key_lines {
+    for (file_path, prompt_session_lines) in file_attestations {
+        for (prompt_session_id, mut lines) in prompt_session_lines {
             // Sort lines and create ranges
             lines.sort();
             let mut ranges = Vec::new();
@@ -354,56 +350,25 @@ fn reconstruct_authorship_from_diff(
                 ));
             }
 
-            // Parse the prompt key to extract author and prompt info
-            let parts: Vec<&str> = prompt_key.split(':').collect();
-            let (author_key, prompt_session_id) = if parts.len() == 2 {
-                // Has prompt info: "author_key:prompt_id"
-                (parts[0].to_string(), Some(parts[1].to_string()))
-            } else {
-                // No prompt info: just "author_key"
-                (prompt_key.clone(), None)
-            };
+            // Create attestation entry with the prompt session ID
+            let attestation_entry =
+                crate::log_fmt::authorship_log_serialization::AttestationEntry::new(
+                    prompt_session_id.clone(),
+                    ranges,
+                );
 
-            // Find the author info from the original entries
-            let author = original_entries
-                .iter()
-                .find(|(_, _, a, _)| AuthorshipLog::generate_author_key(a) == author_key)
-                .map(|(_, _, a, _)| a.clone())
-                .unwrap_or_else(|| {
-                    // Fallback author if not found
-                    crate::log_fmt::authorship_log::Author {
-                        username: "unknown".to_string(),
-                        email: "".to_string(),
-                    }
-                });
-
-            // Store author info
-            authorship_log.authors.insert(author_key.clone(), author);
-
-            // Store prompt info if available
-            if let Some(session_id) = &prompt_session_id {
-                // Find the prompt record from the original entries
-                if let Some((_, _, _, Some((prompt_record, _)))) =
-                    original_entries.iter().find(|(_, _, _, p)| {
-                        p.as_ref()
-                            .map(|(pr, _)| pr.agent_id.id == *session_id)
-                            .unwrap_or(false)
-                    })
-                {
-                    authorship_log
-                        .prompts
-                        .insert(session_id.clone(), prompt_record.clone());
-                }
-            }
-
-            // Add attribution entry
-            let file_entries = authorship_log.get_or_create_file(&file_path);
-            file_entries.push(crate::log_fmt::authorship_log::AttributionEntry {
-                lines: ranges,
-                author_key,
-                prompt_session_id,
-            });
+            // Add to authorship log
+            let file_attestation = authorship_log.get_or_create_file(&file_path);
+            file_attestation.add_entry(attestation_entry);
         }
+    }
+
+    // Store prompt records in metadata
+    for (prompt_session_id, prompt_record) in prompt_records {
+        authorship_log
+            .metadata
+            .prompts
+            .insert(prompt_session_id, prompt_record);
     }
 
     Ok(authorship_log)
