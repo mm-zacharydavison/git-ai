@@ -11,6 +11,8 @@ pub fn run(_args: &[String]) -> Result<(), GitAiError> {
 }
 
 async fn async_run() -> Result<(), GitAiError> {
+    let mut any_installed = false;
+
     if check_claude_code() {
         // Install/update Claude Code hooks
         let spinner = Spinner::new("Claude code: installing hooks");
@@ -24,6 +26,7 @@ async fn async_run() -> Result<(), GitAiError> {
         } else {
             spinner.success("Claude code: Hooks installed");
         }
+        any_installed = true;
     }
 
     if check_cursor() {
@@ -38,6 +41,11 @@ async fn async_run() -> Result<(), GitAiError> {
         } else {
             spinner.success("Cursor: Hooks installed");
         }
+        any_installed = true;
+    }
+
+    if !any_installed {
+        println!("No compatible IDEs or agent configurations detected. Nothing to install.");
     }
 
     Ok(())
@@ -49,8 +57,8 @@ fn check_claude_code() -> bool {
     }
 
     // Sometimes the binary won't be in the PATH, but the dotfiles will be
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    return Path::new(&home).join(".claude").exists();
+    let home = home_dir();
+    return home.join(".claude").exists();
 }
 
 fn check_cursor() -> bool {
@@ -62,19 +70,37 @@ fn check_cursor() -> bool {
     // TODO Approach for Windows?
 
     // Sometimes the binary won't be in the PATH, but the dotfiles will be
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    return Path::new(&home).join(".cursor").exists();
+    let home = home_dir();
+    return home.join(".cursor").exists();
 }
 
 // Shared utilities
 
 /// Check if a binary with the given name exists in the system PATH
 fn binary_exists(name: &str) -> bool {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            let binary_path = std::path::Path::new(dir).join(name);
-            if binary_path.exists() && binary_path.is_file() {
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            // First check exact name as provided
+            let candidate = dir.join(name);
+            if candidate.exists() && candidate.is_file() {
                 return true;
+            }
+
+            // On Windows, executables usually have extensions listed in PATHEXT
+            #[cfg(windows)]
+            {
+                let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.BAT;.CMD;.COM".to_string());
+                for ext in pathext.split(';') {
+                    let ext = ext.trim();
+                    if ext.is_empty() {
+                        continue;
+                    }
+                    let ext = if ext.starts_with('.') { ext.to_string() } else { format!(".{}", ext) };
+                    let candidate = dir.join(format!("{}{}", name, ext));
+                    if candidate.exists() && candidate.is_file() {
+                        return true;
+                    }
+                }
             }
         }
     }
@@ -326,13 +352,11 @@ fn merge_hooks(existing: Option<&Value>, desired: Option<&Value>) -> Option<Valu
 }
 
 fn claude_settings_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".claude").join("settings.json")
+    home_dir().join(".claude").join("settings.json")
 }
 
 fn cursor_hooks_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".cursor").join("hooks.json")
+    home_dir().join(".cursor").join("hooks.json")
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> Result<(), GitAiError> {
@@ -346,10 +370,22 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<(), GitAiError> {
     Ok(())
 }
 
+fn home_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home);
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            return PathBuf::from(userprofile);
+        }
+    }
+    PathBuf::from(".")
+}
+
 // Loader
 struct Spinner {
     pb: ProgressBar,
-    _handle: smol::Task<()>,
 }
 
 impl Spinner {
@@ -362,17 +398,9 @@ impl Spinner {
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
         pb.set_message(message.to_string());
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        // Start the auto-ticking task
-        let pb_clone = pb.clone();
-        let _handle = smol::spawn(async move {
-            loop {
-                pb_clone.tick();
-                smol::Timer::after(std::time::Duration::from_millis(100)).await;
-            }
-        });
-
-        Self { pb, _handle }
+        Self { pb }
     }
 
     fn start(&self) {
