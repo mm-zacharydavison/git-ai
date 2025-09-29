@@ -1,11 +1,22 @@
 use crate::log_fmt::authorship_log::{Author, LineRange, PromptRecord};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{BufRead, Write};
 
 /// Authorship log format version identifier
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/3.0.0";
+
+/// Generate a short hash (7 characters) from agent_id and tool
+fn generate_short_hash(agent_id: &str, tool: &str) -> String {
+    let combined = format!("{}:{}", tool, agent_id);
+    let mut hasher = Sha256::new();
+    hasher.update(combined.as_bytes());
+    let result = hasher.finalize();
+    // Take first 7 characters of the hex representation
+    format!("{:x}", result)[..7].to_string()
+}
 
 /// Metadata section that goes below the divider as JSON
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,13 +42,13 @@ impl Default for AuthorshipMetadata {
     }
 }
 
-/// Attestation entry: hash followed by line ranges
+/// Attestation entry: short hash followed by line ranges
 ///
 /// IMPORTANT: The hash ALWAYS corresponds to a prompt in the prompts section.
 /// This system only tracks AI-generated content, not human-authored content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttestationEntry {
-    /// Short Hash that maps to an entry in the prompts section of the metadata
+    /// Short hash (7 chars) that maps to an entry in the prompts section of the metadata
     pub hash: String,
     /// Line ranges that this prompt is responsible for
     pub line_ranges: Vec<LineRange>,
@@ -187,10 +198,10 @@ impl AuthorshipLog {
 
         // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
-            // If there is an agent session, record it by its UUID (AgentId.id)
+            // If there is an agent session, record it by its short hash (agent_id + tool)
             let session_id_opt = match (&checkpoint.agent_id, &checkpoint.transcript) {
                 (Some(agent), Some(transcript)) => {
-                    let session_id = agent.id.clone();
+                    let session_id = generate_short_hash(&agent.id, &agent.tool);
                     // Insert or update the prompt session transcript
                     let entry = authorship_log
                         .metadata
@@ -382,7 +393,7 @@ impl AuthorshipLog {
             // Check if this line is covered by any of the line ranges
             let contains = entry.line_ranges.iter().any(|range| range.contains(line));
             if contains {
-                // The hash corresponds to a prompt session ID
+                // The hash corresponds to a prompt session short hash
                 if let Some(prompt_record) = self.metadata.prompts.get(&entry.hash) {
                     // Create author info from the prompt record
                     let author = Author {
@@ -651,15 +662,16 @@ mod tests {
         let mut log = AuthorshipLog::new();
 
         // Add a prompt to the metadata
-        let prompt_hash = "prompt_123";
+        let agent_id = crate::log_fmt::working_log::AgentId {
+            tool: "cursor".to_string(),
+            id: "session_123".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let prompt_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
-            prompt_hash.to_string(),
+            prompt_hash.clone(),
             crate::log_fmt::authorship_log::PromptRecord {
-                agent_id: crate::log_fmt::working_log::AgentId {
-                    tool: "cursor".to_string(),
-                    id: "session_123".to_string(),
-                    model: "claude-3-sonnet".to_string(),
-                },
+                agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
             },
@@ -712,15 +724,16 @@ mod tests {
         let mut log = AuthorshipLog::new();
 
         // Add a prompt to the metadata
-        let prompt_hash = "prompt_abc123";
+        let agent_id = crate::log_fmt::working_log::AgentId {
+            tool: "cursor".to_string(),
+            id: "session_123".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let prompt_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
-            prompt_hash.to_string(),
+            prompt_hash.clone(),
             crate::log_fmt::authorship_log::PromptRecord {
-                agent_id: crate::log_fmt::working_log::AgentId {
-                    tool: "cursor".to_string(),
-                    id: "session_123".to_string(),
-                    model: "claude-3-sonnet".to_string(),
-                },
+                agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
             },
@@ -755,14 +768,16 @@ mod tests {
         let mut log = AuthorshipLog::new();
         log.metadata.base_commit_sha = "abc123".to_string();
 
+        let agent_id = crate::log_fmt::working_log::AgentId {
+            tool: "cursor".to_string(),
+            id: "session_123".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let prompt_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
-            "prompt1".to_string(),
+            prompt_hash,
             crate::log_fmt::authorship_log::PromptRecord {
-                agent_id: crate::log_fmt::working_log::AgentId {
-                    tool: "cursor".to_string(),
-                    id: "session_123".to_string(),
-                    model: "claude-3-sonnet".to_string(),
-                },
+                agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
             },

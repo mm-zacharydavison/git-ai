@@ -142,7 +142,7 @@ impl fmt::Display for LineRange {
     }
 }
 
-/// Prompt session details stored in the top-level prompts map keyed by AgentId.id (UUID)
+/// Prompt session details stored in the top-level prompts map keyed by short hash (agent_id + tool)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRecord {
     pub agent_id: AgentId,

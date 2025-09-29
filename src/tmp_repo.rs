@@ -89,7 +89,10 @@ impl TmpFile {
 
         let file_lines = self.contents.lines().collect::<Vec<&str>>();
 
-        if start_line > file_lines.len() || end_line > file_lines.len() || start_line >= end_line {
+        if start_line > file_lines.len()
+            || end_line > file_lines.len() + 1
+            || start_line >= end_line
+        {
             return Err(GitAiError::Generic(format!(
                 "Invalid line range [{}, {}) for file with {} lines",
                 start_line,
@@ -572,6 +575,24 @@ impl TmpRepo {
         let blame_map = blame::run(&self.repo, &tmp_file.filename, &options)?;
         println!("blame_map: {:?}", blame_map);
         Ok(blame_map.into_iter().collect())
+    }
+
+    /// Gets the authorship log for the current commit
+    pub fn get_authorship_log(
+        &self,
+    ) -> Result<crate::log_fmt::authorship_log_serialization::AuthorshipLog, GitAiError> {
+        let head = self.repo.head()?;
+        let commit_id = head.target().unwrap().to_string();
+        let ref_name = format!("ai/authorship/{}", commit_id);
+
+        match crate::git::refs::get_reference(&self.repo, &ref_name) {
+            Ok(content) => {
+                // Parse the authorship log from the reference content
+                crate::log_fmt::authorship_log_serialization::AuthorshipLog::deserialize_from_string(&content)
+                    .map_err(|e| GitAiError::Generic(format!("Failed to parse authorship log: {}", e)))
+            }
+            Err(_) => Err(GitAiError::Generic("No authorship log found".to_string())),
+        }
     }
 }
 
