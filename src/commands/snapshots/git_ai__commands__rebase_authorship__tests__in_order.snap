@@ -44,9 +44,11 @@ AuthorshipLogV3 {
                 messages: [
                     User {
                         text: "add an add function to @hello-world.ts ",
+                        timestamp: None,
                     },
                     Assistant {
                         text: "I'll add an add function to the hello-world.ts file.",
+                        timestamp: None,
                     },
                     ToolUse {
                         name: "Edit",
@@ -55,9 +57,11 @@ AuthorshipLogV3 {
                             "new_string": String("// Utilities\nfunction reverse(str: string): string {\n  return str.split('').reverse().join('');\n}\n\nfunction add(a: number, b: number): number {\n  return a + b;\n}"),
                             "old_string": String("// Utilities\nfunction reverse(str: string): string {\n  return str.split('').reverse().join('');\n}"),
                         },
+                        timestamp: None,
                     },
                     User {
                         text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n     1→// Utilities\n     2→function reverse(str: string): string {\n     3→  return str.split('').reverse().join('');\n     4→}\n     5→\n     6→function add(a: number, b: number): number {\n     7→  return a + b;\n     8→}\n     9→\n    10→",
+                        timestamp: None,
                     },
                 ],
             },
@@ -73,9 +77,11 @@ AuthorshipLogV3 {
                 messages: [
                     User {
                         text: "add a subtract function to @hello-world.ts ",
+                        timestamp: None,
                     },
                     Assistant {
                         text: "I'll add a subtract function to the hello-world.ts file.",
+                        timestamp: None,
                     },
                     ToolUse {
                         name: "Edit",
@@ -84,9 +90,11 @@ AuthorshipLogV3 {
                             "new_string": String("// Add two numbers\nfunction add(a: number, b: number): number {\n  return a + b;\n}\n\n// Subtract two numbers\nfunction subtract(a: number, b: number): number {\n  return a - b;\n}"),
                             "old_string": String("// Add two numbers\nfunction add(a: number, b: number): number {\n  return a + b;\n}"),
                         },
+                        timestamp: None,
                     },
                     User {
                         text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n     1→// Utilities\n     2→function reverse(str: string): string {\n     3→  return str.split('').reverse().join('');\n     4→}\n     5→// Add two numbers\n     6→function add(a: number, b: number): number {\n     7→  return a + b;\n     8→}\n     9→\n    10→// Subtract two numbers\n    11→function subtract(a: number, b: number): number {\n    12→  return a - b;\n    13→}\n    14→\n    15→",
+                        timestamp: None,
                     },
                 ],
             },

@@ -315,7 +315,7 @@ mod tests {
 
         // Check first message (user)
         match &transcript_data.messages()[0] {
-            Message::User { text } => {
+            Message::User { text, .. } => {
                 assert_eq!(text, "Please add error handling to this function");
             }
             _ => panic!("Expected user message"),
@@ -323,7 +323,7 @@ mod tests {
 
         // Check second message (assistant)
         match &transcript_data.messages()[1] {
-            Message::Assistant { text } => {
+            Message::Assistant { text, .. } => {
                 assert_eq!(text, "I'll add error handling to the function.");
             }
             _ => panic!("Expected assistant message"),

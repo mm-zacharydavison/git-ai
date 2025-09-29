@@ -6,37 +6,53 @@ use serde::{Deserialize, Serialize};
 pub enum Message {
     User {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
     Assistant {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
     ToolUse {
         name: String,
         input: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
 }
 
 impl Message {
     /// Create a user message
     pub fn user(text: String) -> Self {
-        Message::User { text }
+        Message::User {
+            text,
+            timestamp: None,
+        }
     }
 
     /// Create an assistant message
     pub fn assistant(text: String) -> Self {
-        Message::Assistant { text }
+        Message::Assistant {
+            text,
+            timestamp: None,
+        }
     }
 
     /// Create a tool use message
     pub fn tool_use(name: String, input: serde_json::Value) -> Self {
-        Message::ToolUse { name, input }
+        Message::ToolUse {
+            name,
+            input,
+            timestamp: None,
+        }
     }
 
     /// Get the text content if this is a user or assistant message
     #[allow(dead_code)]
     pub fn text(&self) -> Option<&String> {
         match self {
-            Message::User { text } | Message::Assistant { text } => Some(text),
+            Message::User { text, .. } | Message::Assistant { text, .. } => Some(text),
             Message::ToolUse { .. } => None,
         }
     }
@@ -98,6 +114,7 @@ impl AiTranscript {
             if !line.trim().is_empty() {
                 // Parse the raw JSONL entry
                 let raw_entry: serde_json::Value = serde_json::from_str(line)?;
+                let timestamp = raw_entry["timestamp"].as_str().map(|s| s.to_string());
 
                 // Extract model from assistant messages if we haven't found it yet
                 if model.is_none() && raw_entry["type"].as_str() == Some("assistant") {
@@ -112,7 +129,10 @@ impl AiTranscript {
                         // Handle user messages
                         if let Some(content) = raw_entry["message"]["content"].as_str() {
                             if !content.trim().is_empty() {
-                                transcript.add_message(Message::user(content.to_string()));
+                                transcript.add_message(Message::User {
+                                    text: content.to_string(),
+                                    timestamp: timestamp.clone(),
+                                });
                             }
                         } else if let Some(content_array) =
                             raw_entry["message"]["content"].as_array()
@@ -121,7 +141,10 @@ impl AiTranscript {
                             for item in content_array {
                                 if let Some(text) = item["content"].as_str() {
                                     if !text.trim().is_empty() {
-                                        transcript.add_message(Message::user(text.to_string()));
+                                        transcript.add_message(Message::User {
+                                            text: text.to_string(),
+                                            timestamp: timestamp.clone(),
+                                        });
                                     }
                                 }
                             }
@@ -135,9 +158,10 @@ impl AiTranscript {
                                     Some("text") => {
                                         if let Some(text) = item["text"].as_str() {
                                             if !text.trim().is_empty() {
-                                                transcript.add_message(Message::assistant(
-                                                    text.to_string(),
-                                                ));
+                                                transcript.add_message(Message::Assistant {
+                                                    text: text.to_string(),
+                                                    timestamp: timestamp.clone(),
+                                                });
                                             }
                                         }
                                     }
@@ -145,10 +169,11 @@ impl AiTranscript {
                                         if let (Some(name), Some(_input)) =
                                             (item["name"].as_str(), item["input"].as_object())
                                         {
-                                            transcript.add_message(Message::tool_use(
-                                                name.to_string(),
-                                                item["input"].clone(),
-                                            ));
+                                            transcript.add_message(Message::ToolUse {
+                                                name: name.to_string(),
+                                                input: item["input"].clone(),
+                                                timestamp: timestamp.clone(),
+                                            });
                                         }
                                     }
                                     _ => continue, // Skip unknown content types
@@ -172,6 +197,7 @@ impl AiTranscript {
             if !line.trim().is_empty() {
                 // Parse the raw JSONL entry
                 let raw_entry: serde_json::Value = serde_json::from_str(line)?;
+                let timestamp = raw_entry["timestamp"].as_str().map(|s| s.to_string());
 
                 // Extract messages based on the type
                 match raw_entry["type"].as_str() {
@@ -179,7 +205,10 @@ impl AiTranscript {
                         // Handle user messages
                         if let Some(content) = raw_entry["message"]["content"].as_str() {
                             if !content.trim().is_empty() {
-                                transcript.add_message(Message::user(content.to_string()));
+                                transcript.add_message(Message::User {
+                                    text: content.to_string(),
+                                    timestamp: timestamp.clone(),
+                                });
                             }
                         } else if let Some(content_array) =
                             raw_entry["message"]["content"].as_array()
@@ -188,7 +217,10 @@ impl AiTranscript {
                             for item in content_array {
                                 if let Some(text) = item["content"].as_str() {
                                     if !text.trim().is_empty() {
-                                        transcript.add_message(Message::user(text.to_string()));
+                                        transcript.add_message(Message::User {
+                                            text: text.to_string(),
+                                            timestamp: timestamp.clone(),
+                                        });
                                     }
                                 }
                             }
@@ -202,9 +234,10 @@ impl AiTranscript {
                                     Some("text") => {
                                         if let Some(text) = item["text"].as_str() {
                                             if !text.trim().is_empty() {
-                                                transcript.add_message(Message::assistant(
-                                                    text.to_string(),
-                                                ));
+                                                transcript.add_message(Message::Assistant {
+                                                    text: text.to_string(),
+                                                    timestamp: timestamp.clone(),
+                                                });
                                             }
                                         }
                                     }
@@ -212,10 +245,11 @@ impl AiTranscript {
                                         if let (Some(name), Some(_input)) =
                                             (item["name"].as_str(), item["input"].as_object())
                                         {
-                                            transcript.add_message(Message::tool_use(
-                                                name.to_string(),
-                                                item["input"].clone(),
-                                            ));
+                                            transcript.add_message(Message::ToolUse {
+                                                name: name.to_string(),
+                                                input: item["input"].clone(),
+                                                timestamp: timestamp.clone(),
+                                            });
                                         }
                                     }
                                     _ => continue, // Skip unknown content types
@@ -275,9 +309,9 @@ mod tests {
         println!("Parsed {} messages:", transcript.messages().len());
         for (i, message) in transcript.messages().iter().enumerate() {
             match message {
-                Message::User { text } => println!("{}: User: {}", i, text),
-                Message::Assistant { text } => println!("{}: Assistant: {}", i, text),
-                Message::ToolUse { name, input } => {
+                Message::User { text, .. } => println!("{}: User: {}", i, text),
+                Message::Assistant { text, .. } => println!("{}: Assistant: {}", i, text),
+                Message::ToolUse { name, input, .. } => {
                     println!("{}: ToolUse: {} with input: {:?}", i, name, input)
                 }
             }
@@ -309,9 +343,9 @@ mod tests {
         println!("Parsed {} messages:", transcript.messages().len());
         for (i, message) in transcript.messages().iter().enumerate() {
             match message {
-                Message::User { text } => println!("{}: User: {}", i, text),
-                Message::Assistant { text } => println!("{}: Assistant: {}", i, text),
-                Message::ToolUse { name, input } => {
+                Message::User { text, .. } => println!("{}: User: {}", i, text),
+                Message::Assistant { text, .. } => println!("{}: Assistant: {}", i, text),
+                Message::ToolUse { name, input, .. } => {
                     println!("{}: ToolUse: {} with input: {:?}", i, name, input)
                 }
             }

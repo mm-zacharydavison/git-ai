@@ -922,9 +922,9 @@ mod tests {
                 println!("Cursor Agent: {}:{}", run.agent_id.tool, run.agent_id.id);
                 for (i, m) in run.transcript.messages.iter().enumerate() {
                     match m {
-                        Message::User { text } => println!("User {}: {}", i, text),
-                        Message::Assistant { text } => println!("Assistant {}: {}", i, text),
-                        Message::ToolUse { name, input } => {
+                        Message::User { text, .. } => println!("User {}: {}", i, text),
+                        Message::Assistant { text, .. } => println!("Assistant {}: {}", i, text),
+                        Message::ToolUse { name, input, .. } => {
                             println!("ToolUse {}: {} {}", i, name, input)
                         }
                     }
