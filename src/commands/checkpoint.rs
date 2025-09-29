@@ -115,25 +115,29 @@ pub fn run(
         )?
     };
 
-    let mut checkpoint = Checkpoint::new(
-        base_commit.clone(),
-        combined_hash.clone(),
-        author.to_string(),
-        entries.clone(),
-    );
+    // Skip adding checkpoint if there are no changes
+    if !entries.is_empty() {
+        let mut checkpoint = Checkpoint::new(
+            base_commit.clone(),
+            combined_hash.clone(),
+            author.to_string(),
+            entries.clone(),
+        );
 
-    // Set transcript and agent_id if provided
-    if let Some(agent_run) = &agent_run_result {
-        checkpoint.transcript = Some(agent_run.transcript.clone());
-        checkpoint.agent_id = Some(agent_run.agent_id.clone());
+        // Set transcript and agent_id if provided
+        if let Some(agent_run) = &agent_run_result {
+            checkpoint.transcript = Some(agent_run.transcript.clone());
+            checkpoint.agent_id = Some(agent_run.agent_id.clone());
+        }
+
+        working_log.push(checkpoint);
     }
+
     let agent_tool = if let Some(agent_run_result) = &agent_run_result {
         Some(agent_run_result.agent_id.tool.as_str())
     } else {
         None
     };
-
-    working_log.push(checkpoint);
 
     // Use pretty formatting in debug builds, single-line in release builds
     let working_log_json = if cfg!(debug_assertions) {
@@ -365,14 +369,23 @@ fn get_initial_checkpoint_entries(
                 ChangeTag::Delete => {
                     let delete_start = current_line;
                     let delete_count = change.value().lines().count() as u32;
-                    let delete_end = delete_start + delete_count - 1;
-                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                    if delete_count == 1 {
+                        deleted_lines.push(Line::Single(delete_start));
+                    } else {
+                        let delete_end = delete_start + delete_count - 1;
+                        deleted_lines.push(Line::Range(delete_start, delete_end));
+                    }
+                    current_line += delete_count;
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
                     let insert_count = change.value().lines().count() as u32;
-                    let insert_end = insert_start + insert_count - 1;
-                    added_lines.push(Line::Range(insert_start, insert_end));
+                    if insert_count == 1 {
+                        added_lines.push(Line::Single(insert_start));
+                    } else {
+                        let insert_end = insert_start + insert_count - 1;
+                        added_lines.push(Line::Range(insert_start, insert_end));
+                    }
                     current_line += insert_count;
                 }
             }
@@ -436,14 +449,23 @@ fn get_subsequent_checkpoint_entries(
                 ChangeTag::Delete => {
                     let delete_start = current_line;
                     let delete_count = change.value().lines().count() as u32;
-                    let delete_end = delete_start + delete_count - 1;
-                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                    if delete_count == 1 {
+                        deleted_lines.push(Line::Single(delete_start));
+                    } else {
+                        let delete_end = delete_start + delete_count - 1;
+                        deleted_lines.push(Line::Range(delete_start, delete_end));
+                    }
+                    current_line += delete_count;
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
                     let insert_count = change.value().lines().count() as u32;
-                    let insert_end = insert_start + insert_count - 1;
-                    added_lines.push(Line::Range(insert_start, insert_end));
+                    if insert_count == 1 {
+                        added_lines.push(Line::Single(insert_start));
+                    } else {
+                        let insert_end = insert_start + insert_count - 1;
+                        added_lines.push(Line::Range(insert_start, insert_end));
+                    }
                     current_line += insert_count;
                 }
             }
