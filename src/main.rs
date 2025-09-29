@@ -11,6 +11,8 @@ use git::refs::AI_AUTHORSHIP_REFSPEC;
 use std::io::{IsTerminal, Write};
 use std::process::Command;
 use utils::debug_log;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
@@ -28,6 +30,8 @@ struct Cli {
 }
 
 fn main() {
+    // Ensure SIGPIPE uses the default action (terminate), and do not inherit ignored SIGPIPE
+    reset_sigpipe_to_default();
     // Initialize global configuration early
     config::Config::init();
     // Get the binary name that was called
@@ -406,14 +410,13 @@ fn handle_commit(args: &[String]) {
             let status = child.wait();
             match status {
                 Ok(status) => {
-                    let code = status.code().unwrap_or(1);
                     // If commit succeeded, run post-commit
-                    if code == 0 {
+                    if status.success() {
                         if let Err(e) = git::post_commit::post_commit(&repo, false) {
                             eprintln!("Post-commit failed: {}", e);
                         }
                     }
-                    std::process::exit(code);
+                    exit_with_status(status);
                 }
                 Err(e) => {
                     eprintln!("Failed to wait for git commit process: {}", e);
@@ -503,26 +506,24 @@ fn handle_push(args: &[String]) {
         })
         .unwrap_or_default();
 
-    // Helper to run a git command and optionally forward output, returning exit code
-    fn run_git_and_forward(args: &[String], quiet: bool) -> i32 {
-        let output = Command::new(config::Config::get().git_cmd())
-            .args(args)
-            .output();
+    // Helper to run a git command and optionally forward output, returning ExitStatus
+    fn run_git_and_forward(args: &[String], quiet: bool) -> std::process::ExitStatus {
+        let output = Command::new(config::Config::get().git_cmd()).args(args).output();
         match output {
             Ok(output) => {
                 if !quiet {
                     if !output.stdout.is_empty() {
-                        std::io::stdout().write_all(&output.stdout).unwrap();
+                        let _ = std::io::stdout().write_all(&output.stdout);
                     }
                     if !output.stderr.is_empty() {
-                        std::io::stderr().write_all(&output.stderr).unwrap();
+                        let _ = std::io::stderr().write_all(&output.stderr);
                     }
                 }
-                output.status.code().unwrap_or(1)
+                output.status
             }
             Err(e) => {
                 eprintln!("Failed to execute git command: {}", e);
-                1
+                std::process::exit(1);
             }
         }
     }
@@ -530,9 +531,9 @@ fn handle_push(args: &[String]) {
     // 1) Run exactly what the user typed (no arg mutation)
     let mut user_push = vec!["push".to_string()];
     user_push.extend_from_slice(args);
-    let status_code = run_git_and_forward(&user_push, false);
-    if status_code != 0 {
-        std::process::exit(status_code);
+    let status = run_git_and_forward(&user_push, false);
+    if !status.success() {
+        exit_with_status(status);
     }
 
     // 2) Push authorship refs to the appropriate remote
@@ -571,7 +572,7 @@ fn handle_push(args: &[String]) {
             debug_log(&format!("pushing authorship refs: {:?}", &push_authorship));
         }
         let auth_status = run_git_and_forward(&push_authorship, quiet_second_push);
-        std::process::exit(auth_status);
+        exit_with_status(auth_status);
     } else {
         eprintln!("No git remotes found.");
         std::process::exit(1);
@@ -609,7 +610,7 @@ fn proxy_to_git(args: &[String]) {
             let status = child.wait();
             match status {
                 Ok(status) => {
-                    std::process::exit(status.code().unwrap_or(1));
+                    exit_with_status(status);
                 }
                 Err(e) => {
                     eprintln!("Failed to wait for git process: {}", e);
@@ -622,6 +623,30 @@ fn proxy_to_git(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+// Ensure SIGPIPE default action, even if inherited ignored from a parent shell
+fn reset_sigpipe_to_default() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+// Exit mirroring the child's termination: same signal if signaled, else exit code
+fn exit_with_status(status: std::process::ExitStatus) -> ! {
+    #[cfg(unix)]
+    {
+        if let Some(sig) = status.signal() {
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                libc::raise(sig);
+            }
+            // Should not return
+            unreachable!();
+        }
+    }
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 #[allow(dead_code)]
