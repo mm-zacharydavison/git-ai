@@ -3,6 +3,7 @@ mod error;
 mod git;
 mod log_fmt;
 mod utils;
+mod config;
 
 
 use clap::Parser;
@@ -20,15 +21,16 @@ use crate::git::refs::DEFAULT_REFSPEC;
 #[derive(Parser)]
 #[command(name = "git-ai")]
 #[command(about = "git proxy with AI authorship tracking", long_about = None)]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(disable_help_flag = true)]
+#[command(disable_help_flag = true, disable_version_flag = true)]
 struct Cli {
     /// Git command and arguments
-    #[arg(trailing_var_arg = true)]
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
 fn main() {
+    // Initialize global configuration early
+    config::Config::init();
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
@@ -44,10 +46,8 @@ fn main() {
     let cli = Cli::parse();
     if cli.args.is_empty() {
         if binary_name == "git" {
-            // User called 'git' (via alias), show git help
-            //
-            //
-            proxy_to_git(&["help".to_string()]);
+            // User called 'git'
+            proxy_to_git(&[]);
         } else {
             // User called 'git-ai', show git-ai specific help
             print_help();
@@ -90,6 +90,7 @@ fn main() {
         "install-hooks" => {
             // This command only works when called as git-ai, not as git alias
             if binary_name == "git" {
+                debug_log(&format!("binary_name: {}", binary_name));
                 eprintln!(
                     "Error: install-hooks command is only available when called as 'git-ai', not as 'git'"
                 );
@@ -119,7 +120,7 @@ fn main() {
             commands::rebase_authorship::handle_squash_authorship(args);
         }
         _ => {
-            debug_log(&format!("proxying: git {}", command));
+            // debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
             proxy_to_git(&cli.args);
         }
@@ -396,7 +397,9 @@ fn handle_commit(args: &[String]) {
     let mut full_args = vec!["commit".to_string()];
     full_args.extend_from_slice(args);
 
-    let child = std::process::Command::new("git").args(&full_args).spawn();
+    let child = std::process::Command::new(config::Config::get().git_cmd())
+        .args(&full_args)
+        .spawn();
 
     match child {
         Ok(mut child) => {
@@ -503,7 +506,7 @@ fn handle_push(args: &[String]) {
 
     // Helper to run a git command and optionally forward output, returning exit code
     fn run_git_and_forward(args: &[String], quiet: bool) -> i32 {
-        let output = Command::new("git").args(args).output();
+        let output = Command::new(config::Config::get().git_cmd()).args(args).output();
         match output {
             Ok(output) => {
                 if !quiet {
@@ -595,99 +598,25 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
 }
 
 fn proxy_to_git(args: &[String]) {
-    // Check if this is an interactive command that needs special handling
-    // Including color-supporting commands to preserve TTY for proper color output
-    let interactive_commands = [
-        "add",
-        "am",
-        "apply",
-        "bisect",
-        "branch",
-        "checkout",
-        "cherry-pick",
-        "clean",
-        "clone",
-        "commit",
-        "config",
-        "diff",
-        "describe",
-        "fetch",
-        "help",
-        "init",
-        "interactive",
-        "log",
-        "ls-files",
-        "ls-tree",
-        "merge",
-        "mv",
-        "notes",
-        "pull",
-        "push",
-        "rebase",
-        "remote",
-        "reflog",
-        "reset",
-        "restore",
-        "revert",
-        "rm",
-        "shortlog",
-        "show",
-        "stash",
-        "status",
-        "submodule",
-        "switch",
-        "tag",
-        "whatchanged",
-        "worktree",
-    ];
-    let is_interactive = args
-        .first()
-        .map(|cmd| interactive_commands.contains(&cmd.as_str()))
-        .unwrap_or(false);
+    // Use spawn for interactive commands
+    let child = Command::new(config::Config::get().git_cmd()).args(args).spawn();
 
-    if is_interactive {
-        // Use spawn for interactive commands
-        let child = Command::new("git").args(args).spawn();
-
-        match child {
-            Ok(mut child) => {
-                let status = child.wait();
-                match status {
-                    Ok(status) => {
-                        std::process::exit(status.code().unwrap_or(1));
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to wait for git process: {}", e);
-                        std::process::exit(1);
-                    }
+    match child {
+        Ok(mut child) => {
+            let status = child.wait();
+            match status {
+                Ok(status) => {
+                    std::process::exit(status.code().unwrap_or(1));
                 }
-            }
-            Err(e) => {
-                eprintln!("Failed to execute git command: {}", e);
-                std::process::exit(1);
+                Err(e) => {
+                    eprintln!("Failed to wait for git process: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
-    } else {
-        // Use output for non-interactive commands
-        let output = Command::new("git").args(args).output();
-
-        match output {
-            Ok(output) => {
-                // Forward stdout and stderr
-                if !output.stdout.is_empty() {
-                    std::io::stdout().write_all(&output.stdout).unwrap();
-                }
-                if !output.stderr.is_empty() {
-                    std::io::stderr().write_all(&output.stderr).unwrap();
-                }
-
-                // Forward the exit code
-                std::process::exit(output.status.code().unwrap_or(1));
-            }
-            Err(e) => {
-                eprintln!("Failed to execute git command: {}", e);
-                std::process::exit(1);
-            }
+        Err(e) => {
+            eprintln!("Failed to execute git command: {}", e);
+            std::process::exit(1);
         }
     }
 }

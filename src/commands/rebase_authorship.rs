@@ -161,7 +161,7 @@ fn delete_hanging_commit(repo: &Repository, commit_sha: &str) -> Result<(), GitA
     let _commit = repo.find_commit(Oid::from_str(commit_sha)?)?;
 
     // Delete the commit using git command
-    let _output = std::process::Command::new("git")
+    let _output = std::process::Command::new(crate::config::Config::get().git_cmd())
         .arg("update-ref")
         .arg("-d")
         .arg(format!("refs/heads/temp-{}", commit_sha))

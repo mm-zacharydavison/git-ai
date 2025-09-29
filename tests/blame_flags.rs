@@ -1,4 +1,5 @@
 use git_ai::tmp_repo::TmpRepo;
+use git_ai::config;
 use insta::assert_debug_snapshot;
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -42,7 +43,7 @@ fn run_git_blame(repo_path: &std::path::Path, file_path: &str, args: &[&str]) ->
 
     println!("[DEBUG] Processed args: {:?}", processed_args);
 
-    let output = Command::new("git")
+    let output = Command::new(crate::config::Config::get().git_cmd())
         .current_dir(repo_path)
         .arg("blame")
         .args(&processed_args)

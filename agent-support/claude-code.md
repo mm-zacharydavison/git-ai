@@ -1,6 +1,6 @@
 # Using Claude Code with `git-ai`
 
-Add hooks to your Claude Code Settings [`.claude/settings.local.json`](https://docs.anthropic.com/en/docs/claude-code/hooks).
+Add hooks to your Claude Code Settings [`~/.claude/settings.json`](https://docs.anthropic.com/en/docs/claude-code/hooks).
 
 Notes:
 You can check in these updated hook settings. `2>/dev/null` will swallow errors when `git-ai` is not installed or errors out removing the risk of breaking teammates workflows.
