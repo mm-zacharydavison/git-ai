@@ -141,14 +141,14 @@ if ($stdGitPath) {
     $env:GIT_AI_GIT_PATH = $stdGitPath
 }
 
-# TODO Install hooks
-# Write-Host 'Setting up IDE/agent hooks...'
-# try {
-#     & $finalExe install-hooks | Out-Host
-#     Write-Success 'Successfully set up IDE/agent hooks'
-# } catch {
-#     Write-Host 'Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks.' -ForegroundColor Yellow
-# }
+# Install hooks
+Write-Host 'Setting up IDE/agent hooks...'
+try {
+    & $finalExe install-hooks | Out-Host
+    Write-Success 'Successfully set up IDE/agent hooks'
+} catch {
+    Write-Host 'Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks.' -ForegroundColor Yellow
+}
 
 Write-Success "Successfully installed git-ai into $installDir"
 Write-Success "You can now run 'git-ai' from your terminal"
