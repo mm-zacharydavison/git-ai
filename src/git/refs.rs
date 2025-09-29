@@ -63,37 +63,25 @@ pub fn get_reference_as_authorship_log_v3(
 ) -> Result<AuthorshipLog, GitAiError> {
     let content = get_reference(repo, ref_name)?;
 
-    // Try to detect format: new text format vs old JSON format
-    if content.contains("---") {
-        // New text format - parse as AuthorshipLog
-        match AuthorshipLog::deserialize_from_string(&content) {
-            Ok(v3_log) => Ok(v3_log),
-            Err(_) => Err(GitAiError::Generic(
-                "Failed to parse new format authorship log".to_string(),
-            )),
-        }
-    } else {
-        // Old JSON format - convert to V3
-        let version_check: serde_json::Value = serde_json::from_str(&content)?;
-        if let Some(schema_version) = version_check.get("schema_version").and_then(|v| v.as_str()) {
-            if schema_version != AUTHORSHIP_LOG_VERSION {
-                return Err(GitAiError::Generic(format!(
-                    "Unsupported authorship log version: {} (expected: {})",
-                    schema_version, AUTHORSHIP_LOG_VERSION
-                )));
-            }
-        } else {
+    // Try to deserialize as AuthorshipLog
+    let authorship_log = match AuthorshipLog::deserialize_from_string(&content) {
+        Ok(log) => log,
+        Err(_) => {
             return Err(GitAiError::Generic(
-                "No schema_version found in authorship log".to_string(),
+                "Failed to parse authorship log".to_string(),
             ));
         }
+    };
 
-        // Old JSON format - this should not happen anymore since we only support v3
-        Err(GitAiError::Generic(
-            "Old JSON format authorship logs are no longer supported. Please use v3 format."
-                .to_string(),
-        ))
+    // Check version compatibility
+    if authorship_log.metadata.schema_version != AUTHORSHIP_LOG_VERSION {
+        return Err(GitAiError::Generic(format!(
+            "Unsupported authorship log version: {} (expected: {})",
+            authorship_log.metadata.schema_version, AUTHORSHIP_LOG_VERSION
+        )));
     }
+
+    Ok(authorship_log)
 }
 
 pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
