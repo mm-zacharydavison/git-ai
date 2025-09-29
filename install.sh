@@ -154,6 +154,14 @@ if [ -n "$STD_GIT_PATH" ]; then
     GIT_PATH_CMD="export GIT_AI_GIT_PATH=\"$STD_GIT_PATH\""
 fi
 
+# Install hooks
+echo "Setting up IDE/agent hooks..."
+if ! ${INSTALL_DIR}/git-ai install-hooks; then
+    echo "Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks." >&2
+else
+    success "Successfully set up IDE/agent hooks"
+fi
+
 success "Successfully installed git-ai into ${INSTALL_DIR}"
 success "You can now run 'git-ai' from your terminal"
 
@@ -182,9 +190,3 @@ if [[ ":$PATH:" != *"$INSTALL_DIR"* ]]; then
         fi
     fi
 fi
-
-# TODO Refactor inline
-# Install hooks
-echo "Installing hooks..."
-${INSTALL_DIR}/git-ai install-hooks
-success "Successfully installed hooks"

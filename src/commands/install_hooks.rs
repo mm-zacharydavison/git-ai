@@ -11,86 +11,59 @@ pub fn run(_args: &[String]) -> Result<(), GitAiError> {
 }
 
 async fn async_run() -> Result<(), GitAiError> {
-    check_claude_code().await;
+    if check_claude_code() {
+        // Install/update Claude Code hooks
+        let spinner = Spinner::new("Claude code: installing hooks");
+        spinner.start();
 
-    // Install/update Claude Code hooks
-    let spinner = Spinner::new("Claude code: installing hooks");
-    spinner.start();
+        if let Err(e) = install_claude_code_hooks() {
+            // We intentionally don't fail hard for teammate workflows
+            // but we surface a message for the current user.
+            spinner.skipped("Claude code: Could not update hooks (safe to ignore)");
+            eprintln!("Note: failed to update .claude/settings.json: {}", e);
+        } else {
+            spinner.success("Claude code: Hooks installed");
+        }
+    }
 
-    if let Err(e) = install_claude_code_hooks() {
-        // We intentionally don't fail hard for teammate workflows
-        // but we surface a message for the current user.
-        spinner.skipped("Claude code: Could not update hooks (safe to ignore)");
-        eprintln!("Note: failed to update .claude/settings.json: {}", e);
-    } else {
-        spinner.success("Claude code: Hooks installed");
+    if check_cursor() {
+        // Install/update Cursor hooks
+        let spinner = Spinner::new("Cursor: installing hooks");
+        spinner.start();
+
+        if let Err(e) = install_cursor_hooks() {
+            // Do not fail hard; keep teammate workflows safe
+            spinner.skipped("Cursor: Could not update hooks (safe to ignore)");
+            eprintln!("Note: failed to update ~/.cursor/hooks.json: {}", e);
+        } else {
+            spinner.success("Cursor: Hooks installed");
+        }
     }
 
     Ok(())
 }
 
-async fn check_claude_code() {
-    let spinner = Spinner::new("Claude code: checking installation");
-    spinner.start();
-
-    let exists = binary_exists("claude");
-
-    if exists {
-        spinner.success("Claude code: Installed and ready");
-    } else {
-        spinner.skipped("Claude code: Not installed");
+fn check_claude_code() -> bool {
+    if binary_exists("claude") {
+        return true;
     }
+
+    // Sometimes the binary won't be in the PATH, but the dotfiles will be
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    return Path::new(&home).join(".claude").exists()
 }
 
-#[allow(dead_code)]
-async fn check_codex() {
-    let spinner = Spinner::new("Codex: checking install");
-    spinner.start();
-
-    // Check if Codex binary exists
-    let exists = binary_exists("claude");
-
-    // Simulate some checking time
-    spinner.wait_for(1500).await;
-
-    if exists {
-        spinner.success("Codex: Installed");
-    } else {
-        spinner.error("Codex: Not found");
+fn check_cursor() -> bool {
+    // TODO: Also check if dotfiles for cursor exist (windows?)
+    if binary_exists("cursor") {
+        return true;
     }
-}
 
-#[allow(dead_code)]
-async fn check_windsurf() {
-    let spinner = Spinner::new("Windsurf: checking status");
-    spinner.start();
+    // TODO Approach for Windows?
 
-    // Simulate checking Windsurf
-    spinner.wait_for(500).await;
-
-    spinner.error("Windsurf: Not installed");
-}
-
-#[allow(dead_code)]
-async fn check_cursor() {
-    let spinner = Spinner::new("Cursor: checking status");
-    spinner.start();
-
-    // Simulate checking Cursor
-    spinner.wait_for(2000).await;
-
-    spinner.success("Cursor: Ready");
-}
-
-#[allow(dead_code)]
-async fn check_github_copilot() {
-    let spinner = Spinner::new("GitHub Copilot: verifying");
-    spinner.start();
-
-    // Simulate verifying GitHub Copilot
-    spinner.wait_for(3000).await;
-
-    spinner.success("GitHub Copilot: Active");
+    // Sometimes the binary won't be in the PATH, but the dotfiles will be
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    return Path::new(&home).join(".cursor").exists()
 }
 
 // Shared utilities
@@ -148,7 +121,7 @@ fn install_claude_code_hooks() -> Result<(), GitAiError> {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "git-ai checkpoint --author \"Claude Code\" 2>/dev/null || true"
+                            "command": "git-ai checkpoint claude --hook-input \"$(cat)\" 2>/dev/null || true"
                         }
                     ]
                 }
@@ -171,6 +144,102 @@ fn install_claude_code_hooks() -> Result<(), GitAiError> {
     // Write pretty JSON to file atomically
     let pretty = serde_json::to_string_pretty(&merged)?;
     write_atomic(&settings_path, pretty.as_bytes())?;
+    Ok(())
+}
+
+fn install_cursor_hooks() -> Result<(), GitAiError> {
+    let hooks_path = cursor_hooks_path();
+
+    // Ensure directory exists
+    if let Some(dir) = hooks_path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+
+    // Read existing JSON if present, else start with empty object
+    let existing: Value = if hooks_path.exists() {
+        let contents = fs::read_to_string(&hooks_path)?;
+        if contents.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&contents)?
+        }
+    } else {
+        json!({})
+    };
+
+    // Desired hooks payload for Cursor
+    let desired: Value = json!({
+        "version": 1,
+        "hooks": {
+            "afterEdit": [
+                {
+                    "command": "git-ai checkpoint cursor 2>/dev/null || true"
+                }
+            ]
+        }
+    });
+
+    // Merge desired into existing (version + hooks.afterEdit dedup by command)
+    let mut merged = existing.clone();
+
+    // Ensure version is set (preserve existing if present)
+    if merged.get("version").is_none() {
+        if let Some(obj) = merged.as_object_mut() {
+            obj.insert("version".to_string(), json!(1));
+        }
+    }
+
+    // Merge hooks object
+    let mut hooks_obj = merged
+        .get("hooks")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    // AfterEdit desired entries
+    let desired_after = desired
+        .get("hooks")
+        .and_then(|h| h.get("afterEdit"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Existing afterEdit array
+    let mut existing_after = hooks_obj
+        .get("afterEdit")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Deduplicate by full object and by command string
+    for d in desired_after {
+        let is_dup = existing_after.iter().any(|e| {
+            if e == &d {
+                return true;
+            }
+            let dc = d.get("command").and_then(|c| c.as_str());
+            let ec = e.get("command").and_then(|c| c.as_str());
+            match (dc, ec) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            }
+        });
+        if !is_dup {
+            existing_after.push(d.clone());
+        }
+    }
+
+    // Write back merged hooks
+    if let Some(obj) = hooks_obj.as_object_mut() {
+        obj.insert("afterEdit".to_string(), Value::Array(existing_after));
+    }
+
+    if let Some(root) = merged.as_object_mut() {
+        root.insert("hooks".to_string(), hooks_obj);
+    }
+
+    // Write pretty JSON atomically
+    let pretty = serde_json::to_string_pretty(&merged)?;
+    write_atomic(&hooks_path, pretty.as_bytes())?;
     Ok(())
 }
 
@@ -250,6 +319,11 @@ fn merge_hooks(existing: Option<&Value>, desired: Option<&Value>) -> Option<Valu
 fn claude_settings_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     Path::new(&home).join(".claude").join("settings.json")
+}
+
+fn cursor_hooks_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join(".cursor").join("hooks.json")
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> Result<(), GitAiError> {
