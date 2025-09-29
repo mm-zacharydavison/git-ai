@@ -1,6 +1,7 @@
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::post_commit::post_commit;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
 use std::fs;
@@ -323,7 +324,7 @@ impl TmpRepo {
     }
 
     /// Commits all changes with the given message and runs post-commit hook
-    pub fn commit_with_message(&self, message: &str) -> Result<(), GitAiError> {
+    pub fn commit_with_message(&self, message: &str) -> Result<AuthorshipLog, GitAiError> {
         // Add all files to the index
         let mut index = self.repo.index()?;
         index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
@@ -377,9 +378,9 @@ impl TmpRepo {
         println!("Commit ID: {}", _commit_id);
 
         // Run the post-commit hook for all commits (including initial commit)
-        post_commit(&self.repo, false)?; // false = not force
+        let post_commit_result = post_commit(&self.repo, false)?; // false = not force
 
-        Ok(())
+        Ok((post_commit_result.1))
     }
 
     /// Creates a new branch and switches to it
@@ -569,6 +570,7 @@ impl TmpRepo {
         }
 
         let blame_map = blame::run(&self.repo, &tmp_file.filename, &options)?;
+        println!("blame_map: {:?}", blame_map);
         Ok(blame_map.into_iter().collect())
     }
 }

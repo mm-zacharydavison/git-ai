@@ -375,7 +375,7 @@ fn get_initial_checkpoint_entries(
                         let delete_end = delete_start + delete_count - 1;
                         deleted_lines.push(Line::Range(delete_start, delete_end));
                     }
-                    current_line += delete_count;
+                    // Don't advance current_line for deletions - insertions will happen at the same position
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
@@ -455,7 +455,7 @@ fn get_subsequent_checkpoint_entries(
                         let delete_end = delete_start + delete_count - 1;
                         deleted_lines.push(Line::Range(delete_start, delete_end));
                     }
-                    current_line += delete_count;
+                    // Don't advance current_line for deletions - insertions will happen at the same position
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;

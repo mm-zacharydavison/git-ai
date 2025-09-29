@@ -262,10 +262,16 @@ impl AuthorshipLog {
             }
         }
 
-        // Remove empty files/entries
+        // Remove empty files/entries and sort entries for deterministic output
         authorship_log
             .attestations
             .retain(|f| !f.entries.is_empty());
+
+        // Sort attestation entries by hash for deterministic ordering
+        for file_attestation in &mut authorship_log.attestations {
+            file_attestation.entries.sort_by(|a, b| a.hash.cmp(&b.hash));
+        }
+
         authorship_log
     }
 

@@ -428,6 +428,11 @@ fn reconstruct_authorship_from_diff(
             .insert(prompt_session_id, prompt_record);
     }
 
+    // Sort attestation entries by hash for deterministic ordering
+    for file_attestation in &mut authorship_log.attestations {
+        file_attestation.entries.sort_by(|a, b| a.hash.cmp(&b.hash));
+    }
+
     Ok(authorship_log)
 }
 
