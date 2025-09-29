@@ -60,15 +60,17 @@ impl AttestationEntry {
     }
 
     pub fn remove_line_ranges(&mut self, to_remove: &[LineRange]) {
-        let mut new_lines = Vec::new();
-        for existing_range in &self.line_ranges {
-            let mut remaining = Vec::new();
-            for remove_range in to_remove {
-                remaining.extend(existing_range.remove(remove_range));
+        let mut current_ranges = self.line_ranges.clone();
+
+        for remove_range in to_remove {
+            let mut new_ranges = Vec::new();
+            for existing_range in &current_ranges {
+                new_ranges.extend(existing_range.remove(remove_range));
             }
-            new_lines.extend(remaining);
+            current_ranges = new_ranges;
         }
-        self.line_ranges = new_lines;
+
+        self.line_ranges = current_ranges;
     }
 }
 
@@ -273,7 +275,12 @@ impl AuthorshipLog {
             }
         }
 
-        // Remove empty files/entries and sort entries for deterministic output
+        // Remove empty entries and empty files
+        for file_attestation in &mut authorship_log.attestations {
+            file_attestation
+                .entries
+                .retain(|entry| !entry.line_ranges.is_empty());
+        }
         authorship_log
             .attestations
             .retain(|f| !f.entries.is_empty());
@@ -795,5 +802,35 @@ mod tests {
         assert_eq!(deserialized.metadata.base_commit_sha, "abc123");
         assert_eq!(deserialized.metadata.prompts.len(), 1);
         assert_eq!(deserialized.attestations.len(), 0);
+    }
+
+    #[test]
+    fn test_remove_line_ranges_complete_removal() {
+        let mut entry =
+            AttestationEntry::new("test_hash".to_string(), vec![LineRange::Range(2, 5)]);
+
+        // Remove the exact same range
+        entry.remove_line_ranges(&[LineRange::Range(2, 5)]);
+
+        // Should be empty after removing the exact range
+        assert!(
+            entry.line_ranges.is_empty(),
+            "Expected empty line_ranges after complete removal, got: {:?}",
+            entry.line_ranges
+        );
+    }
+
+    #[test]
+    fn test_remove_line_ranges_partial_removal() {
+        let mut entry =
+            AttestationEntry::new("test_hash".to_string(), vec![LineRange::Range(2, 10)]);
+
+        // Remove middle part
+        entry.remove_line_ranges(&[LineRange::Range(5, 7)]);
+
+        // Should have two ranges: [2-4] and [8-10]
+        assert_eq!(entry.line_ranges.len(), 2);
+        assert_eq!(entry.line_ranges[0], LineRange::Range(2, 4));
+        assert_eq!(entry.line_ranges[1], LineRange::Range(8, 10));
     }
 }

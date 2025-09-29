@@ -289,14 +289,9 @@ impl TmpRepo {
         use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
         use crate::log_fmt::transcript::AiTranscript;
         use crate::log_fmt::working_log::AgentId;
-        use std::time::{SystemTime, UNIX_EPOCH};
 
-        // Generate a unique session ID for this AI checkpoint
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let session_id = format!("test_session_{}", timestamp);
+        // Use a fixed session ID for deterministic tests
+        let session_id = "test_session_fixed".to_string();
 
         // Create agent ID
         let agent_id = AgentId {
