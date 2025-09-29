@@ -50,31 +50,84 @@ function Get-StdGitPath {
     return $null
 }
 
-function Add-ToUserPath {
+# Ensure $PathToAdd is inserted before any PATH entry that contains "git" (case-insensitive)
+# Updates Machine (system) PATH; if not elevated, emits a prominent error with instructions
+function Set-PathPrependBeforeGit {
     param(
         [Parameter(Mandatory = $true)][string]$PathToAdd
     )
-    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+
     $sep = ';'
-    $entries = @()
-    if ($current) { $entries = ($current -split $sep) | Where-Object { $_ -and $_.Trim() -ne '' } }
 
-    $exists = $false
-    foreach ($entry in $entries) {
-        try {
-            if ([IO.Path]::GetFullPath($entry.TrimEnd('\')) -ieq [IO.Path]::GetFullPath($PathToAdd.TrimEnd('\'))) {
-                $exists = $true
-                break
+    function NormalizePath([string]$p) {
+        try { return ([IO.Path]::GetFullPath($p.Trim())).TrimEnd('\\').ToLowerInvariant() }
+        catch { return ($p.Trim()).TrimEnd('\\').ToLowerInvariant() }
+    }
+
+    $normalizedAdd = NormalizePath $PathToAdd
+
+    # Helper to build new PATH string with PathToAdd inserted before first 'git' entry
+    function BuildPathWithInsert([string]$existingPath, [string]$toInsert) {
+        $entries = @()
+        if ($existingPath) { $entries = ($existingPath -split $sep) | Where-Object { $_ -and $_.Trim() -ne '' } }
+
+        # De-duplicate and remove any existing instance of $toInsert
+        $list = New-Object System.Collections.Generic.List[string]
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($e in $entries) {
+            $n = NormalizePath $e
+            if (-not $seen.Contains($n) -and $n -ne $normalizedAdd) {
+                $seen.Add($n) | Out-Null
+                $list.Add($e) | Out-Null
             }
-        } catch { }
+        }
+
+        # Find first index that matches 'git' anywhere (case-insensitive)
+        $insertIndex = 0
+        for ($i = 0; $i -lt $list.Count; $i++) {
+            if ($list[$i] -match '(?i)git') { $insertIndex = $i; break }
+        }
+
+        $list.Insert($insertIndex, $toInsert)
+        return ($list -join $sep)
     }
 
-    if (-not $exists) {
-        $newPath = if ($current) { ($current.TrimEnd($sep) + $sep + $PathToAdd) } else { $PathToAdd }
-        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        return $true
+    # Try to update Machine PATH
+    $updatedScope = $null
+    try {
+        $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $newMachinePath = BuildPathWithInsert -existingPath $machinePath -toInsert $PathToAdd
+        if ($newMachinePath -ne $machinePath) {
+            [Environment]::SetEnvironmentVariable('Path', $newMachinePath, 'Machine')
+            $updatedScope = 'Machine'
+        } else {
+            # Nothing changed at Machine scope; still treat as Machine for reporting
+            $updatedScope = 'Machine'
+        }
+    } catch {
+        # Access denied or not elevated; do NOT modify User PATH. Print big red error with instructions.
+        $origGit = $null
+        try { $origGit = Get-StdGitPath } catch { }
+        $origGitDir = if ($origGit) { (Split-Path $origGit -Parent) } else { 'your Git installation directory' }
+        Write-Host ''
+        Write-Host 'ERROR: Unable to update the SYSTEM PATH (administrator rights required).' -ForegroundColor Red
+        Write-Host 'Your PATH was NOT changed. To ensure git-ai takes precedence over Git:' -ForegroundColor Red
+        Write-Host ("  1) Run PowerShell as Administrator and re-run this installer; OR") -ForegroundColor Red
+        Write-Host ("  2) Manually edit the SYSTEM Path and move '{0}' before any entries containing 'Git' (e.g. '{1}')." -f $PathToAdd, $origGitDir) -ForegroundColor Red
+        Write-Host "     Steps: Start → type 'Environment Variables' → 'Edit the system environment variables' → Environment Variables →" -ForegroundColor Red
+        Write-Host "            Under 'System variables', select 'Path' → Edit → Move '{0}' to the top (before Git) → OK." -f $PathToAdd -ForegroundColor Red
+        Write-Host ''
+        $updatedScope = 'Error'
     }
-    return $false
+
+    # Update current process PATH immediately for this session
+    try {
+        $procPath = $env:PATH
+        $newProcPath = BuildPathWithInsert -existingPath $procPath -toInsert $PathToAdd
+        if ($newProcPath -ne $procPath) { $env:PATH = $newProcPath }
+    } catch { }
+
+    return $updatedScope
 }
 
 # Detect architecture and OS
@@ -150,17 +203,13 @@ try {
     Write-Host 'Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks.' -ForegroundColor Yellow
 }
 
-Write-Success "Successfully installed git-ai into $installDir"
-Write-Success "You can now run 'git-ai' from your terminal"
-
-# Update PATH for the user if needed
-$added = Add-ToUserPath -PathToAdd $installDir
-if ($added) {
-    if ($env:PATH -notmatch [Regex]::Escape($installDir)) {
-        $env:PATH = "$installDir;" + $env:PATH
-    }
-    Write-Success "Updated your user PATH to include $installDir"
-    Write-Host 'Restart your terminal for the change to take effect.'
+# Update PATH so our shim takes precedence over any Git entries
+$scope = Set-PathPrependBeforeGit -PathToAdd $installDir
+if ($scope -eq 'Machine') {
+    Write-Success 'Successfully added git-ai to the system PATH.'
+} elseif ($scope -eq 'Error') {
+    Write-Host 'PATH update failed: system PATH unchanged.' -ForegroundColor Red
 }
 
-
+Write-Success "Successfully installed git-ai into $installDir"
+Write-Success "You can now run 'git-ai' from your terminal"
