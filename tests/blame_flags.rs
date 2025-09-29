@@ -1,6 +1,5 @@
 use git_ai::tmp_repo::TmpRepo;
 use git_ai::config;
-use insta::assert_debug_snapshot;
 use std::collections::BTreeMap;
 use std::process::Command;
 use tempfile::tempdir;
@@ -228,7 +227,7 @@ fn test_blame_basic_format() {
     let git_output = run_git_blame(&repo_path, "test.txt", &[]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &[]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "basic_format");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "basic_format");
 
     // Use insta to capture the comparison and catch drift
     let git_norm = normalize_for_snapshot(&git_output);
@@ -264,7 +263,7 @@ fn test_blame_line_range() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-L", "2,4"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-L", "2,4"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "line_range");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "line_range");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -295,7 +294,7 @@ fn test_blame_porcelain_format() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["--porcelain"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--porcelain"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "porcelain_format");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "porcelain_format");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -326,7 +325,7 @@ fn test_blame_show_email() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-e"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-e"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "show_email");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_email");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -364,7 +363,7 @@ fn test_blame_show_name() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-f"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-f"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "show_name");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_name");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -405,7 +404,7 @@ fn test_blame_show_number() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-n"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-n"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "show_number");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_number");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -436,7 +435,7 @@ fn test_blame_suppress_author() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-s"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-s"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "suppress_author");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "suppress_author");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -477,7 +476,7 @@ fn test_blame_long_rev() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-l"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-l"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "long_rev");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "long_rev");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -529,7 +528,7 @@ fn test_blame_raw_timestamp() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-t"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-t"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "raw_timestamp");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "raw_timestamp");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -570,7 +569,7 @@ fn test_blame_abbrev() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["--abbrev", "4"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--abbrev", "4"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "abbrev");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "abbrev");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -631,7 +630,7 @@ fn test_blame_show_root() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["--root"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--root"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "show_root");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_root");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -670,7 +669,7 @@ fn test_blame_show_root() {
 //     let git_output = run_git_blame(&repo_path, "test.txt", &["--show-stats"]);
 //     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--show-stats"]);
 
-//     let comparison = create_blame_comparison(&git_output, &git_ai_output, "show_stats");
+//     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_stats");
 //     let git_norm = normalize_for_snapshot(&git_output);
 //     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
 //     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -710,7 +709,7 @@ fn test_blame_date_format() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["--date", "short"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--date", "short"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "date_format");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "date_format");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -751,7 +750,7 @@ fn test_blame_multiple_flags() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["-L", "2,4", "-e", "-n"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-L", "2,4", "-e", "-n"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "multiple_flags");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "multiple_flags");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -799,7 +798,7 @@ fn test_blame_incremental_format() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["--incremental"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--incremental"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "incremental_format");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "incremental_format");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -830,7 +829,7 @@ fn test_blame_line_porcelain() {
     let git_output = run_git_blame(&repo_path, "test.txt", &["--line-porcelain"]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--line-porcelain"]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "line_porcelain");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "line_porcelain");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -874,7 +873,7 @@ fn test_blame_with_ai_authorship() {
     let git_output = run_git_blame(&repo_path, "test.txt", &[]);
     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &[]);
 
-    let comparison = create_blame_comparison(&git_output, &git_ai_output, "ai_authorship");
+    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "ai_authorship");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);

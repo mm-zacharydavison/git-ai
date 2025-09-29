@@ -1,6 +1,6 @@
 use crate::error::GitAiError;
 use indicatif::{ProgressBar, ProgressStyle};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ fn check_claude_code() -> bool {
 
     // Sometimes the binary won't be in the PATH, but the dotfiles will be
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    return Path::new(&home).join(".claude").exists()
+    return Path::new(&home).join(".claude").exists();
 }
 
 fn check_cursor() -> bool {
@@ -63,7 +63,7 @@ fn check_cursor() -> bool {
 
     // Sometimes the binary won't be in the PATH, but the dotfiles will be
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    return Path::new(&home).join(".cursor").exists()
+    return Path::new(&home).join(".cursor").exists();
 }
 
 // Shared utilities
@@ -190,10 +190,7 @@ fn install_cursor_hooks() -> Result<(), GitAiError> {
     }
 
     // Merge hooks object
-    let mut hooks_obj = merged
-        .get("hooks")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let mut hooks_obj = merged.get("hooks").cloned().unwrap_or_else(|| json!({}));
 
     // AfterEdit desired entries
     let desired_after = desired
@@ -245,13 +242,18 @@ fn install_cursor_hooks() -> Result<(), GitAiError> {
 
 fn merge_hooks(existing: Option<&Value>, desired: Option<&Value>) -> Option<Value> {
     let mut result = existing.cloned().unwrap_or_else(|| json!({}));
-    let desired = match desired { Some(v) => v, None => return Some(result) };
+    let desired = match desired {
+        Some(v) => v,
+        None => return Some(result),
+    };
 
     // Merge arrays by matcher for PreToolUse and PostToolUse. Append missing hooks, avoid duplicates.
     if let Some(obj) = result.as_object_mut() {
         for key in ["PreToolUse", "PostToolUse"].iter() {
             let desired_arr = desired.get(*key).and_then(|v| v.as_array());
-            if desired_arr.is_none() { continue; }
+            if desired_arr.is_none() {
+                continue;
+            }
             let desired_arr = desired_arr.unwrap();
 
             let mut existing_arr = obj
@@ -271,7 +273,9 @@ fn merge_hooks(existing: Option<&Value>, desired: Option<&Value>) -> Option<Valu
 
             for desired_item in desired_arr {
                 let desired_matcher = desired_item.get("matcher").and_then(|m| m.as_str());
-                if desired_matcher.is_none() { continue; }
+                if desired_matcher.is_none() {
+                    continue;
+                }
                 let desired_matcher = desired_matcher.unwrap();
 
                 // Find or create the block for this matcher
@@ -297,10 +301,15 @@ fn merge_hooks(existing: Option<&Value>, desired: Option<&Value>) -> Option<Valu
                     if let Some(desired_hooks) = desired_hooks {
                         for d in desired_hooks {
                             let duplicate = target_hooks.iter().any(|e| {
-                                if e == d { return true; }
+                                if e == d {
+                                    return true;
+                                }
                                 let dc = d.get("command").and_then(|c| c.as_str());
                                 let ec = e.get("command").and_then(|c| c.as_str());
-                                match (dc, ec) { (Some(a), Some(b)) => a == b, _ => false }
+                                match (dc, ec) {
+                                    (Some(a), Some(b)) => a == b,
+                                    _ => false,
+                                }
                             });
                             if !duplicate {
                                 target_hooks.push(d.clone());
@@ -370,11 +379,11 @@ impl Spinner {
         // Spinner starts automatically when created
     }
 
-    fn update_message(&self, message: &str) {
+    fn _update_message(&self, message: &str) {
         self.pb.set_message(message.to_string());
     }
 
-    async fn wait_for(&self, duration_ms: u64) {
+    async fn _wait_for(&self, duration_ms: u64) {
         smol::Timer::after(std::time::Duration::from_millis(duration_ms)).await;
     }
 

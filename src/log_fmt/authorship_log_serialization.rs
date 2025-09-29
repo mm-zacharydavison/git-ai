@@ -119,7 +119,7 @@ impl AuthorshipLog {
     }
 
     /// Merge overlapping and adjacent line ranges
-    fn merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
+    fn _merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
         if ranges.is_empty() {
             return Vec::new();
         }
@@ -140,8 +140,8 @@ impl AuthorshipLog {
         let mut merged = Vec::new();
         for current in sorted_ranges {
             if let Some(last) = merged.last_mut() {
-                if Self::ranges_can_merge(last, &current) {
-                    *last = Self::merge_ranges(last, &current);
+                if Self::_ranges_can_merge(last, &current) {
+                    *last = Self::_merge_ranges(last, &current);
                 } else {
                     merged.push(current);
                 }
@@ -154,7 +154,7 @@ impl AuthorshipLog {
     }
 
     /// Check if two ranges can be merged (overlapping or adjacent)
-    fn ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
+    fn _ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
         let (start1, end1) = match range1 {
             LineRange::Single(line) => (*line, *line),
             LineRange::Range(start, end) => (*start, *end),
@@ -169,7 +169,7 @@ impl AuthorshipLog {
     }
 
     /// Merge two ranges into one
-    fn merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
+    fn _merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
         let (start1, end1) = match range1 {
             LineRange::Single(line) => (*line, *line),
             LineRange::Range(start, end) => (*start, *end),
@@ -344,7 +344,7 @@ impl AuthorshipLog {
     }
 
     /// Write to a writer in the new format
-    pub fn serialize_to_writer<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
+    pub fn _serialize_to_writer<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
         let content = self
             .serialize_to_string()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Serialization failed"))?;
@@ -378,7 +378,7 @@ impl AuthorshipLog {
     }
 
     /// Read from a reader in the new format
-    pub fn deserialize_from_reader<R: BufRead>(
+    pub fn _deserialize_from_reader<R: BufRead>(
         reader: R,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let content: Result<String, _> = reader.lines().collect();

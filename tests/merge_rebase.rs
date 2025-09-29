@@ -201,7 +201,7 @@ fn test_blame_after_merge_conflict_resolution() {
     tmp_repo
         .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
         .unwrap();
-    let authorship_log = tmp_repo
+    let _authorship_log = tmp_repo
         .commit_with_message("feature conflict changes")
         .unwrap();
 

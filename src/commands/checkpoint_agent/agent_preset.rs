@@ -693,7 +693,7 @@ impl CursorPreset {
         Ok(None)
     }
 
-    fn explore_database_for_model_info(
+    fn _explore_database_for_model_info(
         global_db_path: &Path,
         composer_id: &str,
     ) -> Result<(), GitAiError> {
@@ -807,7 +807,7 @@ impl CursorPreset {
                         // Check toolFormerData for model information
                         if let Some(tool_former_data) = bubble_content.get("toolFormerData") {
                             // Look for model information in the toolFormerData
-                            if let Some(model_call_id) = tool_former_data.get("modelCallId") {
+                            if let Some(_model_call_id) = tool_former_data.get("modelCallId") {
                                 // The presence of modelCallId suggests this is an AI interaction
                                 // We can infer the model from other context or use a default
                                 return Ok("claude-3.5-sonnet".to_string()); // Default for Cursor AI interactions

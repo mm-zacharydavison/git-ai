@@ -190,7 +190,7 @@ impl AiTranscript {
     }
 
     /// Parse a Claude Code JSONL file into a transcript
-    pub fn from_claude_code_jsonl(jsonl_content: &str) -> Result<Self, serde_json::Error> {
+    pub fn _from_claude_code_jsonl(jsonl_content: &str) -> Result<Self, serde_json::Error> {
         let mut transcript = AiTranscript::new();
 
         for line in jsonl_content.lines() {
@@ -299,7 +299,7 @@ mod tests {
         .expect("Failed to read example JSONL file");
 
         let transcript =
-            AiTranscript::from_claude_code_jsonl(&jsonl_content).expect("Failed to parse JSONL");
+            AiTranscript::_from_claude_code_jsonl(&jsonl_content).expect("Failed to parse JSONL");
 
         // Verify we parsed some messages
         assert!(!transcript.messages().is_empty());

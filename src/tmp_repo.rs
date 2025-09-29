@@ -380,7 +380,7 @@ impl TmpRepo {
         // Run the post-commit hook for all commits (including initial commit)
         let post_commit_result = post_commit(&self.repo, false)?; // false = not force
 
-        Ok((post_commit_result.1))
+        Ok(post_commit_result.1)
     }
 
     /// Creates a new branch and switches to it

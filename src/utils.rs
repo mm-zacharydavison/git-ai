@@ -24,7 +24,7 @@ pub fn debug_log(msg: &str) {
 /// * `diff` - The git diff object to print
 /// * `old_label` - Label for the "old" side (e.g., commit SHA or description)
 /// * `new_label` - Label for the "new" side (e.g., commit SHA or description)
-pub fn print_diff(diff: &Diff, old_label: &str, new_label: &str) {
+pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
     println!("Diff between {} and {}:", old_label, new_label);
 
     let mut file_count = 0;

@@ -1,10 +1,9 @@
 mod commands;
+mod config;
 mod error;
 mod git;
 mod log_fmt;
 mod utils;
-mod config;
-
 
 use clap::Parser;
 use git::find_repository;
@@ -134,7 +133,7 @@ fn handle_checkpoint(args: &[String]) {
     let mut reset = false;
     let mut model = None;
     let mut _prompt_json = None;
-    let mut prompt_path = None;
+    let mut _prompt_path = None;
     let mut prompt_id = None;
     let mut hook_input = None;
 
@@ -178,7 +177,7 @@ fn handle_checkpoint(args: &[String]) {
             }
             "--prompt-path" => {
                 if i + 1 < args.len() {
-                    prompt_path = Some(args[i + 1].clone());
+                    _prompt_path = Some(args[i + 1].clone());
                     i += 2;
                 } else {
                     eprintln!("Error: --prompt-path requires a value");
@@ -506,7 +505,9 @@ fn handle_push(args: &[String]) {
 
     // Helper to run a git command and optionally forward output, returning exit code
     fn run_git_and_forward(args: &[String], quiet: bool) -> i32 {
-        let output = Command::new(config::Config::get().git_cmd()).args(args).output();
+        let output = Command::new(config::Config::get().git_cmd())
+            .args(args)
+            .output();
         match output {
             Ok(output) => {
                 if !quiet {
@@ -599,7 +600,9 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
 
 fn proxy_to_git(args: &[String]) {
     // Use spawn for interactive commands
-    let child = Command::new(config::Config::get().git_cmd()).args(args).spawn();
+    let child = Command::new(config::Config::get().git_cmd())
+        .args(args)
+        .spawn();
 
     match child {
         Ok(mut child) => {
