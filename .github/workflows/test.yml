@@ -21,6 +21,12 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      - name: Fetch all submodule references
+        run: |
+          cd tests/gitflow-repo
+          git fetch --all
+          git fetch origin '+refs/*:refs/*'
+
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
