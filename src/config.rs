@@ -18,9 +18,11 @@ impl Config {
         });
     }
 
-    /// Access the global configuration. Panics if not initialized.
+    /// Access the global configuration. Lazily initializes if not already initialized.
     pub fn get() -> &'static Config {
-        CONFIG.get().expect("Config not initialized. Call Config::init() early in main().")
+        CONFIG.get_or_init(|| Config {
+            git_path: resolve_git_path(),
+        })
     }
 
     /// Returns the command to invoke git.
