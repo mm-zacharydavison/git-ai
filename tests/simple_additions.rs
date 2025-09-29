@@ -67,7 +67,7 @@ fn test_simple_additions_on_top_of_ai_contributions() {
 
     tmp_repo.commit_with_message("next commit 1").unwrap();
 
-    lines.replace_range(34, 35, "HUMAN ON AI\n").unwrap();
+    lines.replace_range(34, 36, "HUMAN ON AI\n").unwrap();
 
     tmp_repo
         .trigger_checkpoint_with_author("test_user")
@@ -75,7 +75,7 @@ fn test_simple_additions_on_top_of_ai_contributions() {
 
     tmp_repo.commit_with_message("next commit 2").unwrap();
 
-    let blame = tmp_repo.blame_for_file(&lines, Some((30, 35))).unwrap();
+    let blame = tmp_repo.blame_for_file(&lines, Some((30, 34))).unwrap();
     assert_debug_snapshot!(blame);
 }
 
@@ -152,6 +152,7 @@ fn test_ai_adds_then_human_deletes_and_replaces() {
         .unwrap();
 
     let blame = tmp_repo.blame_for_file(&file, None).unwrap();
+
     assert_debug_snapshot!(blame);
 }
 
@@ -190,6 +191,7 @@ fn test_ai_adds_middle_then_human_deletes_and_replaces() {
         .unwrap();
 
     let blame = tmp_repo.blame_for_file(&file, None).unwrap();
+
     assert_debug_snapshot!(blame);
 }
 
@@ -272,30 +274,6 @@ fn test_ai_adds_then_human_deletes_all_ai_lines() {
         .unwrap();
 
     let blame = tmp_repo.blame_for_file(&file, None).unwrap();
-    println!("blame: {:?}", blame);
-
-    // Debug: Print the authorship log content
-    let authorship_log = tmp_repo.get_authorship_log().unwrap();
-    println!("authorship_log: {:?}", authorship_log);
-
-    // Debug: Print the working log to see what entries were created
-    let working_log_ref = format!("ai-working-log/{}", "initial");
-    let working_log_content =
-        std::fs::read_to_string(format!(".git/refs/{}", working_log_ref)).unwrap_or_default();
-    println!("working_log_content: {}", working_log_content);
-
-    // Debug: Let's also check what the working log entries look like by parsing them
-    if !working_log_content.is_empty() {
-        let working_log: Result<Vec<git_ai::log_fmt::working_log::Checkpoint>, _> =
-            serde_json::from_str(&working_log_content);
-        if let Ok(log) = working_log {
-            println!("Parsed working log: {:?}", log);
-        }
-    }
-
-    // Debug: Let's also check what the file content looks like at each step
-    println!("Final file content: {:?}", file.contents());
-
     assert_debug_snapshot!(blame);
 }
 

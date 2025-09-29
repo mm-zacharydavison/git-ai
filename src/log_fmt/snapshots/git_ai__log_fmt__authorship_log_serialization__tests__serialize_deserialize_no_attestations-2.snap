@@ -8,7 +8,7 @@ AuthorshipLogV3 {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "abc123",
         prompts: {
-            "prompt1": PromptRecord {
+            "c9883b0": PromptRecord {
                 agent_id: AgentId {
                     tool: "cursor",
                     id: "session_123",

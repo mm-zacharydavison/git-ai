@@ -116,9 +116,11 @@ impl TmpFile {
         }
 
         // Add lines after the range (1-indexed to 0-indexed conversion)
-        for line in file_lines[(end_line - 1)..].iter() {
-            new_contents.push_str(line);
-            new_contents.push('\n');
+        if end_line <= file_lines.len() {
+            for line in file_lines[end_line..].iter() {
+                new_contents.push_str(line);
+                new_contents.push('\n');
+            }
         }
 
         // Remove trailing newline if the original didn't have one
