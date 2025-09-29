@@ -1,6 +1,7 @@
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::post_commit::post_commit;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
 use std::fs;
@@ -88,7 +89,10 @@ impl TmpFile {
 
         let file_lines = self.contents.lines().collect::<Vec<&str>>();
 
-        if start_line > file_lines.len() || end_line > file_lines.len() || start_line >= end_line {
+        if start_line > file_lines.len()
+            || end_line > file_lines.len() + 1
+            || start_line >= end_line
+        {
             return Err(GitAiError::Generic(format!(
                 "Invalid line range [{}, {}) for file with {} lines",
                 start_line,
@@ -112,9 +116,11 @@ impl TmpFile {
         }
 
         // Add lines after the range (1-indexed to 0-indexed conversion)
-        for line in file_lines[(end_line - 1)..].iter() {
-            new_contents.push_str(line);
-            new_contents.push('\n');
+        if end_line <= file_lines.len() {
+            for line in file_lines[end_line..].iter() {
+                new_contents.push_str(line);
+                new_contents.push('\n');
+            }
         }
 
         // Remove trailing newline if the original didn't have one
@@ -273,8 +279,52 @@ impl TmpRepo {
         )
     }
 
+    /// Triggers a checkpoint with AI content, creating proper prompts and agent data
+    pub fn trigger_checkpoint_with_ai(
+        &self,
+        agent_name: &str,
+        model: Option<&str>,
+        tool: Option<&str>,
+    ) -> Result<(usize, usize, usize), GitAiError> {
+        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+        use crate::log_fmt::transcript::AiTranscript;
+        use crate::log_fmt::working_log::AgentId;
+
+        // Use a fixed session ID for deterministic tests
+        let session_id = "test_session_fixed".to_string();
+
+        // Create agent ID
+        let agent_id = AgentId {
+            tool: tool.unwrap_or("test_tool").to_string(),
+            id: session_id.clone(),
+            model: model.unwrap_or("test_model").to_string(),
+        };
+
+        // Create a minimal transcript with empty messages (as requested)
+        let transcript = AiTranscript {
+            messages: vec![], // Default to empty as requested
+        };
+
+        // Create agent run result
+        let agent_run_result = AgentRunResult {
+            agent_id,
+            transcript,
+        };
+
+        checkpoint(
+            &self.repo,
+            agent_name,
+            false, // show_working_log
+            false, // reset
+            true,
+            model,
+            None, // human_author
+            Some(agent_run_result),
+        )
+    }
+
     /// Commits all changes with the given message and runs post-commit hook
-    pub fn commit_with_message(&self, message: &str) -> Result<(), GitAiError> {
+    pub fn commit_with_message(&self, message: &str) -> Result<AuthorshipLog, GitAiError> {
         // Add all files to the index
         let mut index = self.repo.index()?;
         index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
@@ -328,9 +378,9 @@ impl TmpRepo {
         println!("Commit ID: {}", _commit_id);
 
         // Run the post-commit hook for all commits (including initial commit)
-        post_commit(&self.repo, false)?; // false = not force
+        let post_commit_result = post_commit(&self.repo, false)?; // false = not force
 
-        Ok(())
+        Ok((post_commit_result.1))
     }
 
     /// Creates a new branch and switches to it
@@ -520,7 +570,26 @@ impl TmpRepo {
         }
 
         let blame_map = blame::run(&self.repo, &tmp_file.filename, &options)?;
+        println!("blame_map: {:?}", blame_map);
         Ok(blame_map.into_iter().collect())
+    }
+
+    /// Gets the authorship log for the current commit
+    pub fn get_authorship_log(
+        &self,
+    ) -> Result<crate::log_fmt::authorship_log_serialization::AuthorshipLog, GitAiError> {
+        let head = self.repo.head()?;
+        let commit_id = head.target().unwrap().to_string();
+        let ref_name = format!("ai/authorship/{}", commit_id);
+
+        match crate::git::refs::get_reference(&self.repo, &ref_name) {
+            Ok(content) => {
+                // Parse the authorship log from the reference content
+                crate::log_fmt::authorship_log_serialization::AuthorshipLog::deserialize_from_string(&content)
+                    .map_err(|e| GitAiError::Generic(format!("Failed to parse authorship log: {}", e)))
+            }
+            Err(_) => Err(GitAiError::Generic("No authorship log found".to_string())),
+        }
     }
 }
 

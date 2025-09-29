@@ -2,41 +2,123 @@
 source: src/commands/rebase_authorship.rs
 expression: authorship_log
 ---
-AuthorshipLog {
-    files: {
-        "abc.ts": [
-            AttributionEntry {
-                lines: [
-                    Range(
-                        1,
-                        4,
-                    ),
-                    Range(
-                        9,
-                        13,
-                    ),
-                    Range(
-                        18,
-                        22,
-                    ),
-                    Range(
-                        27,
-                        32,
-                    ),
+AuthorshipLogV3 {
+    attestations: [
+        FileAttestation {
+            file_path: "hello-world.ts",
+            entries: [
+                AttestationEntry {
+                    hash: "7e197766-8599-448c-a070-da444c376b9d",
+                    line_ranges: [
+                        Single(
+                            4,
+                        ),
+                        Range(
+                            8,
+                            9,
+                        ),
+                        Range(
+                            13,
+                            14,
+                        ),
+                        Single(
+                            18,
+                        ),
+                        Single(
+                            38,
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+    metadata: AuthorshipMetadata {
+        schema_version: "authorship/3.0.0",
+        base_commit_sha: "",
+        prompts: {
+            "7e197766-8599-448c-a070-da444c376b9d": PromptRecord {
+                agent_id: AgentId {
+                    tool: "claude",
+                    id: "7e197766-8599-448c-a070-da444c376b9d",
+                    model: "claude-sonnet-4-20250514",
+                },
+                human_author: Some(
+                    "Aidan Cunniffe <acunniffe@gmail.com>",
+                ),
+                messages: [
+                    User {
+                        text: "at the bottom of @hello-world.ts add a division helper",
+                        timestamp: None,
+                    },
+                    Assistant {
+                        text: "I'll add a division helper function at the bottom of the hello-world.ts file.",
+                        timestamp: None,
+                    },
+                    ToolUse {
+                        name: "Edit",
+                        input: Object {
+                            "file_path": String("/Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts"),
+                            "new_string": String("// Subtract two numbers\nfunction subtract(a: number, b: number): number {\n  return a - b;\n}\n\n// Divide two numbers\nfunction divide(a: number, b: number): number {\n  return a / b;\n}"),
+                            "old_string": String("// Subtract two numbers\nfunction subtract(a: number, b: number): number {\n  return a - b;\n}"),
+                        },
+                        timestamp: None,
+                    },
+                    User {
+                        text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    17→function add(a: number, b: number): number {\n    18→  return a + b;\n    19→}\n    20→\n    21→// Subtract two numbers\n    22→function subtract(a: number, b: number): number {\n    23→  return a - b;\n    24→}\n    25→\n    26→// Divide two numbers\n    27→function divide(a: number, b: number): number {\n    28→  return a / b;\n    29→}\n    30→\n    31→",
+                        timestamp: None,
+                    },
+                    Assistant {
+                        text: "Added a `divide` helper function at the bottom of hello-world.ts:26-29.",
+                        timestamp: None,
+                    },
+                    User {
+                        text: "we want to help kids learn, so do it via the long division appraoch they teach in schools and console.log every step",
+                        timestamp: None,
+                    },
+                    Assistant {
+                        text: "I'll modify the divide function to use the long division approach and log each step to help kids learn.",
+                        timestamp: None,
+                    },
+                    ToolUse {
+                        name: "Edit",
+                        input: Object {
+                            "file_path": String("/Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts"),
+                            "new_string": String("// Divide two numbers using long division approach for learning\nfunction divide(dividend: number, divisor: number): number {\n  console.log(`\\n--- Long Division: ${dividend} ÷ ${divisor} ---`);\n\n  if (divisor === 0) {\n    console.log(\"Cannot divide by zero!\");\n    return NaN;\n  }\n\n  if (dividend === 0) {\n    console.log(\"0 divided by anything is 0\");\n    return 0;\n  }\n\n  let quotient = 0;\n  let remainder = Math.abs(dividend);\n  const absDivisor = Math.abs(divisor);\n\n  console.log(`Step 1: We're dividing ${Math.abs(dividend)} by ${absDivisor}`);\n\n  while (remainder >= absDivisor) {\n    remainder -= absDivisor;\n    quotient++;\n    console.log(`Step ${quotient + 1}: ${absDivisor} goes into ${remainder + absDivisor}, subtract ${absDivisor}, remainder is ${remainder}`);\n  }\n\n  console.log(`Final result: ${dividend} ÷ ${divisor} = ${quotient} with remainder ${remainder}`);\n\n  // Handle negative numbers\n  const isNegative = (dividend < 0) !== (divisor < 0);\n  const result = isNegative ? -quotient : quotient;\n\n  if (isNegative) {\n    console.log(`Since one number is negative, the result is negative: ${result}`);\n  }\n\n  return result;\n}"),
+                            "old_string": String("// Divide two numbers\nfunction divide(a: number, b: number): number {\n  return a / b;\n}"),
+                        },
+                        timestamp: None,
+                    },
+                    User {
+                        text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    22→function subtract(a: number, b: number): number {\n    23→  return a - b;\n    24→}\n    25→\n    26→// Divide two numbers using long division approach for learning\n    27→function divide(dividend: number, divisor: number): number {\n    28→  console.log(`\\n--- Long Division: ${dividend} ÷ ${divisor} ---`);\n    29→\n    30→  if (divisor === 0) {\n    31→    console.log(\"Cannot divide by zero!\");\n    32→    return NaN;\n    33→  }\n    34→\n    35→  if (dividend === 0) {\n    36→    console.log(\"0 divided by anything is 0\");\n    37→    return 0;\n    38→  }\n    39→\n    40→  let quotient = 0;\n    41→  let remainder = Math.abs(dividend);\n    42→  const absDivisor = Math.abs(divisor);\n    43→\n    44→  console.log(`Step 1: We're dividing ${Math.abs(dividend)} by ${absDivisor}`);\n    45→\n    46→  while (remainder >= absDivisor) {\n    47→    remainder -= absDivisor;\n    48→    quotient++;\n    49→    console.log(`Step ${quotient + 1}: ${absDivisor} goes into ${remainder + absDivisor}, subtract ${absDivisor}, remainder is ${remainder}`);\n    50→  }\n    51→\n    52→  console.log(`Final result: ${dividend} ÷ ${divisor} = ${quotient} with remainder ${remainder}`);\n    53→\n    54→  // Handle negative numbers\n    55→  const isNegative = (dividend < 0) !== (divisor < 0);\n    56→  const result = isNegative ? -quotient : quotient;\n    57→\n    58→  if (isNegative) {\n    59→    console.log(`Since one number is negative, the result is negative: ${result}`);\n    60→  }\n    61→\n    62→  return result;\n    63→}\n    64→\n    65→",
+                        timestamp: None,
+                    },
+                    Assistant {
+                        text: "Updated the divide function to use the long division approach with step-by-step console logging. The function now:\n\n- Shows each step of the division process\n- Handles division by zero and edge cases\n- Works with negative numbers\n- Demonstrates the repeated subtraction method that kids learn in school\n- Returns the quotient (ignoring decimal remainders for simplicity)\n\nThe function is at hello-world.ts:26-63.",
+                        timestamp: None,
+                    },
+                    User {
+                        text: "add this function back to the VERY VERY TOP of the file",
+                        timestamp: None,
+                    },
+                    Assistant {
+                        text: "I'll add the divide function to the very top of the file.",
+                        timestamp: None,
+                    },
+                    ToolUse {
+                        name: "Edit",
+                        input: Object {
+                            "file_path": String("/Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts"),
+                            "new_string": String("// Divide two numbers using long division approach for learning\nfunction divide(dividend: number, divisor: number): number {\n  console.log(`\\n--- Long Division: ${dividend} ÷ ${divisor} ---`);\n\n  if (divisor === 0) {\n    console.log(\"Cannot divide by zero!\");\n    return NaN;\n  }\n\n  if (dividend === 0) {\n    console.log(\"0 divided by anything is 0\");\n    return 0;\n  }\n\n  let quotient = 0;\n  let remainder = Math.abs(dividend);\n  const absDivisor = Math.abs(divisor);\n\n  console.log(`Step 1: We're dividing ${Math.abs(dividend)} by ${absDivisor}`);\n\n  while (remainder >= absDivisor) {\n    remainder -= absDivisor;\n    quotient++;\n    console.log(`Step ${quotient + 1}: ${absDivisor} goes into ${remainder + absDivisor}, subtract ${absDivisor}, remainder is ${remainder}`);\n  }\n\n  console.log(`Final result: ${dividend} ÷ ${divisor} = ${quotient} with remainder ${remainder}`);\n\n  // Handle negative numbers\n  const isNegative = (dividend < 0) !== (divisor < 0);\n  const result = isNegative ? -quotient : quotient;\n\n  if (isNegative) {\n    console.log(`Since one number is negative, the result is negative: ${result}`);\n  }\n\n  return result;\n}\n\n// Out of band insertion"),
+                            "old_string": String("// Out of band insertion "),
+                        },
+                        timestamp: None,
+                    },
+                    User {
+                        text: "The file /Users/aidancunniffe/Desktop/git-ai-test/hello-world.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n     1→// Divide two numbers using long division approach for learning\n     2→function divide(dividend: number, divisor: number): number {\n     3→  console.log(`\\n--- Long Division: ${dividend} ÷ ${divisor} ---`);\n     4→\n     5→  if (divisor === 0) {\n     6→    console.log(\"Cannot divide by zero!\");\n     7→    return NaN;\n     8→  }\n     9→\n    10→  if (dividend === 0) {\n    11→    console.log(\"0 divided by anything is 0\");\n    12→    return 0;\n    13→  }\n    14→\n    15→  let quotient = 0;\n    16→  let remainder = Math.abs(dividend);\n    17→  const absDivisor = Math.abs(divisor);\n    18→\n    19→  console.log(`Step 1: We're dividing ${Math.abs(dividend)} by ${absDivisor}`);\n    20→\n    21→  while (remainder >= absDivisor) {\n    22→    remainder -= absDivisor;\n    23→    quotient++;\n    24→    console.log(`Step ${quotient + 1}: ${absDivisor} goes into ${remainder + absDivisor}, subtract ${absDivisor}, remainder is ${remainder}`);\n    25→  }\n    26→\n    27→  console.log(`Final result: ${dividend} ÷ ${divisor} = ${quotient} with remainder ${remainder}`);\n    28→\n    29→  // Handle negative numbers\n    30→  const isNegative = (dividend < 0) !== (divisor < 0);\n    31→  const result = isNegative ? -quotient : quotient;\n    32→\n    33→  if (isNegative) {\n    34→    console.log(`Since one number is negative, the result is negative: ${result}`);\n    35→  }\n    36→\n    37→  return result;\n    38→}\n    39→\n    40→// Out of band insertion\n    41→// Line2 \n    42→// Line3\n    43→// Line4\n    44→// Line5",
+                        timestamp: None,
+                    },
                 ],
-                author_key: "e1cb90d1",
-                prompt_session_id: None,
-                prompt_turn: None,
             },
-        ],
-    },
-    authors: {
-        "e1cb90d1": Author {
-            username: "Aidan Cunniffe",
-            email: "acunniffe@gmail.com",
         },
     },
-    prompts: {},
-    schema_version: "authorship/2.0.0",
-    base_commit_sha: "",
 }

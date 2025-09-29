@@ -2,7 +2,7 @@ use crate::error::GitAiError;
 use crate::git::refs::get_reference;
 use crate::git::refs::get_reference_as_working_log;
 use crate::git::refs::put_reference;
-use crate::log_fmt::authorship_log::AuthorshipLog;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::Repository;
 use std::collections::HashMap;
 
@@ -112,10 +112,16 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
             if get_reference(repo, &authorship_ref).is_err() {
                 // No authorship log exists, create one
                 let authorship_log =
-                    AuthorshipLog::from_working_log_with_base_commit(&working_log, commit_hash);
+                    AuthorshipLog::from_working_log_with_base_commit_and_human_author(
+                        &working_log,
+                        commit_hash,
+                        None,
+                    );
 
                 // Serialize the authorship log
-                let authorship_json = serde_json::to_string(&authorship_log)?;
+                let authorship_json = authorship_log.serialize_to_string().map_err(|_| {
+                    GitAiError::Generic("Failed to serialize authorship log".to_string())
+                })?;
 
                 // Create the authorship log reference
                 put_reference(
@@ -138,7 +144,15 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 
     // Output JSON if requested
     if json_output && !authorship_logs.is_empty() {
-        let json_output = serde_json::to_string(&authorship_logs)?;
+        // Convert HashMap to a serializable format
+        let mut json_map = serde_json::Map::new();
+        for (key, v3_log) in authorship_logs {
+            let serialized = v3_log.serialize_to_string().map_err(|_| {
+                GitAiError::Generic("Failed to serialize authorship log".to_string())
+            })?;
+            json_map.insert(key, serde_json::Value::String(serialized));
+        }
+        let json_output = serde_json::to_string(&json_map)?;
         println!("{}", json_output);
     }
 

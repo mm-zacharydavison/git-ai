@@ -112,6 +112,7 @@ impl WorkingLogEntry {
 pub struct AgentId {
     pub tool: String, // e.g., "cursor", "windsurf"
     pub id: String,   // id in their domain
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +294,7 @@ mod tests {
 
         let agent_id = AgentId {
             tool: "cursor".to_string(),
+            model: "gpt-4o".to_string(),
             id: "session-abc123".to_string(),
         };
 
@@ -313,7 +315,7 @@ mod tests {
 
         // Check first message (user)
         match &transcript_data.messages()[0] {
-            Message::User { text } => {
+            Message::User { text, .. } => {
                 assert_eq!(text, "Please add error handling to this function");
             }
             _ => panic!("Expected user message"),
@@ -321,7 +323,7 @@ mod tests {
 
         // Check second message (assistant)
         match &transcript_data.messages()[1] {
-            Message::Assistant { text } => {
+            Message::Assistant { text, .. } => {
                 assert_eq!(text, "I'll add error handling to the function.");
             }
             _ => panic!("Expected assistant message"),

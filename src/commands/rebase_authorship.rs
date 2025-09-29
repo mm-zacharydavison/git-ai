@@ -1,9 +1,7 @@
 use crate::error::GitAiError;
 use crate::git::find_repository;
-use crate::log_fmt::authorship_log::AuthorshipLog;
-use crate::utils::print_diff;
-use git2::{Oid, Repository};
-use serde_json;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
+use git2::{MergeOptions, Oid, Repository};
 use similar::{ChangeTag, TextDiff};
 
 /// Rewrite authorship log after a squash merge or rebase
@@ -31,7 +29,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
     // Step 2: Build the old_shas path from head_sha to origin_base
-    let old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
+    let _old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
 
     // Step 3: Get the parent of the new commit
     let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
@@ -44,10 +42,8 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     let new_commit_parent_tree = new_commit_parent.tree()?;
 
     // Create diff between the two trees
-    let diff =
+    let _diff =
         repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
-
-    // Print the diff in a readable format
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -80,11 +76,9 @@ pub fn rewrite_authorship_after_squash_or_rebase(
 
     if !dry_run {
         // Step (Save): Save the authorship log with the new sha as its id
-        let authorship_json = if cfg!(debug_assertions) {
-            serde_json::to_string_pretty(&new_authorship_log)?
-        } else {
-            serde_json::to_string(&new_authorship_log)?
-        };
+        let authorship_json = new_authorship_log
+            .serialize_to_string()
+            .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
         let ref_name = format!("ai/authorship/{}", new_sha);
         crate::git::refs::put_reference(
@@ -123,25 +117,39 @@ fn apply_diff_as_merge_commit(
     new_commit_parent: &str,
     old_head_sha: &str,
 ) -> Result<String, GitAiError> {
-    // Get the commits
-    let new_commit_parent_commit = repo.find_commit(Oid::from_str(new_commit_parent)?)?;
-    let old_head_commit = repo.find_commit(Oid::from_str(old_head_sha)?)?;
+    // Resolve the merge as a real three-way merge of trees
+    // base: origin_base, ours: old_head_sha, theirs: new_commit_parent
+    // Favor OURS (old_head) on conflicts per comment "OLD Head wins when there's conflicts"
+    let base_commit = repo.find_commit(Oid::from_str(origin_base)?)?;
+    let ours_commit = repo.find_commit(Oid::from_str(old_head_sha)?)?;
+    let theirs_commit = repo.find_commit(Oid::from_str(new_commit_parent)?)?;
 
-    // Get the tree for the old head (we'll use this as the result tree)
-    let old_head_tree = old_head_commit.tree()?;
+    let base_tree = base_commit.tree()?;
+    let ours_tree = ours_commit.tree()?;
+    let theirs_tree = theirs_commit.tree()?;
 
-    // Create a merge commit with the old head as the main parent and new commit parent as the second parent
-    // This creates a merge commit that represents applying the diff to the old head
+    let mut merge_opts = MergeOptions::new();
+    // Prefer the content from OURS when conflicts occur
+    merge_opts.file_favor(git2::FileFavor::Ours);
+
+    // Perform the merge of trees to an index
+    let mut index = repo.merge_trees(&base_tree, &ours_tree, &theirs_tree, Some(&merge_opts))?;
+
+    // Write the index to a tree object
+    let tree_oid = index.write_tree_to(repo)?;
+    let merged_tree = repo.find_tree(tree_oid)?;
+
+    // Create the hanging merge commit with parents [ours, theirs]
     let merge_commit = repo.commit(
-        None, // Let git choose the reference (we'll create a hanging commit)
-        &old_head_commit.author(),
-        &old_head_commit.committer(),
+        None,
+        &ours_commit.author(),
+        &ours_commit.committer(),
         &format!(
             "Merge diff from {} to {} onto {}",
             origin_base, new_commit_parent, old_head_sha
         ),
-        &old_head_tree, // Use old head tree as the result (Accept Theirs strategy)
-        &[&old_head_commit, &new_commit_parent_commit], // Parents: old head first, then new commit parent
+        &merged_tree,
+        &[&ours_commit, &theirs_commit],
     )?;
 
     Ok(merge_commit.to_string())
@@ -191,7 +199,8 @@ fn reconstruct_authorship_from_diff(
     new_commit_parent: &git2::Commit,
     hanging_commit_sha: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
-    use std::collections::HashMap;
+    use git2::Oid;
+    use std::collections::{HashMap, HashSet};
 
     // Get the trees for the diff
     let new_tree = new_commit.tree()?;
@@ -199,6 +208,11 @@ fn reconstruct_authorship_from_diff(
 
     // Create diff between new_commit and new_commit_parent
     let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None)?;
+    // Debug visibility for test runs
+    #[cfg(test)]
+    {
+        eprintln!("files changed: {}", diff.deltas().len());
+    }
 
     let mut authorship_entries = Vec::new();
 
@@ -237,10 +251,26 @@ fn reconstruct_authorship_from_diff(
             String::new()
         };
 
+        // Pull the file content from the hanging commit to map inserted text to historical lines
+        let hanging_commit = repo.find_commit(Oid::from_str(hanging_commit_sha)?)?;
+        let hanging_tree = hanging_commit.tree()?;
+        let hanging_content =
+            if let Ok(entry) = hanging_tree.get_path(std::path::Path::new(&file_path_str)) {
+                if let Ok(blob) = repo.find_blob(entry.id()) {
+                    String::from_utf8_lossy(blob.content()).to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
         // Create a text diff between the old and new content
         let diff = TextDiff::from_lines(&old_content, &new_content);
         let mut _old_line = 1u32;
         let mut new_line = 1u32;
+        let hanging_lines: Vec<&str> = hanging_content.lines().collect();
+        let mut used_hanging_line_numbers: HashSet<u32> = HashSet::new();
 
         for change in diff.iter_all_changes() {
             match change.tag() {
@@ -254,34 +284,57 @@ fn reconstruct_authorship_from_diff(
                     _old_line += change.value().lines().count() as u32;
                 }
                 ChangeTag::Insert => {
-                    let insert_count = change.value().lines().count() as u32;
+                    let inserted: Vec<&str> = change.value().lines().collect();
 
-                    // For each inserted line, run blame in the context of the hanging commit
-                    // We use the new_line position since we're working with the new file
-                    for line_offset in 0..insert_count {
-                        let line_number = new_line + line_offset;
+                    // For each inserted line, try to find the same content in the hanging commit
+                    for (i, inserted_line) in inserted.iter().enumerate() {
+                        // Find a matching line number in hanging content, prefer the first not yet used
+                        let mut matched_hanging_line: Option<u32> = None;
+                        for (idx, h_line) in hanging_lines.iter().enumerate() {
+                            if h_line == inserted_line {
+                                let candidate = (idx as u32) + 1; // 1-indexed
+                                if !used_hanging_line_numbers.contains(&candidate) {
+                                    matched_hanging_line = Some(candidate);
+                                    break;
+                                }
+                            }
+                        }
 
-                        // Run blame on this specific line in the context of the hanging commit
+                        let blame_line_number = if let Some(h_line_no) = matched_hanging_line {
+                            used_hanging_line_numbers.insert(h_line_no);
+                            h_line_no
+                        } else {
+                            // Fallback: use the position in the new file
+                            new_line + (i as u32)
+                        };
+
                         let blame_result = run_blame_in_context(
                             repo,
                             &file_path_str,
-                            line_number,
+                            blame_line_number,
                             hanging_commit_sha,
                         )?;
 
                         if let Some((author, prompt)) = blame_result {
-                            // Add this line to our authorship log with prompt info
+                            #[cfg(test)]
+                            {
+                                eprintln!(
+                                    "ins line {} {} -> ai? {}",
+                                    blame_line_number,
+                                    author.username,
+                                    prompt.is_some()
+                                );
+                            }
                             authorship_entries.push((
                                 file_path_str.clone(),
-                                line_number,
+                                blame_line_number,
                                 author,
                                 prompt,
                             ));
                         }
                     }
 
-                    // Inserted lines only advance the new line counter
-                    new_line += insert_count;
+                    new_line += inserted.len() as u32;
                 }
             }
         }
@@ -290,33 +343,31 @@ fn reconstruct_authorship_from_diff(
     // Convert the collected entries into an AuthorshipLog
     let mut authorship_log = AuthorshipLog::new();
 
-    // Store original entries for later reference
-    let original_entries = authorship_entries.clone();
+    // Group entries by file and prompt session ID for efficiency
+    let mut file_attestations: HashMap<String, HashMap<String, Vec<u32>>> = HashMap::new();
+    let mut prompt_records: HashMap<String, crate::log_fmt::authorship_log::PromptRecord> =
+        HashMap::new();
 
-    // Group entries by file, author, and prompt for efficiency
-    // Use a string key to avoid hash issues with complex types
-    let mut file_authors: HashMap<String, HashMap<String, Vec<u32>>> = HashMap::new();
+    for (file_path, line_number, _author, prompt) in authorship_entries {
+        // Only process AI-generated content (entries with prompt)
+        if let Some((prompt_record, _turn)) = prompt {
+            let prompt_session_id = prompt_record.agent_id.id.clone();
 
-    for (file_path, line_number, author, prompt) in authorship_entries {
-        // Create a unique key for this author+prompt combination
-        let author_key = AuthorshipLog::generate_author_key(&author);
-        let prompt_key = if let Some((prompt_record, turn)) = prompt {
-            format!("{}:{}:{}", author_key, prompt_record.agent_id.id, turn)
-        } else {
-            author_key.clone()
-        };
+            // Store prompt record
+            prompt_records.insert(prompt_session_id.clone(), prompt_record);
 
-        file_authors
-            .entry(file_path)
-            .or_insert_with(HashMap::new)
-            .entry(prompt_key)
-            .or_insert_with(Vec::new)
-            .push(line_number);
+            file_attestations
+                .entry(file_path)
+                .or_insert_with(HashMap::new)
+                .entry(prompt_session_id)
+                .or_insert_with(Vec::new)
+                .push(line_number);
+        }
     }
 
     // Convert grouped entries to AuthorshipLog format
-    for (file_path, prompt_key_lines) in file_authors {
-        for (prompt_key, mut lines) in prompt_key_lines {
+    for (file_path, prompt_session_lines) in file_attestations {
+        for (prompt_session_id, mut lines) in prompt_session_lines {
             // Sort lines and create ranges
             lines.sort();
             let mut ranges = Vec::new();
@@ -356,61 +407,30 @@ fn reconstruct_authorship_from_diff(
                 ));
             }
 
-            // Parse the prompt key to extract author and prompt info
-            let parts: Vec<&str> = prompt_key.split(':').collect();
-            let (author_key, prompt_session_id, prompt_turn) = if parts.len() == 3 {
-                // Has prompt info: "author_key:prompt_id:turn"
-                (
-                    parts[0].to_string(),
-                    Some(parts[1].to_string()),
-                    Some(parts[2].parse::<u32>().unwrap_or(0)),
-                )
-            } else {
-                // No prompt info: just "author_key"
-                (prompt_key.clone(), None, None)
-            };
+            // Create attestation entry with the prompt session ID
+            let attestation_entry =
+                crate::log_fmt::authorship_log_serialization::AttestationEntry::new(
+                    prompt_session_id.clone(),
+                    ranges,
+                );
 
-            // Find the author info from the original entries
-            let author = original_entries
-                .iter()
-                .find(|(_, _, a, _)| AuthorshipLog::generate_author_key(a) == author_key)
-                .map(|(_, _, a, _)| a.clone())
-                .unwrap_or_else(|| {
-                    // Fallback author if not found
-                    crate::log_fmt::authorship_log::Author {
-                        username: "unknown".to_string(),
-                        email: "".to_string(),
-                    }
-                });
-
-            // Store author info
-            authorship_log.authors.insert(author_key.clone(), author);
-
-            // Store prompt info if available
-            if let Some(session_id) = &prompt_session_id {
-                // Find the prompt record from the original entries
-                if let Some((_, _, _, Some((prompt_record, _)))) =
-                    original_entries.iter().find(|(_, _, _, p)| {
-                        p.as_ref()
-                            .map(|(pr, _)| pr.agent_id.id == *session_id)
-                            .unwrap_or(false)
-                    })
-                {
-                    authorship_log
-                        .prompts
-                        .insert(session_id.clone(), prompt_record.clone());
-                }
-            }
-
-            // Add attribution entry
-            let file_entries = authorship_log.get_or_create_file(&file_path);
-            file_entries.push(crate::log_fmt::authorship_log::AttributionEntry {
-                lines: ranges,
-                author_key,
-                prompt_session_id,
-                prompt_turn,
-            });
+            // Add to authorship log
+            let file_attestation = authorship_log.get_or_create_file(&file_path);
+            file_attestation.add_entry(attestation_entry);
         }
+    }
+
+    // Store prompt records in metadata
+    for (prompt_session_id, prompt_record) in prompt_records {
+        authorship_log
+            .metadata
+            .prompts
+            .insert(prompt_session_id, prompt_record);
+    }
+
+    // Sort attestation entries by hash for deterministic ordering
+    for file_attestation in &mut authorship_log.attestations {
+        file_attestation.entries.sort_by(|a, b| a.hash.cmp(&b.hash));
     }
 
     Ok(authorship_log)
@@ -441,7 +461,7 @@ fn run_blame_in_context(
     )>,
     GitAiError,
 > {
-    use crate::git::refs::get_reference_as_authorship_log;
+    use crate::git::refs::get_reference_as_authorship_log_v3;
     use git2::{BlameOptions, Oid};
 
     // println!(
@@ -471,7 +491,7 @@ fn run_blame_in_context(
 
         // Look up the AI authorship log for this commit
         let ref_name = format!("ai/authorship/{}", commit_sha);
-        let authorship_log = match get_reference_as_authorship_log(repo, &ref_name) {
+        let authorship_log = match get_reference_as_authorship_log_v3(repo, &ref_name) {
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author
@@ -492,7 +512,7 @@ fn run_blame_in_context(
         // Get the line attribution from the AI authorship log
         if let Some((author, prompt)) = authorship_log.get_line_attribution(file_path, line_number)
         {
-            Ok(Some((author.clone(), prompt.map(|(p, t)| (p.clone(), t)))))
+            Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
             let commit = repo.find_commit(commit_id)?;
@@ -681,9 +701,9 @@ mod tests {
     fn test_in_order() {
         let repo = Repository::discover("tests/gitflow-repo").unwrap();
 
-        let new_sha = "78788430844d8ccc064e7da1327c374402efc232";
+        let new_sha = "22ab8a64bee45d9292f680f07a8f79234c2cb9d5";
         let destination_branch = "origin/main";
-        let head_sha: &'static str = "bd57bd9e25df41cf1f6c2875b787b3b4b01cbe5b"; // The HEAD of the original squashed commits
+        let head_sha: &'static str = "245606961b859e5ab5593b276f47e26f7c32e4d6"; // The HEAD of the original squashed commits
 
         let authorship_log = rewrite_authorship_after_squash_or_rebase(
             &repo,
@@ -694,6 +714,8 @@ mod tests {
         )
         .unwrap();
 
+        print!("{:?}", authorship_log);
+
         assert_debug_snapshot!(authorship_log);
     }
 
@@ -701,9 +723,9 @@ mod tests {
     fn test_with_out_of_band_commits() {
         let repo = Repository::discover("tests/gitflow-repo").unwrap();
 
-        let new_sha = "09b999d49bf248aabb2cd9ef987e030551b7002e";
+        let new_sha = "13b1a9736d8caaec665b29b2c6792b2eba1fb169";
         let destination_branch = "origin/main";
-        let head_sha = "87be297c9bebb904d877bc856c34419eeb0e979c"; // The HEAD of the original squashed commits
+        let head_sha = "6d781a058490d5c7ba10902492f65f85e4f4c3bb"; // The HEAD of the original squashed commits
 
         let authorship_log = rewrite_authorship_after_squash_or_rebase(
             &repo,

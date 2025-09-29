@@ -1,6 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::refs::{delete_reference, put_reference};
-use crate::log_fmt::authorship_log::AuthorshipLog;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
 use git2::Repository;
@@ -54,16 +54,31 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
         filtered_working_log.len()
     ));
 
-    // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---
-    let authorship_log =
-        AuthorshipLog::from_working_log_with_base_commit(&filtered_working_log, &parent_sha);
-
-    // Use pretty formatting in debug builds, single-line in release builds
-    let authorship_json = if cfg!(debug_assertions) {
-        serde_json::to_string_pretty(&authorship_log)?
-    } else {
-        serde_json::to_string(&authorship_log)?
+    // Get git user information for human_author field
+    let human_author = match repo.config() {
+        Ok(config) => {
+            let name = config
+                .get_string("user.name")
+                .unwrap_or_else(|_| "unknown".to_string());
+            let email = config
+                .get_string("user.email")
+                .unwrap_or_else(|_| "".to_string());
+            Some(format!("{} <{}>", name, email))
+        }
+        Err(_) => None,
     };
+
+    // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---
+    let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
+        &filtered_working_log,
+        &parent_sha,
+        human_author.as_deref(),
+    );
+
+    // Serialize the authorship log
+    let authorship_json = authorship_log
+        .serialize_to_string()
+        .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
     let ref_name = format!("ai/authorship/{}", commit_sha);
     put_reference(

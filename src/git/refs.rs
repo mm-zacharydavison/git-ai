@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::log_fmt::authorship_log::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
+use crate::log_fmt::authorship_log_serialization::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
 use crate::log_fmt::working_log::Checkpoint;
 use git2::Repository;
 use serde_json;
@@ -57,29 +57,30 @@ pub fn get_reference_as_working_log(
     Ok(working_log)
 }
 
-pub fn get_reference_as_authorship_log(
+pub fn get_reference_as_authorship_log_v3(
     repo: &Repository,
     ref_name: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
     let content = get_reference(repo, ref_name)?;
 
-    // First, try to parse just the schema_version to check compatibility
-    let version_check: serde_json::Value = serde_json::from_str(&content)?;
-    if let Some(schema_version) = version_check.get("schema_version").and_then(|v| v.as_str()) {
-        if schema_version != AUTHORSHIP_LOG_VERSION {
-            return Err(GitAiError::Generic(format!(
-                "Unsupported authorship log version: {} (expected: {})",
-                schema_version, AUTHORSHIP_LOG_VERSION
-            )));
+    // Try to deserialize as AuthorshipLog
+    let authorship_log = match AuthorshipLog::deserialize_from_string(&content) {
+        Ok(log) => log,
+        Err(_) => {
+            return Err(GitAiError::Generic(
+                "Failed to parse authorship log".to_string(),
+            ));
         }
-    } else {
-        return Err(GitAiError::Generic(
-            "No schema_version found in authorship log".to_string(),
-        ));
+    };
+
+    // Check version compatibility
+    if authorship_log.metadata.schema_version != AUTHORSHIP_LOG_VERSION {
+        return Err(GitAiError::Generic(format!(
+            "Unsupported authorship log version: {} (expected: {})",
+            authorship_log.metadata.schema_version, AUTHORSHIP_LOG_VERSION
+        )));
     }
 
-    // If version is correct, try to parse the full structure
-    let authorship_log: AuthorshipLog = serde_json::from_str(&content)?;
     Ok(authorship_log)
 }
 

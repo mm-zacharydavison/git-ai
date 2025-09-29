@@ -31,8 +31,7 @@ pub fn run(
         Err(_) => "initial".to_string(),
     };
 
-    // aidan
-    let files = get_all_files(repo)?;
+    let files = get_all_tracked_files(repo, &base_commit)?;
     let mut working_log = if reset {
         // If reset flag is set, start with an empty working log
         Vec::new()
@@ -40,7 +39,6 @@ pub fn run(
         get_or_create_working_log(repo, &base_commit)?
     };
 
-    // Clear ai-working-log/diffs references when reset is true
     if reset {
         clear_working_log_diffs(repo, &base_commit)?;
     }
@@ -55,6 +53,14 @@ pub fn run(
                 debug_log(&format!("Checkpoint {}: {}", i + 1, checkpoint.snapshot));
                 debug_log(&format!("  Diff: {}", checkpoint.diff));
                 debug_log(&format!("  Author: {}", checkpoint.author));
+                debug_log(&format!(
+                    "  Agent ID: {}",
+                    checkpoint
+                        .agent_id
+                        .as_ref()
+                        .map(|id| id.tool.clone())
+                        .unwrap_or_default()
+                ));
                 debug_log("  Entries:");
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
@@ -109,25 +115,29 @@ pub fn run(
         )?
     };
 
-    let mut checkpoint = Checkpoint::new(
-        base_commit.clone(),
-        combined_hash.clone(),
-        author.to_string(),
-        entries.clone(),
-    );
+    // Skip adding checkpoint if there are no changes
+    if !entries.is_empty() {
+        let mut checkpoint = Checkpoint::new(
+            base_commit.clone(),
+            combined_hash.clone(),
+            author.to_string(),
+            entries.clone(),
+        );
 
-    // Set transcript and agent_id if provided
-    if let Some(agent_run) = &agent_run_result {
-        checkpoint.transcript = Some(agent_run.transcript.clone());
-        checkpoint.agent_id = Some(agent_run.agent_id.clone());
+        // Set transcript and agent_id if provided
+        if let Some(agent_run) = &agent_run_result {
+            checkpoint.transcript = Some(agent_run.transcript.clone());
+            checkpoint.agent_id = Some(agent_run.agent_id.clone());
+        }
+
+        working_log.push(checkpoint);
     }
+
     let agent_tool = if let Some(agent_run_result) = &agent_run_result {
         Some(agent_run_result.agent_id.tool.as_str())
     } else {
         None
     };
-
-    working_log.push(checkpoint);
 
     // Use pretty formatting in debug builds, single-line in release builds
     let working_log_json = if cfg!(debug_assertions) {
@@ -244,6 +254,28 @@ fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
     Ok(files)
 }
 
+/// Get all files that should be tracked, including those from previous checkpoints
+fn get_all_tracked_files(repo: &Repository, base_commit: &str) -> Result<Vec<String>, GitAiError> {
+    let mut files = get_all_files(repo)?;
+
+    // Also include files that were in previous checkpoints but might not show up in git status
+    // This ensures we track deletions when files return to their original state
+    if let Ok(working_log) = get_or_create_working_log(repo, base_commit) {
+        for checkpoint in &working_log {
+            for entry in &checkpoint.entries {
+                if !files.contains(&entry.file) {
+                    // Check if it's a text file before adding
+                    if is_text_file(repo, &entry.file) {
+                        files.push(entry.file.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(files)
+}
+
 fn save_current_file_states(
     repo: &Repository,
     base_commit: &str,
@@ -347,30 +379,44 @@ fn get_initial_checkpoint_entries(
         };
 
         let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
-        let mut added_lines = Vec::new();
-        let mut deleted_lines = Vec::new();
+        let mut added_line_numbers = Vec::new();
+        let mut deleted_line_numbers = Vec::new();
         let mut current_line = 1u32;
+
+        let mut deletions_at_current_line = 0u32;
 
         for change in diff.iter_all_changes() {
             match change.tag() {
                 ChangeTag::Equal => {
                     current_line += change.value().lines().count() as u32;
+                    deletions_at_current_line = 0; // Reset deletion counter when we hit non-deleted content
                 }
                 ChangeTag::Delete => {
-                    let delete_start = current_line;
+                    let delete_start = current_line + deletions_at_current_line;
                     let delete_count = change.value().lines().count() as u32;
-                    let delete_end = delete_start + delete_count - 1;
-                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                    // Collect individual line numbers for consolidation
+                    for i in 0..delete_count {
+                        deleted_line_numbers.push(delete_start + i);
+                    }
+                    deletions_at_current_line += delete_count;
+                    // Don't advance current_line for deletions - insertions will happen at the same position
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
                     let insert_count = change.value().lines().count() as u32;
-                    let insert_end = insert_start + insert_count - 1;
-                    added_lines.push(Line::Range(insert_start, insert_end));
+                    // Collect individual line numbers for consolidation
+                    for i in 0..insert_count {
+                        added_line_numbers.push(insert_start + i);
+                    }
                     current_line += insert_count;
+                    deletions_at_current_line = 0; // Reset deletion counter after insertions
                 }
             }
         }
+
+        // Consolidate consecutive lines into ranges
+        let added_lines = consolidate_lines(added_line_numbers);
+        let deleted_lines = consolidate_lines(deleted_line_numbers);
 
         if !added_lines.is_empty() || !deleted_lines.is_empty() {
             entries.push(WorkingLogEntry::new(
@@ -418,30 +464,44 @@ fn get_subsequent_checkpoint_entries(
         };
 
         let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
-        let mut added_lines = Vec::new();
-        let mut deleted_lines = Vec::new();
+        let mut added_line_numbers = Vec::new();
+        let mut deleted_line_numbers = Vec::new();
         let mut current_line = 1u32;
+
+        let mut deletions_at_current_line = 0u32;
 
         for change in diff.iter_all_changes() {
             match change.tag() {
                 ChangeTag::Equal => {
                     current_line += change.value().lines().count() as u32;
+                    deletions_at_current_line = 0; // Reset deletion counter when we hit non-deleted content
                 }
                 ChangeTag::Delete => {
-                    let delete_start = current_line;
+                    let delete_start = current_line + deletions_at_current_line;
                     let delete_count = change.value().lines().count() as u32;
-                    let delete_end = delete_start + delete_count - 1;
-                    deleted_lines.push(Line::Range(delete_start, delete_end));
+                    // Collect individual line numbers for consolidation
+                    for i in 0..delete_count {
+                        deleted_line_numbers.push(delete_start + i);
+                    }
+                    deletions_at_current_line += delete_count;
+                    // Don't advance current_line for deletions - insertions will happen at the same position
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
                     let insert_count = change.value().lines().count() as u32;
-                    let insert_end = insert_start + insert_count - 1;
-                    added_lines.push(Line::Range(insert_start, insert_end));
+                    // Collect individual line numbers for consolidation
+                    for i in 0..insert_count {
+                        added_line_numbers.push(insert_start + i);
+                    }
                     current_line += insert_count;
+                    deletions_at_current_line = 0; // Reset deletion counter after insertions
                 }
             }
         }
+
+        // Consolidate consecutive lines into ranges
+        let added_lines = consolidate_lines(added_line_numbers);
+        let deleted_lines = consolidate_lines(deleted_line_numbers);
 
         if !added_lines.is_empty() || !deleted_lines.is_empty() {
             entries.push(WorkingLogEntry::new(
@@ -470,6 +530,88 @@ fn clear_working_log_diffs(repo: &Repository, base_commit: &str) -> Result<(), G
         }
     }
     Ok(())
+}
+
+/// Consolidate consecutive line numbers into ranges for efficiency
+fn consolidate_lines(mut lines: Vec<u32>) -> Vec<Line> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort lines to ensure proper consolidation
+    lines.sort_unstable();
+    lines.dedup(); // Remove duplicates
+
+    let mut consolidated = Vec::new();
+    let mut start = lines[0];
+    let mut end = lines[0];
+
+    for &line in lines.iter().skip(1) {
+        if line == end + 1 {
+            // Consecutive line, extend the range
+            end = line;
+        } else {
+            // Gap found, save the current range and start a new one
+            if start == end {
+                consolidated.push(Line::Single(start));
+            } else {
+                consolidated.push(Line::Range(start, end));
+            }
+            start = line;
+            end = line;
+        }
+    }
+
+    // Add the final range
+    if start == end {
+        consolidated.push(Line::Single(start));
+    } else {
+        consolidated.push(Line::Range(start, end));
+    }
+
+    consolidated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log_fmt::working_log::Line;
+
+    #[test]
+    fn test_consolidate_lines() {
+        // Test consecutive lines
+        let lines = vec![1, 2, 3, 4];
+        let result = consolidate_lines(lines);
+        assert_eq!(result, vec![Line::Range(1, 4)]);
+
+        // Test single line
+        let lines = vec![5];
+        let result = consolidate_lines(lines);
+        assert_eq!(result, vec![Line::Single(5)]);
+
+        // Test mixed consecutive and single
+        let lines = vec![1, 2, 5, 6, 7, 10];
+        let result = consolidate_lines(lines);
+        assert_eq!(
+            result,
+            vec![Line::Range(1, 2), Line::Range(5, 7), Line::Single(10)]
+        );
+
+        // Test unsorted input
+        let lines = vec![5, 1, 3, 2, 4];
+        let result = consolidate_lines(lines);
+        assert_eq!(result, vec![Line::Range(1, 5)]);
+
+        // Test duplicates
+        let lines = vec![1, 1, 2, 2, 3];
+        let result = consolidate_lines(lines);
+        assert_eq!(result, vec![Line::Range(1, 3)]);
+
+        // Test empty input
+        let lines = vec![];
+        let result = consolidate_lines(lines);
+        assert_eq!(result, vec![]);
+    }
 }
 
 fn is_text_file(repo: &Repository, path: &str) -> bool {

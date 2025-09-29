@@ -1,6 +1,6 @@
 use crate::error::GitAiError;
-use crate::git::refs::get_reference_as_authorship_log;
-use crate::log_fmt::authorship_log::AuthorshipLog;
+use crate::git::refs::get_reference_as_authorship_log_v3;
+use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use git2::{BlameOptions, Repository};
 use std::collections::HashMap;
@@ -328,8 +328,8 @@ pub fn overlay_ai_authorship(
         } else {
             // Try to get authorship log for this commit
             let ref_name = format!("ai/authorship/{}", hunk.commit_sha);
-            let authorship = match get_reference_as_authorship_log(repo, &ref_name) {
-                Ok(log) => Some(log),
+            let authorship = match get_reference_as_authorship_log_v3(repo, &ref_name) {
+                Ok(v3_log) => Some(v3_log),
                 Err(_) => None, // No AI authorship data for this commit
             };
             commit_authorship_cache.insert(hunk.commit_sha.clone(), authorship.clone());
@@ -344,7 +344,7 @@ pub fn overlay_ai_authorship(
                     authorship_log.get_line_attribution(file_path, line_num)
                 {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
-                    if let Some((prompt_record, _turn)) = prompt {
+                    if let Some(prompt_record) = prompt {
                         line_authors.insert(line_num, prompt_record.agent_id.tool.clone());
                     } else {
                         line_authors.insert(line_num, author.username.clone());
