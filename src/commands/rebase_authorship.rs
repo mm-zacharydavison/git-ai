@@ -709,6 +709,8 @@ mod tests {
         )
         .unwrap();
 
+        print!("{:?}", authorship_log);
+
         assert_debug_snapshot!(authorship_log);
     }
 
