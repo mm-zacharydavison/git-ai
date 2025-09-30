@@ -232,14 +232,14 @@ fn handle_checkpoint(args: &[String]) {
             }
             "cursor" => {
                 match CursorPreset.run(AgentCheckpointFlags {
-                    prompt_id: None,
-                    hook_input: None,
+                    prompt_id: prompt_id.clone(),
+                    hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
                         agent_run_result = Some(agent_run);
                     }
                     Err(e) => {
-                        eprintln!("Error running Claude preset: {}", e);
+                        eprintln!("Error running Cursor preset: {}", e);
                         std::process::exit(1);
                     }
                 }
