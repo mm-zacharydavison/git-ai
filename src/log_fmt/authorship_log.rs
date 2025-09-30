@@ -148,4 +148,10 @@ pub struct PromptRecord {
     pub agent_id: AgentId,
     pub human_author: Option<String>,
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub total_additions: u32,
+    #[serde(default)]
+    pub total_deletions: u32,
+    #[serde(default)]
+    pub accepted_lines: u32,
 }

@@ -353,7 +353,7 @@ fn reconstruct_authorship_from_diff(
         if let Some((prompt_record, _turn)) = prompt {
             let prompt_session_id = prompt_record.agent_id.id.clone();
 
-            // Store prompt record
+            // Store prompt record (preserving total_additions and total_deletions from original)
             prompt_records.insert(prompt_session_id.clone(), prompt_record);
 
             file_attestations
@@ -420,7 +420,7 @@ fn reconstruct_authorship_from_diff(
         }
     }
 
-    // Store prompt records in metadata
+    // Store prompt records in metadata (preserving total_additions and total_deletions)
     for (prompt_session_id, prompt_record) in prompt_records {
         authorship_log
             .metadata
@@ -431,6 +431,30 @@ fn reconstruct_authorship_from_diff(
     // Sort attestation entries by hash for deterministic ordering
     for file_attestation in &mut authorship_log.attestations {
         file_attestation.entries.sort_by(|a, b| a.hash.cmp(&b.hash));
+    }
+
+    // Calculate accepted_lines for each prompt based on final attestation log
+    let mut session_accepted_lines: HashMap<String, u32> = HashMap::new();
+    for file_attestation in &authorship_log.attestations {
+        for attestation_entry in &file_attestation.entries {
+            let accepted_count: u32 = attestation_entry
+                .line_ranges
+                .iter()
+                .map(|range| match range {
+                    crate::log_fmt::authorship_log::LineRange::Single(_) => 1,
+                    crate::log_fmt::authorship_log::LineRange::Range(start, end) => end - start + 1,
+                })
+                .sum();
+            *session_accepted_lines
+                .entry(attestation_entry.hash.clone())
+                .or_insert(0) += accepted_count;
+        }
+    }
+
+    // Update accepted_lines for all PromptRecords
+    // Note: total_additions and total_deletions are preserved from the original prompt records
+    for (session_id, prompt_record) in authorship_log.metadata.prompts.iter_mut() {
+        prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
     }
 
     Ok(authorship_log)
