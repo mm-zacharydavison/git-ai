@@ -225,20 +225,9 @@ impl CursorPreset {
 
         // For each unique Cursor conversation, fetch the latest version
         for (conversation_id, conversation_checkpoints) in cursor_conversations {
-            crate::utils::debug_log(&format!(
-                "Updating Cursor conversation {} with {} checkpoints",
-                conversation_id,
-                conversation_checkpoints.len()
-            ));
-
             // Fetch the latest conversation data
             match Self::fetch_latest_cursor_conversation(&conversation_id) {
                 Ok(Some((latest_transcript, latest_model))) => {
-                    crate::utils::debug_log(&format!(
-                        "Fetched latest conversation with {} messages",
-                        latest_transcript.messages().len()
-                    ));
-
                     // Update all checkpoints for this conversation
                     for checkpoint in conversation_checkpoints {
                         if let Some(agent_id) = &mut checkpoint.agent_id {
@@ -248,17 +237,10 @@ impl CursorPreset {
                     }
                 }
                 Ok(None) => {
-                    crate::utils::debug_log(&format!(
-                        "No latest conversation data found for {}",
-                        conversation_id
-                    ));
+                    // No latest conversation data found, continue with existing data
                 }
-                Err(e) => {
-                    crate::utils::debug_log(&format!(
-                        "Failed to fetch latest conversation for {}: {}",
-                        conversation_id, e
-                    ));
-                    // Continue with existing data rather than failing
+                Err(_) => {
+                    // Failed to fetch latest conversation, continue with existing data
                 }
             }
         }
@@ -486,16 +468,16 @@ impl CursorPreset {
         // First, check if the composer payload has capabilityType
         if let Some(capability_type) = composer_payload.get("capabilityType") {
             if let Some(cap_num) = capability_type.as_i64() {
-                let model = match cap_num {
-                    15 => "claude-3.5-sonnet", // Based on observed capabilityType value
-                    14 => "claude-3-sonnet",
-                    13 => "claude-3-haiku",
-                    12 => "gpt-4",
-                    11 => "gpt-4-turbo",
-                    10 => "gpt-3.5-turbo",
-                    _ => "unknown",
-                };
-                return Ok(model.to_string());
+                // let model = match cap_num {
+                //     15 => "claude-3.5-sonnet", // Based on observed capabilityType value
+                //     14 => "claude-3-sonnet",
+                //     13 => "claude-3-haiku",
+                //     12 => "gpt-4",
+                //     11 => "gpt-4-turbo",
+                //     10 => "gpt-3.5-turbo",
+                //     _ => "unknown",
+                // };
+                return Ok(cap_num.to_string());
             }
         }
 
@@ -513,13 +495,10 @@ impl CursorPreset {
                         if let Some(capability_type) = bubble_content.get("capabilityType") {
                             if let Some(cap_num) = capability_type.as_i64() {
                                 let model = match cap_num {
+                                    // @todo Aidan to figure out the rest of these mappings
+                                    30 => "gpt-5-codex",
                                     15 => "claude-3.5-sonnet",
-                                    14 => "claude-3-sonnet",
-                                    13 => "claude-3-haiku",
-                                    12 => "gpt-4",
-                                    11 => "gpt-4-turbo",
-                                    10 => "gpt-3.5-turbo",
-                                    _ => "unknown",
+                                    _ => return Ok(cap_num.to_string()),
                                 };
                                 return Ok(model.to_string());
                             }
