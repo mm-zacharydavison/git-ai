@@ -8,16 +8,16 @@ mod utils;
 use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
-use std::io::{IsTerminal, Write};
-use std::process::Command;
-use utils::debug_log;
+use git::repository::run_git_and_forward;
+use std::io::IsTerminal;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+use std::process::Command;
+use utils::debug_log;
 
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
 };
-use crate::git::refs::DEFAULT_REFSPEC;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -370,20 +370,20 @@ fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> Str
     if let Some(author_spec) = extract_author_from_args(args) {
         return resolve_author_spec(repo, &author_spec);
     }
-    
+
     // Normal precedence when --author is not specified:
     // 1. GIT_AUTHOR_NAME environment variable
-    // 2. user.name config variable  
+    // 2. user.name config variable
     // 3. EMAIL environment variable
     // 4. System user name and hostname (we'll use 'unknown' as fallback)
-    
+
     // Check GIT_AUTHOR_NAME environment variable
     if let Ok(author_name) = std::env::var("GIT_AUTHOR_NAME") {
         if !author_name.trim().is_empty() {
             return author_name.trim().to_string();
         }
     }
-    
+
     // Fall back to git config user.name
     if let Ok(config) = repo.config() {
         if let Ok(name) = config.get_string("user.name") {
@@ -392,7 +392,7 @@ fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> Str
             }
         }
     }
-    
+
     // Check EMAIL environment variable as fallback
     if let Ok(email) = std::env::var("EMAIL") {
         if !email.trim().is_empty() {
@@ -406,7 +406,7 @@ fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> Str
             return email;
         }
     }
-    
+
     // Final fallback (instead of trying to get system user name and hostname)
     eprintln!("Warning: No author information found. Using 'unknown' as author.");
     "unknown".to_string()
@@ -416,17 +416,17 @@ fn extract_author_from_args(args: &[String]) -> Option<String> {
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
-        
+
         // Handle --author=<author> format
         if let Some(author_value) = arg.strip_prefix("--author=") {
             return Some(author_value.to_string());
         }
-        
+
         // Handle --author <author> format (separate arguments)
         if arg == "--author" && i + 1 < args.len() {
             return Some(args[i + 1].clone());
         }
-        
+
         i += 1;
     }
     None
@@ -436,7 +436,7 @@ fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
     // According to git commit docs, --author can be:
     // 1. "A U Thor <author@example.com>" format - use as explicit author
     // 2. A pattern to search for existing commits via git rev-list --all -i --author=<pattern>
-    
+
     // If it looks like "Name <email>" format, extract the name part
     if let Some(email_start) = author_spec.rfind('<') {
         let name_part = author_spec[..email_start].trim();
@@ -444,7 +444,7 @@ fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
             return name_part.to_string();
         }
     }
-    
+
     // If it doesn't look like an explicit format, treat it as a search pattern
     // Try to find an existing commit by that author
     if let Ok(mut revwalk) = repo.revwalk() {
@@ -455,7 +455,10 @@ fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
                         let author = commit.author();
                         if let Some(author_name) = author.name() {
                             // Case-insensitive search (like git rev-list -i --author)
-                            if author_name.to_lowercase().contains(&author_spec.to_lowercase()) {
+                            if author_name
+                                .to_lowercase()
+                                .contains(&author_spec.to_lowercase())
+                            {
                                 return author_name.to_string();
                             }
                         }
@@ -464,7 +467,7 @@ fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
             }
         }
     }
-    
+
     // If no matching commit found, use the pattern as-is
     author_spec.trim().to_string()
 }
@@ -552,6 +555,7 @@ fn handle_fetch(args: &[String]) {
             std::process::exit(1);
         }
     };
+
     let remotes = repo.remotes().ok();
     let remote_names: Vec<String> = remotes
         .as_ref()
@@ -561,41 +565,59 @@ fn handle_fetch(args: &[String]) {
                 .collect()
         })
         .unwrap_or_default();
-    if args.is_empty() {
-        // git fetch (no remote): inject default remote and refspecs (heads + authorship)
-        if let Some(default_remote) = get_default_remote(&repo) {
-            // Use the default refspec but add --update-head-ok flag for fetch operations
-            let refspec = DEFAULT_REFSPEC.to_string();
 
-            let mut args_to_pass = vec!["fetch".to_string()];
-            args_to_pass.push("--update-head-ok".to_string());
-            args_to_pass.extend_from_slice(&[
-                default_remote.clone(),
-                AI_AUTHORSHIP_REFSPEC.to_string(),
-                refspec,
-            ]);
-            proxy_to_git(&args_to_pass);
-        } else {
-            eprintln!("No git remotes found.");
-            std::process::exit(1);
+    // 1) Run exactly what the user typed (no arg mutation)
+    let mut user_fetch = vec!["fetch".to_string()];
+    user_fetch.extend_from_slice(args);
+    let status = run_git_and_forward(&user_fetch, false);
+    if !status.success() {
+        exit_with_status(status);
+    }
+
+    // 2) Fetch authorship refs from the appropriate remote
+    // Try to detect remote from args first
+    let specified_remote = args
+        .iter()
+        .find(|a| remote_names.iter().any(|r| r == *a))
+        .cloned();
+
+    // If not specified, try to get upstream remote of current branch
+    fn upstream_remote(repo: &git2::Repository) -> Option<String> {
+        let head = repo.head().ok()?;
+        if !head.is_branch() {
+            return None;
         }
-        return;
+        let branch_name = head.shorthand()?;
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .ok()?;
+        let upstream = branch.upstream().ok()?;
+        let upstream_name = upstream.name().ok()??; // e.g., "origin/main"
+        let remote = upstream_name.split('/').next()?.to_string();
+        Some(remote)
     }
-    if args.len() == 1 && remote_names.contains(&args[0]) {
-        // git fetch <remote>: inject refspec after remote
-        let mut args_to_pass = vec!["fetch".to_string()];
-        args_to_pass.push("--update-head-ok".to_string());
-        args_to_pass.extend_from_slice(&[args[0].clone(), AI_AUTHORSHIP_REFSPEC.to_string()]);
-        proxy_to_git(&args_to_pass);
-        return;
+
+    let remote = specified_remote
+        .or_else(|| upstream_remote(&repo))
+        .or_else(|| get_default_remote(&repo));
+
+    if let Some(remote) = remote {
+        let mut fetch_authorship = vec!["fetch".to_string()];
+        fetch_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
+        // Silence the second fetch unless we're in debug mode
+        let silent = !cfg!(debug_assertions);
+        if !silent {
+            debug_log(&format!(
+                "fetching authorship refs: {:?}",
+                &fetch_authorship
+            ));
+        }
+        let auth_status = run_git_and_forward(&fetch_authorship, silent);
+        exit_with_status(auth_status);
+    } else {
+        eprintln!("No git remotes found.");
+        std::process::exit(1);
     }
-    // More complex: just proxy as-is
-
-    let mut full_args = vec!["fetch".to_string()];
-
-    // println!("fetching or pulling from remote: {:?}", &full_args);
-    full_args.extend_from_slice(args);
-    proxy_to_git(&full_args);
 }
 
 fn handle_push(args: &[String]) {
@@ -617,28 +639,6 @@ fn handle_push(args: &[String]) {
                 .collect()
         })
         .unwrap_or_default();
-
-    // Helper to run a git command and optionally forward output, returning ExitStatus
-    fn run_git_and_forward(args: &[String], quiet: bool) -> std::process::ExitStatus {
-        let output = Command::new(config::Config::get().git_cmd()).args(args).output();
-        match output {
-            Ok(output) => {
-                if !quiet {
-                    if !output.stdout.is_empty() {
-                        let _ = std::io::stdout().write_all(&output.stdout);
-                    }
-                    if !output.stderr.is_empty() {
-                        let _ = std::io::stderr().write_all(&output.stderr);
-                    }
-                }
-                output.status
-            }
-            Err(e) => {
-                eprintln!("Failed to execute git command: {}", e);
-                std::process::exit(1);
-            }
-        }
-    }
 
     // 1) Run exactly what the user typed (no arg mutation)
     let mut user_push = vec!["push".to_string()];
@@ -681,11 +681,11 @@ fn handle_push(args: &[String]) {
         let mut push_authorship = vec!["push".to_string()];
         push_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
         // Silence the second push unless we're in debug mode
-        let quiet_second_push = !cfg!(debug_assertions);
-        if !quiet_second_push {
+        let silent = !cfg!(debug_assertions);
+        if !silent {
             debug_log(&format!("pushing authorship refs: {:?}", &push_authorship));
         }
-        let auth_status = run_git_and_forward(&push_authorship, quiet_second_push);
+        let auth_status = run_git_and_forward(&push_authorship, silent);
         exit_with_status(auth_status);
     } else {
         eprintln!("No git remotes found.");
@@ -718,7 +718,7 @@ fn proxy_to_git(args: &[String]) {
 }
 
 fn proxy_to_git_no_exit(args: &[String]) -> i32 {
-    return _proxy_to_git(args, false)
+    return _proxy_to_git(args, false);
 }
 
 fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
