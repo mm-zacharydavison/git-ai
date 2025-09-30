@@ -1,5 +1,5 @@
-use git_ai::tmp_repo::TmpRepo;
 use git_ai::config;
+use git_ai::tmp_repo::TmpRepo;
 use std::collections::BTreeMap;
 use std::process::Command;
 use tempfile::tempdir;
