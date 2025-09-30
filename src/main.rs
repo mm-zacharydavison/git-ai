@@ -10,6 +10,7 @@ use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use git::repository::run_git_and_forward;
 use std::io::IsTerminal;
+
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
@@ -18,6 +19,7 @@ use utils::debug_log;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
 };
+use crate::git::find_repository_in_path;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -131,6 +133,11 @@ fn main() {
 }
 
 fn handle_checkpoint(args: &[String]) {
+    let mut repository_working_dir = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
     // Parse checkpoint-specific arguments
     let mut author = None;
     let mut show_working_log = false;
@@ -233,14 +240,21 @@ fn handle_checkpoint(args: &[String]) {
             }
             "cursor" => {
                 match CursorPreset.run(AgentCheckpointFlags {
-                    prompt_id: None,
-                    hook_input: None,
+                    prompt_id: prompt_id.clone(),
+                    hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
-                        agent_run_result = Some(agent_run);
+                        if agent_run.is_human {
+                            agent_run_result = None;
+                            if agent_run.repo_working_dir.is_some() {
+                                repository_working_dir = agent_run.repo_working_dir.unwrap();
+                            }
+                        } else {
+                            agent_run_result = Some(agent_run);
+                        }
                     }
                     Err(e) => {
-                        eprintln!("Error running Claude preset: {}", e);
+                        eprintln!("Error running Cursor preset: {}", e);
                         std::process::exit(1);
                     }
                 }
@@ -249,8 +263,12 @@ fn handle_checkpoint(args: &[String]) {
         }
     }
 
+    let final_working_dir = agent_run_result
+        .as_ref()
+        .and_then(|r| r.repo_working_dir.clone())
+        .unwrap_or_else(|| repository_working_dir);
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository_in_path(&final_working_dir) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);

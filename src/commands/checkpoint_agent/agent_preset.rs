@@ -16,7 +16,9 @@ pub struct AgentCheckpointFlags {
 
 pub struct AgentRunResult {
     pub agent_id: AgentId,
-    pub transcript: AiTranscript,
+    pub is_human: bool,
+    pub transcript: Option<AiTranscript>,
+    pub repo_working_dir: Option<String>,
 }
 
 pub trait AgentCheckpointPreset {
@@ -78,34 +80,208 @@ impl AgentCheckpointPreset for ClaudePreset {
 
         Ok(AgentRunResult {
             agent_id,
-            transcript,
+            is_human: false,
+            transcript: Some(transcript),
+            // use default.
+            repo_working_dir: None,
         })
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ConversationMetadata {
-    pub composer_id: String,
-    #[allow(dead_code)]
-    pub key: String,
-    #[allow(dead_code)]
-    pub title: String,
-    #[allow(dead_code)]
-    pub last_message_date: Option<i64>,
-    #[allow(dead_code)]
-    pub message_count: i32,
-    #[allow(dead_code)]
-    pub status: String,
-    #[allow(dead_code)]
-    pub created_at: i64,
-    #[allow(dead_code)]
-    pub preview: String,
 }
 
 // Cursor to checkpoint preset
 pub struct CursorPreset;
 
+impl AgentCheckpointPreset for CursorPreset {
+    fn run(&self, flags: AgentCheckpointFlags) -> Result<AgentRunResult, GitAiError> {
+        // Parse hook_input JSON to extract workspace_roots and conversation_id
+        let hook_input_json = flags.hook_input.ok_or_else(|| {
+            GitAiError::PresetError("hook_input is required for Cursor preset".to_string())
+        })?;
+
+        let hook_data: serde_json::Value = serde_json::from_str(&hook_input_json)
+            .map_err(|e| GitAiError::PresetError(format!("Invalid JSON in hook_input: {}", e)))?;
+
+        // Extract conversation_id and workspace_roots from the JSON
+        let conversation_id = hook_data
+            .get("conversation_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError("conversation_id not found in hook_input".to_string())
+            })?
+            .to_string();
+
+        let workspace_roots = hook_data
+            .get("workspace_roots")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                GitAiError::PresetError("workspace_roots not found in hook_input".to_string())
+            })?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect::<Vec<String>>();
+
+        let hook_event_name = hook_data
+            .get("hook_event_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError("hook_event_name not found in hook_input".to_string())
+            })?
+            .to_string();
+
+        // Validate hook_event_name
+        if hook_event_name != "beforeSubmitPrompt" && hook_event_name != "afterFileEdit" {
+            return Err(GitAiError::PresetError(format!(
+                "Invalid hook_event_name: {}. Expected 'beforeSubmitPrompt' or 'afterFileEdit'",
+                hook_event_name
+            )));
+        }
+
+        let repo_working_dir = workspace_roots.first().cloned().ok_or_else(|| {
+            GitAiError::PresetError("No workspace root found in hook_input".to_string())
+        })?;
+
+        if hook_event_name == "beforeSubmitPrompt" {
+            // early return, we're just adding a human checkpoint.
+            return Ok(AgentRunResult {
+                agent_id: AgentId {
+                    tool: "cursor".to_string(),
+                    id: conversation_id.clone(),
+                    model: "unknown".to_string(),
+                },
+                is_human: true,
+                transcript: None,
+                repo_working_dir: Some(repo_working_dir),
+            });
+        }
+
+        // Use prompt_id if provided, otherwise use conversation_id
+        let composer_id = flags.prompt_id.unwrap_or(conversation_id);
+
+        // Locate Cursor storage
+        let user_dir = Self::cursor_user_dir()?;
+        let global_db = user_dir.join("globalStorage").join("state.vscdb");
+        if !global_db.exists() {
+            return Err(GitAiError::PresetError(format!(
+                "Cursor global state database not found at {:?}. \
+                Make sure Cursor is installed and has been used at least once. \
+                Expected location: {:?}",
+                global_db,
+                user_dir.join("globalStorage")
+            )));
+        }
+
+        // Fetch the composer data and extract transcript
+        let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
+        let transcript = Self::transcript_from_composer_payload(
+            &payload,
+            &global_db,
+            &composer_id,
+        )?
+        .unwrap_or_else(|| {
+            // Return empty transcript as default
+            // There's a race condition causing new threads to sometimes not show up.
+            // We refresh and grab all the messages in post-commit so we're ok with returning an empty (placeholder)transcript here and not throwing
+            println!(
+                "[Warning] Could not extract transcript from Cursor composer. Retrying at commit."
+            );
+            AiTranscript::new()
+        });
+
+        // Extract model information from the Cursor data
+        let model = Self::extract_model_from_cursor_data(&payload, &global_db, &composer_id)?;
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: composer_id,
+            model,
+        };
+
+        Ok(AgentRunResult {
+            agent_id,
+            is_human: false,
+            transcript: Some(transcript),
+            repo_working_dir: Some(repo_working_dir),
+        })
+    }
+}
+
 impl CursorPreset {
+    /// Update Cursor conversations in working logs to their latest versions
+    /// This helps prevent race conditions where we miss the last message in a conversation
+    pub fn update_cursor_conversations_to_latest(
+        checkpoints: &mut [crate::log_fmt::working_log::Checkpoint],
+    ) -> Result<(), GitAiError> {
+        use std::collections::HashMap;
+
+        // Group checkpoints by Cursor conversation ID
+        let mut cursor_conversations: HashMap<
+            String,
+            Vec<&mut crate::log_fmt::working_log::Checkpoint>,
+        > = HashMap::new();
+
+        for checkpoint in checkpoints.iter_mut() {
+            if let Some(agent_id) = &checkpoint.agent_id {
+                if agent_id.tool == "cursor" {
+                    cursor_conversations
+                        .entry(agent_id.id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(checkpoint);
+                }
+            }
+        }
+
+        // For each unique Cursor conversation, fetch the latest version
+        for (conversation_id, conversation_checkpoints) in cursor_conversations {
+            // Fetch the latest conversation data
+            match Self::fetch_latest_cursor_conversation(&conversation_id) {
+                Ok(Some((latest_transcript, latest_model))) => {
+                    // Update all checkpoints for this conversation
+                    for checkpoint in conversation_checkpoints {
+                        if let Some(agent_id) = &mut checkpoint.agent_id {
+                            agent_id.model = latest_model.clone();
+                        }
+                        checkpoint.transcript = Some(latest_transcript.clone());
+                    }
+                }
+                Ok(None) => {
+                    // No latest conversation data found, continue with existing data
+                }
+                Err(_) => {
+                    // Failed to fetch latest conversation, continue with existing data
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fetch the latest version of a Cursor conversation from the database
+    fn fetch_latest_cursor_conversation(
+        conversation_id: &str,
+    ) -> Result<Option<(AiTranscript, String)>, GitAiError> {
+        // Get Cursor user directory
+        let user_dir = Self::cursor_user_dir()?;
+        let global_db = user_dir.join("globalStorage").join("state.vscdb");
+
+        if !global_db.exists() {
+            return Ok(None);
+        }
+
+        // Fetch composer payload
+        let composer_payload = Self::fetch_composer_payload(&global_db, conversation_id)?;
+
+        // Extract transcript and model
+        let transcript =
+            Self::transcript_from_composer_payload(&composer_payload, &global_db, conversation_id)?;
+        let model =
+            Self::extract_model_from_cursor_data(&composer_payload, &global_db, conversation_id)?;
+
+        match transcript {
+            Some(transcript) => Ok(Some((transcript, model))),
+            None => Ok(None),
+        }
+    }
+
     fn cursor_user_dir() -> Result<PathBuf, GitAiError> {
         #[cfg(target_os = "windows")]
         {
@@ -140,141 +316,6 @@ impl CursorPreset {
             .map_err(|e| GitAiError::Generic(format!("Failed to open {:?}: {}", path, e)))
     }
 
-    fn get_latest_conversations(
-        global_db_path: &Path,
-        limit: Option<i32>,
-    ) -> Result<Vec<ConversationMetadata>, GitAiError> {
-        let conn = Self::open_sqlite_readonly(global_db_path)?;
-
-        let limit_clause = match limit {
-            Some(l) => format!(" LIMIT {}", l),
-            None => String::new(),
-        };
-
-        let query = format!(
-            "SELECT 
-                key,
-                value,
-                json_extract(value, '$.composerId') as composerId,
-                json_extract(value, '$.createdAt') as createdAt,
-                json_extract(value, '$.lastUpdatedAt') as lastUpdatedAt,
-                json_extract(value, '$.status') as status,
-                json_extract(value, '$.name') as name,
-                json_array_length(json_extract(value, '$.conversation')) as conversationCount,
-                json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) as headersCount
-            FROM cursorDiskKV 
-            WHERE key LIKE 'composerData:%'
-              AND (
-                json_array_length(json_extract(value, '$.conversation')) > 0 
-                OR json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) > 0
-              )
-            ORDER BY 
-              COALESCE(json_extract(value, '$.lastUpdatedAt'), json_extract(value, '$.createdAt'), 0) DESC{}",
-            limit_clause
-        );
-
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(|e| GitAiError::Generic(format!("Failed to prepare query: {}", e)))?;
-
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| GitAiError::Generic(format!("Query failed: {}", e)))?;
-
-        let mut conversations = Vec::new();
-        while let Ok(Some(row)) = rows.next() {
-            let key: String = row
-                .get(0)
-                .map_err(|e| GitAiError::Generic(format!("Failed to read key: {}", e)))?;
-
-            let value_text: String = row
-                .get(1)
-                .map_err(|e| GitAiError::Generic(format!("Failed to read value: {}", e)))?;
-
-            let composer_id: Option<String> = row.get(2).unwrap_or_default();
-            let created_at: Option<i64> = row.get(3).unwrap_or_default();
-            let last_updated_at: Option<i64> = row.get(4).unwrap_or_default();
-            let status: Option<String> = row.get(5).unwrap_or_default();
-            let _name: Option<String> = row.get(6).unwrap_or_default();
-            let conversation_count: Option<i32> = row.get(7).unwrap_or_default();
-            let headers_count: Option<i32> = row.get(8).unwrap_or_default();
-
-            // Parse the conversation data
-            let conversation_data = serde_json::from_str::<serde_json::Value>(&value_text)
-                .map_err(|e| GitAiError::Generic(format!("Failed to parse JSON: {}", e)))?;
-
-            // Determine message count
-            let message_count =
-                std::cmp::max(conversation_count.unwrap_or(0), headers_count.unwrap_or(0));
-
-            let metadata = ConversationMetadata {
-                composer_id: composer_id.unwrap_or_else(|| "unknown".to_string()),
-                key,
-                title: Self::extract_conversation_title(&conversation_data),
-                last_message_date: last_updated_at.or(created_at),
-                message_count,
-                status: status.unwrap_or_else(|| "unknown".to_string()),
-                created_at: created_at.unwrap_or(0),
-                preview: Self::get_conversation_preview(&conversation_data),
-            };
-
-            conversations.push(metadata);
-        }
-
-        Ok(conversations)
-    }
-
-    fn extract_conversation_title(data: &serde_json::Value) -> String {
-        // Try to get title from various possible fields
-        if let Some(name) = data.get("name").and_then(|v| v.as_str()) {
-            return name.to_string();
-        }
-
-        if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
-            return title.to_string();
-        }
-
-        // Try to extract from conversation messages
-        if let Some(conversation) = data.get("conversation").and_then(|v| v.as_array()) {
-            for entry in conversation.iter() {
-                if let Some(text) = entry.get("text").and_then(|v| v.as_str()) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() && trimmed.len() > 10 {
-                        // Take first 50 characters as title
-                        return if trimmed.len() > 50 {
-                            format!("{}...", &trimmed[..47])
-                        } else {
-                            trimmed.to_string()
-                        };
-                    }
-                }
-            }
-        }
-
-        "Untitled Conversation".to_string()
-    }
-
-    fn get_conversation_preview(data: &serde_json::Value) -> String {
-        // Try to get preview from conversation messages
-        if let Some(conversation) = data.get("conversation").and_then(|v| v.as_array()) {
-            for entry in conversation.iter() {
-                if let Some(text) = entry.get("text").and_then(|v| v.as_str()) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        // Take first 100 characters as preview
-                        return if trimmed.len() > 100 {
-                            format!("{}...", &trimmed[..97])
-                        } else {
-                            trimmed.to_string()
-                        };
-                    }
-                }
-            }
-        }
-
-        "No preview available".to_string()
-    }
-
     fn fetch_composer_payload(
         global_db_path: &Path,
         composer_id: &str,
@@ -299,55 +340,6 @@ impl CursorPreset {
             let data = serde_json::from_str::<serde_json::Value>(&value_text)
                 .map_err(|e| GitAiError::Generic(format!("Failed to parse JSON: {}", e)))?;
 
-            // Log the composer payload structure to find model information
-            println!(
-                "[DEBUG] Composer payload keys: {:?}",
-                data.as_object()
-                    .map(|obj| obj.keys().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            );
-
-            // Check for model-related fields
-            if let Some(model) = data.get("model") {
-                println!(
-                    "[DEBUG] Found model field: {}",
-                    serde_json::to_string_pretty(model).unwrap_or_default()
-                );
-            }
-            if let Some(ai_model) = data.get("aiModel") {
-                println!(
-                    "[DEBUG] Found aiModel field: {}",
-                    serde_json::to_string_pretty(ai_model).unwrap_or_default()
-                );
-            }
-            if let Some(llm) = data.get("llm") {
-                println!(
-                    "[DEBUG] Found llm field: {}",
-                    serde_json::to_string_pretty(llm).unwrap_or_default()
-                );
-            }
-            if let Some(config) = data.get("config") {
-                println!(
-                    "[DEBUG] Found config field: {}",
-                    serde_json::to_string_pretty(config).unwrap_or_default()
-                );
-            }
-            if let Some(settings) = data.get("settings") {
-                println!(
-                    "[DEBUG] Found settings field: {}",
-                    serde_json::to_string_pretty(settings).unwrap_or_default()
-                );
-            }
-            if let Some(capability_type) = data.get("capabilityType") {
-                println!("[DEBUG] Composer capabilityType: {}", capability_type);
-            }
-            if let Some(tool_former_data) = data.get("toolFormerData") {
-                println!(
-                    "[DEBUG] Composer toolFormerData: {}",
-                    serde_json::to_string_pretty(tool_former_data).unwrap_or_default()
-                );
-            }
-
             return Ok(data);
         }
 
@@ -361,260 +353,86 @@ impl CursorPreset {
         global_db_path: &Path,
         composer_id: &str,
     ) -> Result<Option<AiTranscript>, GitAiError> {
-        // Debug: print top-level keys and presence of known fields
-        if cfg!(test) {
-            if let Some(obj) = data.as_object() {
-                let keys: Vec<&String> = obj.keys().take(12).collect();
-                println!(
-                    "[cursor debug] payload keys (first 12): {:?}; has conversation: {}, conversationMap: {}, fullConversationHeadersOnly: {}",
-                    keys,
-                    data.get("conversation").is_some(),
-                    data.get("conversationMap").is_some(),
-                    data.get("fullConversationHeadersOnly").is_some()
-                );
-            }
-        }
-        // Try conversation array (main format)
-        if let Some(conv) = data.get("conversation").and_then(|v| v.as_array()) {
-            let mut transcript = AiTranscript::new();
-            for (idx, entry) in conv.iter().enumerate() {
-                if cfg!(test) && idx < 3 {
-                    println!(
-                        "[cursor debug] conversation entry {}: {}",
-                        idx,
-                        serde_json::to_string_pretty(entry)
-                            .unwrap_or_else(|_| "<unprintable>".to_string())
-                    );
-                }
-                // Try different text field names
-                let text_opt = entry
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| entry.get("content").and_then(|v| v.as_str()))
-                    .or_else(|| entry.get("message").and_then(|v| v.as_str()))
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-
-                if let Some(text) = text_opt {
-                    // Heuristic: type 1 => user, type 2 => assistant (observed from data)
-                    let role = entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                    if role == 1 {
-                        transcript.add_message(Message::user(text));
-                    } else {
-                        transcript.add_message(Message::assistant(text));
-                    }
-                }
-
-                // Additionally handle Claude-like content arrays that may include tool_use
-                if let Some(content_array) = entry.get("content").and_then(|v| v.as_array()) {
-                    for item in content_array {
-                        match item.get("type").and_then(|v| v.as_str()) {
-                            Some("text") => {
-                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                    let trimmed = text.trim();
-                                    if !trimmed.is_empty() {
-                                        // Use role heuristic again
-                                        let role =
-                                            entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        if role == 1 {
-                                            transcript
-                                                .add_message(Message::user(trimmed.to_string()));
-                                        } else {
-                                            transcript.add_message(Message::assistant(
-                                                trimmed.to_string(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            Some("tool_use") => {
-                                let name_opt = item.get("name").and_then(|v| v.as_str());
-                                let input_val = item.get("input").cloned();
-                                if let (Some(name), Some(input)) = (name_opt, input_val) {
-                                    transcript
-                                        .add_message(Message::tool_use(name.to_string(), input));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            if !transcript.messages.is_empty() {
-                return Ok(Some(transcript));
-            }
-        }
-
-        // Try conversationMap (newer format)
-        if let Some(conv_map) = data.get("conversationMap").and_then(|v| v.as_object()) {
-            let mut transcript = AiTranscript::new();
-            for (key, entry) in conv_map.iter() {
-                if cfg!(test) {
-                    println!(
-                        "[cursor debug] conversationMap entry key {}: {}",
-                        key,
-                        serde_json::to_string_pretty(entry)
-                            .unwrap_or_else(|_| "<unprintable>".to_string())
-                    );
-                }
-                let text_opt = entry
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                if let Some(text) = text_opt {
-                    // Heuristic: type 1 => user, type 2 => assistant (observed from data)
-                    let role = entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                    if role == 1 {
-                        transcript.add_message(Message::user(text));
-                    } else {
-                        transcript.add_message(Message::assistant(text));
-                    }
-                }
-
-                // Handle content arrays here too
-                if let Some(content_array) = entry.get("content").and_then(|v| v.as_array()) {
-                    for item in content_array {
-                        match item.get("type").and_then(|v| v.as_str()) {
-                            Some("text") => {
-                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                    let trimmed = text.trim();
-                                    if !trimmed.is_empty() {
-                                        let role =
-                                            entry.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        if role == 1 {
-                                            transcript
-                                                .add_message(Message::user(trimmed.to_string()));
-                                        } else {
-                                            transcript.add_message(Message::assistant(
-                                                trimmed.to_string(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            Some("tool_use") => {
-                                let name_opt = item.get("name").and_then(|v| v.as_str());
-                                let input_val = item.get("input").cloned();
-                                if let (Some(name), Some(input)) = (name_opt, input_val) {
-                                    transcript
-                                        .add_message(Message::tool_use(name.to_string(), input));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            if !transcript.messages.is_empty() {
-                return Ok(Some(transcript));
-            }
-        }
-
-        // Try fullConversationHeadersOnly - these contain bubble IDs that we need to fetch
-        if let Some(conv) = data
+        // Only support fullConversationHeadersOnly (bubbles format) - the current Cursor format
+        // All conversations since April 2025 use this format exclusively
+        let conv = data
             .get("fullConversationHeadersOnly")
             .and_then(|v| v.as_array())
-        {
-            let mut transcript = AiTranscript::new();
-            for header in conv.iter() {
-                if let Some(bubble_id) = header.get("bubbleId").and_then(|v| v.as_str()) {
-                    if let Ok(Some(bubble_content)) =
-                        Self::fetch_bubble_content_from_db(global_db_path, composer_id, bubble_id)
-                    {
-                        if cfg!(test) {
-                            println!(
-                                "[cursor debug] bubble header: {}; content: {}",
-                                serde_json::to_string_pretty(header)
-                                    .unwrap_or_else(|_| "<unprintable>".to_string()),
-                                serde_json::to_string_pretty(&bubble_content)
-                                    .unwrap_or_else(|_| "<unprintable>".to_string())
-                            );
-                        }
-                        if let Some(text) = bubble_content.get("text").and_then(|v| v.as_str()) {
-                            let trimmed = text.trim();
-                            if !trimmed.is_empty() {
-                                let role = header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                                if role == 1 {
-                                    transcript.add_message(Message::user(trimmed.to_string()));
-                                } else {
-                                    transcript.add_message(Message::assistant(trimmed.to_string()));
-                                }
+            .ok_or_else(|| {
+                GitAiError::PresetError(
+                    "Conversation uses unsupported legacy format. Only conversations created after April 2025 are supported.".to_string()
+                )
+            })?;
+
+        let mut transcript = AiTranscript::new();
+
+        for header in conv.iter() {
+            if let Some(bubble_id) = header.get("bubbleId").and_then(|v| v.as_str()) {
+                if let Ok(Some(bubble_content)) =
+                    Self::fetch_bubble_content_from_db(global_db_path, composer_id, bubble_id)
+                {
+                    // Extract text from bubble
+                    if let Some(text) = bubble_content.get("text").and_then(|v| v.as_str()) {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            let role = header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                            if role == 1 {
+                                transcript.add_message(Message::user(trimmed.to_string()));
+                            } else {
+                                transcript.add_message(Message::assistant(trimmed.to_string()));
                             }
                         }
+                    }
 
-                        // Try bubble content arrays for tool_use
-                        if let Some(content_array) =
-                            bubble_content.get("content").and_then(|v| v.as_array())
-                        {
-                            for item in content_array {
-                                match item.get("type").and_then(|v| v.as_str()) {
-                                    Some("text") => {
-                                        if let Some(text) =
-                                            item.get("text").and_then(|v| v.as_str())
-                                        {
-                                            let trimmed = text.trim();
-                                            if !trimmed.is_empty() {
-                                                let role = header
-                                                    .get("type")
-                                                    .and_then(|v| v.as_i64())
-                                                    .unwrap_or(0);
-                                                if role == 1 {
-                                                    transcript.add_message(Message::user(
-                                                        trimmed.to_string(),
-                                                    ));
-                                                } else {
-                                                    transcript.add_message(Message::assistant(
-                                                        trimmed.to_string(),
-                                                    ));
-                                                }
+                    // Handle content arrays for tool_use and structured content
+                    if let Some(content_array) =
+                        bubble_content.get("content").and_then(|v| v.as_array())
+                    {
+                        for item in content_array {
+                            match item.get("type").and_then(|v| v.as_str()) {
+                                Some("text") => {
+                                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                        let trimmed = text.trim();
+                                        if !trimmed.is_empty() {
+                                            let role = header
+                                                .get("type")
+                                                .and_then(|v| v.as_i64())
+                                                .unwrap_or(0);
+                                            if role == 1 {
+                                                transcript.add_message(Message::user(
+                                                    trimmed.to_string(),
+                                                ));
+                                            } else {
+                                                transcript.add_message(Message::assistant(
+                                                    trimmed.to_string(),
+                                                ));
                                             }
                                         }
                                     }
-                                    Some("tool_use") => {
-                                        let name_opt = item.get("name").and_then(|v| v.as_str());
-                                        let input_val = item.get("input").cloned();
-                                        if let (Some(name), Some(input)) = (name_opt, input_val) {
-                                            transcript.add_message(Message::tool_use(
-                                                name.to_string(),
-                                                input,
-                                            ));
-                                        }
-                                    }
-                                    _ => {}
                                 }
+                                Some("tool_use") => {
+                                    let name_opt = item.get("name").and_then(|v| v.as_str());
+                                    let input_val = item.get("input").cloned();
+                                    if let (Some(name), Some(input)) = (name_opt, input_val) {
+                                        transcript.add_message(Message::tool_use(
+                                            name.to_string(),
+                                            input,
+                                        ));
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
                 }
             }
-
-            if !transcript.messages.is_empty() {
-                return Ok(Some(transcript));
-            }
         }
 
-        // Try root-level text field
-        if let Some(text) = data.get("text").and_then(|v| v.as_str()) {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                let mut transcript = AiTranscript::new();
-                transcript.add_message(Message::user(trimmed.to_string()));
-                return Ok(Some(transcript));
-            }
+        if !transcript.messages.is_empty() {
+            Ok(Some(transcript))
+        } else {
+            Ok(None)
         }
-
-        // Try root-level richText field
-        if let Some(rich_text) = data.get("richText").and_then(|v| v.as_str()) {
-            let trimmed = rich_text.trim();
-            if !trimmed.is_empty() {
-                let mut transcript = AiTranscript::new();
-                transcript.add_message(Message::user(trimmed.to_string()));
-                return Ok(Some(transcript));
-            }
-        }
-
-        Ok(None)
     }
 
     fn fetch_bubble_content_from_db(
@@ -642,118 +460,10 @@ impl CursorPreset {
             let data = serde_json::from_str::<serde_json::Value>(&value_text)
                 .map_err(|e| GitAiError::Generic(format!("Failed to parse JSON: {}", e)))?;
 
-            // Log bubble content structure to find model information
-            println!(
-                "[DEBUG] Bubble {} keys: {:?}",
-                bubble_id,
-                data.as_object()
-                    .map(|obj| obj.keys().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            );
-
-            // Check for model-related fields in bubble content
-            if let Some(model) = data.get("model") {
-                println!(
-                    "[DEBUG] Bubble {} model field: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(model).unwrap_or_default()
-                );
-            }
-            if let Some(ai_model) = data.get("aiModel") {
-                println!(
-                    "[DEBUG] Bubble {} aiModel field: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(ai_model).unwrap_or_default()
-                );
-            }
-            if let Some(llm) = data.get("llm") {
-                println!(
-                    "[DEBUG] Bubble {} llm field: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(llm).unwrap_or_default()
-                );
-            }
-            if let Some(capability_type) = data.get("capabilityType") {
-                println!(
-                    "[DEBUG] Bubble {} capabilityType: {}",
-                    bubble_id, capability_type
-                );
-            }
-            if let Some(tool_former_data) = data.get("toolFormerData") {
-                println!(
-                    "[DEBUG] Bubble {} toolFormerData: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(tool_former_data).unwrap_or_default()
-                );
-            }
-
             return Ok(Some(data));
         }
 
         Ok(None)
-    }
-
-    fn _explore_database_for_model_info(
-        global_db_path: &Path,
-        composer_id: &str,
-    ) -> Result<(), GitAiError> {
-        let conn = Self::open_sqlite_readonly(global_db_path)?;
-
-        // First, let's see all keys that might be related to this composer
-        let mut stmt = conn
-            .prepare("SELECT key FROM cursorDiskKV WHERE key LIKE ? OR key LIKE ? OR key LIKE ? OR key LIKE ? LIMIT 20")
-            .map_err(|e| GitAiError::Generic(format!("Query failed: {}", e)))?;
-
-        let patterns = [
-            format!("%{}%", composer_id),
-            "%model%".to_string(),
-            "%llm%".to_string(),
-            "%ai%".to_string(),
-        ];
-
-        let mut rows = stmt
-            .query([&patterns[0], &patterns[1], &patterns[2], &patterns[3]])
-            .map_err(|e| GitAiError::Generic(format!("Query failed: {}", e)))?;
-
-        println!(
-            "[DEBUG] Keys related to composer {} or model info:",
-            composer_id
-        );
-        while let Ok(Some(row)) = rows.next() {
-            let key: String = row
-                .get(0)
-                .map_err(|e| GitAiError::Generic(format!("Failed to read key: {}", e)))?;
-            println!("[DEBUG] Key: {}", key);
-        }
-
-        // Now let's look for any keys that contain model configuration
-        let mut stmt2 = conn
-            .prepare("SELECT key, value FROM cursorDiskKV WHERE value LIKE '%model%' OR value LIKE '%llm%' OR value LIKE '%gpt%' OR value LIKE '%claude%' LIMIT 10")
-            .map_err(|e| GitAiError::Generic(format!("Query failed: {}", e)))?;
-
-        let mut rows2 = stmt2
-            .query([])
-            .map_err(|e| GitAiError::Generic(format!("Query failed: {}", e)))?;
-
-        println!("[DEBUG] Keys with model-related values:");
-        while let Ok(Some(row)) = rows2.next() {
-            let key: String = row
-                .get(0)
-                .map_err(|e| GitAiError::Generic(format!("Failed to read key: {}", e)))?;
-            let value: String = row
-                .get(1)
-                .map_err(|e| GitAiError::Generic(format!("Failed to read value: {}", e)))?;
-
-            println!("[DEBUG] Key: {}", key);
-            if value.len() < 500 {
-                // Only print short values
-                println!("[DEBUG] Value: {}", value);
-            } else {
-                println!("[DEBUG] Value: <too long, {} chars>", value.len());
-            }
-        }
-
-        Ok(())
     }
 
     fn extract_model_from_cursor_data(
@@ -765,16 +475,16 @@ impl CursorPreset {
         // First, check if the composer payload has capabilityType
         if let Some(capability_type) = composer_payload.get("capabilityType") {
             if let Some(cap_num) = capability_type.as_i64() {
-                let model = match cap_num {
-                    15 => "claude-3.5-sonnet", // Based on observed capabilityType value
-                    14 => "claude-3-sonnet",
-                    13 => "claude-3-haiku",
-                    12 => "gpt-4",
-                    11 => "gpt-4-turbo",
-                    10 => "gpt-3.5-turbo",
-                    _ => "unknown",
-                };
-                return Ok(model.to_string());
+                // let model = match cap_num {
+                //     15 => "claude-3.5-sonnet", // Based on observed capabilityType value
+                //     14 => "claude-3-sonnet",
+                //     13 => "claude-3-haiku",
+                //     12 => "gpt-4",
+                //     11 => "gpt-4-turbo",
+                //     10 => "gpt-3.5-turbo",
+                //     _ => "unknown",
+                // };
+                return Ok(cap_num.to_string());
             }
         }
 
@@ -792,13 +502,10 @@ impl CursorPreset {
                         if let Some(capability_type) = bubble_content.get("capabilityType") {
                             if let Some(cap_num) = capability_type.as_i64() {
                                 let model = match cap_num {
+                                    // @todo Aidan to figure out the rest of these mappings
+                                    30 => "gpt-5-codex",
                                     15 => "claude-3.5-sonnet",
-                                    14 => "claude-3-sonnet",
-                                    13 => "claude-3-haiku",
-                                    12 => "gpt-4",
-                                    11 => "gpt-4-turbo",
-                                    10 => "gpt-3.5-turbo",
-                                    _ => "unknown",
+                                    _ => return Ok(cap_num.to_string()),
                                 };
                                 return Ok(model.to_string());
                             }
@@ -823,116 +530,122 @@ impl CursorPreset {
     }
 }
 
-impl AgentCheckpointPreset for CursorPreset {
-    fn run(&self, flags: AgentCheckpointFlags) -> Result<AgentRunResult, GitAiError> {
-        // Locate Cursor storage
-        let user_dir = Self::cursor_user_dir()?;
-        let global_db = user_dir.join("globalStorage").join("state.vscdb");
-        if !global_db.exists() {
-            return Err(GitAiError::PresetError(format!(
-                "Cursor global state database not found at {:?}. \
-                Make sure Cursor is installed and has been used at least once. \
-                Expected location: {:?}",
-                global_db,
-                user_dir.join("globalStorage")
-            )));
-        }
-
-        // If explicit composer ID provided, use it
-        if let Some(composer_id) = flags.prompt_id {
-            let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
-            let transcript =
-                Self::transcript_from_composer_payload(&payload, &global_db, &composer_id)?
-                    .ok_or_else(|| {
-                        GitAiError::PresetError(
-                            "Could not extract transcript from Cursor composer".to_string(),
-                        )
-                    })?;
-
-            // Extract model information from the Cursor data
-            let model = Self::extract_model_from_cursor_data(&payload, &global_db, &composer_id)?;
-
-            let agent_id = AgentId {
-                tool: "cursor".to_string(),
-                id: composer_id,
-                model,
-            };
-
-            return Ok(AgentRunResult {
-                agent_id,
-                transcript,
-            });
-        }
-
-        // Get the 5 latest conversations
-        let conversations = Self::get_latest_conversations(&global_db, Some(5))?;
-
-        if conversations.is_empty() {
-            return Err(GitAiError::PresetError(
-                "No Cursor conversations found".to_string(),
-            ));
-        }
-
-        // Use the first (most recent) conversation
-        let latest_conversation = &conversations[0];
-
-        let payload = Self::fetch_composer_payload(&global_db, &latest_conversation.composer_id)?;
-        let transcript = Self::transcript_from_composer_payload(
-            &payload,
-            &global_db,
-            &latest_conversation.composer_id,
-        )?
-        .ok_or_else(|| {
-            GitAiError::PresetError("Could not extract transcript from Cursor composer".to_string())
-        })?;
-
-        // Extract model information from the Cursor data
-        let model = Self::extract_model_from_cursor_data(
-            &payload,
-            &global_db,
-            &latest_conversation.composer_id,
-        )?;
-
-        let agent_id = AgentId {
-            tool: "cursor".to_string(),
-            id: latest_conversation.composer_id.clone(),
-            model,
-        };
-
-        Ok(AgentRunResult {
-            agent_id,
-            transcript,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn cursor_preset_prints_transcript() {
+    fn cursor_preset_with_conversation_id() {
+        // This test requires a real Cursor installation with at least one conversation.
+        // We'll use a sample conversation_id (you can replace with an actual ID from your database)
+
+        // First, let's try to get a real conversation ID from the database
+        let user_dir = match CursorPreset::cursor_user_dir() {
+            Ok(dir) => dir,
+            Err(_) => {
+                println!("Cursor not installed, skipping test");
+                return;
+            }
+        };
+
+        let global_db = user_dir.join("globalStorage").join("state.vscdb");
+        if !global_db.exists() {
+            println!("Cursor database not found, skipping test");
+            return;
+        }
+
+        // Get a real conversation ID from the database
+        let conn = match CursorPreset::open_sqlite_readonly(&global_db) {
+            Ok(c) => c,
+            Err(_) => {
+                println!("Could not open Cursor database, skipping test");
+                return;
+            }
+        };
+
+        // Find a conversation with fullConversationHeadersOnly (bubbles format)
+        let mut stmt = match conn.prepare(
+            "SELECT json_extract(value, '$.composerId') FROM cursorDiskKV 
+             WHERE key LIKE 'composerData:%' 
+             AND json_extract(value, '$.fullConversationHeadersOnly') IS NOT NULL
+             AND json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) > 0
+             LIMIT 1",
+        ) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Could not query database, skipping test");
+                return;
+            }
+        };
+
+        let conversation_id: String = match stmt.query_row([], |row| row.get(0)) {
+            Ok(id) => id,
+            Err(_) => {
+                println!("No conversations with messages found in database, skipping test");
+                return;
+            }
+        };
+
+        println!("Testing with conversation_id: {}", conversation_id);
+
+        // Create mock hook_input
+        let hook_input = serde_json::json!({
+            "conversation_id": conversation_id,
+            "workspace_roots": ["/tmp/test-workspace"]
+        });
+
         let preset = CursorPreset;
         let result = preset.run(AgentCheckpointFlags {
             prompt_id: None,
-            hook_input: None,
+            hook_input: Some(hook_input.to_string()),
         });
 
         match result {
             Ok(run) => {
-                println!("Cursor Agent: {}:{}", run.agent_id.tool, run.agent_id.id);
-                for (i, m) in run.transcript.messages.iter().enumerate() {
+                println!("✓ Cursor Agent: {}:{}", run.agent_id.tool, run.agent_id.id);
+                println!("✓ Model: {}", run.agent_id.model);
+                let transcript = run.transcript.unwrap();
+                println!("✓ Message count: {}", transcript.messages.len());
+
+                for (i, m) in transcript.messages.iter().enumerate() {
                     match m {
-                        Message::User { text, .. } => println!("User {}: {}", i, text),
-                        Message::Assistant { text, .. } => println!("Assistant {}: {}", i, text),
+                        Message::User { text, .. } => {
+                            let preview = if text.len() > 100 {
+                                format!("{}...", &text[..100])
+                            } else {
+                                text.clone()
+                            };
+                            println!("  [{}] User: {}", i, preview);
+                        }
+                        Message::Assistant { text, .. } => {
+                            let preview = if text.len() > 100 {
+                                format!("{}...", &text[..100])
+                            } else {
+                                text.clone()
+                            };
+                            println!("  [{}] Assistant: {}", i, preview);
+                        }
                         Message::ToolUse { name, input, .. } => {
-                            println!("ToolUse {}: {} {}", i, name, input)
+                            println!(
+                                "  [{}] ToolUse: {} (input: {} chars)",
+                                i,
+                                name,
+                                input.to_string().len()
+                            );
                         }
                     }
                 }
+
+                // Assert that we got at least some messages
+                assert!(
+                    !transcript.messages.is_empty(),
+                    "Transcript should have at least one message"
+                );
+                assert_eq!(run.agent_id.tool, "cursor");
+                assert_eq!(run.agent_id.id, conversation_id);
             }
             Err(e) => {
-                // It's fine if Cursor isn't installed; print the error for visibility
-                println!("CursorPreset error: {}", e);
+                panic!("CursorPreset error: {}", e);
             }
         }
     }
