@@ -88,6 +88,17 @@ impl AttestationEntry {
 
         self.line_ranges = current_ranges;
     }
+
+    /// Shift line ranges by a given offset starting at insertion_point
+    pub fn shift_line_ranges(&mut self, insertion_point: u32, offset: i32) {
+        let mut shifted_ranges = Vec::new();
+        for range in &self.line_ranges {
+            if let Some(shifted) = range.shift(insertion_point, offset) {
+                shifted_ranges.push(shifted);
+            }
+        }
+        self.line_ranges = shifted_ranges;
+    }
 }
 
 /// Per-file attestation data
@@ -265,23 +276,46 @@ impl AuthorshipLog {
                     *session_deletions.entry(session_id.clone()).or_insert(0) += deletions_count;
                 }
 
-                // Process deletions first (remove lines from all authors)
-                {
+                // Process deletions first (remove lines from all authors, then shift remaining lines up)
+                if !entry.deleted_lines.is_empty() {
                     let file_attestation = authorship_log.get_or_create_file(&entry.file);
+
+                    // Collect all deleted line numbers
+                    let mut all_deleted_lines = Vec::new();
                     for line in &entry.deleted_lines {
-                        let to_remove = match line {
-                            crate::log_fmt::working_log::Line::Single(l) => LineRange::Single(*l),
-                            crate::log_fmt::working_log::Line::Range(start, end) => {
-                                LineRange::Range(*start, *end)
+                        match line {
+                            crate::log_fmt::working_log::Line::Single(l) => {
+                                all_deleted_lines.push(*l)
                             }
-                        };
+                            crate::log_fmt::working_log::Line::Range(start, end) => {
+                                for l in *start..=*end {
+                                    all_deleted_lines.push(l);
+                                }
+                            }
+                        }
+                    }
+                    all_deleted_lines.sort_unstable();
+                    all_deleted_lines.dedup();
+
+                    let deleted_ranges = LineRange::compress_lines(&all_deleted_lines);
+
+                    // Remove the deleted lines from all attestations
+                    for attestation_entry in file_attestation.entries.iter_mut() {
+                        attestation_entry.remove_line_ranges(&deleted_ranges);
+                    }
+
+                    // Shift remaining lines up after deletions
+                    // Process deletions in reverse order to avoid shifting issues
+                    for line in all_deleted_lines.iter().rev() {
+                        let deletion_point = *line;
                         for attestation_entry in file_attestation.entries.iter_mut() {
-                            attestation_entry.remove_line_ranges(&[to_remove.clone()]);
+                            // Shift lines after the deletion point up by 1
+                            attestation_entry.shift_line_ranges(deletion_point + 1, -1);
                         }
                     }
                 }
 
-                // Then process additions (new author takes ownership)
+                // Then process additions (shift existing lines down, then add new author)
                 let mut added_lines = Vec::new();
                 for line in &entry.added_lines {
                     match line {
@@ -298,19 +332,22 @@ impl AuthorshipLog {
                     added_lines.sort_unstable();
                     added_lines.dedup();
 
-                    // Create compressed line ranges
-                    let lines_to_remove = LineRange::compress_lines(&added_lines);
+                    let num_lines_added = added_lines.len() as i32;
+                    let insertion_point = *added_lines.first().unwrap();
+
+                    // Shift existing line attributions down to make room for new lines
+                    let file_attestation = authorship_log.get_or_create_file(&entry.file);
+                    for attestation_entry in file_attestation.entries.iter_mut() {
+                        attestation_entry.shift_line_ranges(insertion_point, num_lines_added);
+                    }
+
+                    // Create compressed line ranges for the new additions
+                    let new_line_ranges = LineRange::compress_lines(&added_lines);
 
                     // Only process AI-generated content (entries with prompt_session_id)
                     if let Some(session_id) = session_id_opt.clone() {
-                        // Remove these lines from all other entries
-                        let file_attestation = authorship_log.get_or_create_file(&entry.file);
-                        for attestation_entry in file_attestation.entries.iter_mut() {
-                            attestation_entry.remove_line_ranges(&lines_to_remove);
-                        }
-
-                        // Add new attestation entry
-                        let entry = AttestationEntry::new(session_id, lines_to_remove);
+                        // Add new attestation entry for the AI-added lines
+                        let entry = AttestationEntry::new(session_id, new_line_ranges);
                         file_attestation.add_entry(entry);
                     }
                 }
@@ -968,8 +1005,11 @@ mod tests {
         assert_eq!(prompt_record.total_additions, 15);
         // total_deletions: 0 (from first) + 3 (from second) = 3
         assert_eq!(prompt_record.total_deletions, 3);
-        // accepted_lines: lines 1-4 and 5-10 (after processing both checkpoints) = 10 lines
-        // (lines 5-7 were deleted in checkpoint2, but then 5-9 were re-added, so final is 1-10)
-        assert_eq!(prompt_record.accepted_lines, 10);
+        // accepted_lines: After correct shifting logic:
+        // - Checkpoint 1 adds 1-10 (10 lines)
+        // - Checkpoint 2 deletes 5-7 (removes 3), shifts 8-10 up to 5-7 (7 lines remain)
+        // - Checkpoint 2 adds 5-9 (5 lines), shifts existing 5-7 down to 10-12
+        // - Final: AI owns 1-4, 5-9, 10-12 = 12 lines
+        assert_eq!(prompt_record.accepted_lines, 12);
     }
 }
