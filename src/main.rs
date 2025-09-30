@@ -69,20 +69,13 @@ fn main() {
             handle_checkpoint(args);
         }
         "blame" => {
-            debug_log(&format!("overriding: git blame"));
+            if binary_name == "git" {
+                proxy_to_git(&cli.args);
+            }
             handle_blame(args);
         }
         "commit" => {
-            // debug_log(&format!("wrapping: git commit"));
             handle_commit(args);
-        }
-        "pre-commit" => {
-            // Backwards compatibility: do nothing and exit 0
-            std::process::exit(0);
-        }
-        "post-commit" => {
-            // Backwards compatibility: do nothing and exit 0
-            std::process::exit(0);
         }
         "fetch" => {
             handle_fetch(args);
@@ -123,7 +116,6 @@ fn main() {
             commands::rebase_authorship::handle_squash_authorship(args);
         }
         _ => {
-            // debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
             proxy_to_git(&cli.args);
         }
@@ -648,6 +640,13 @@ fn handle_push(args: &[String]) {
         exit_with_status(status);
     }
 
+    // If this was a dry-run or delete, do not perform any secondary pushes
+    let is_dry_run = args.iter().any(|a| a == "--dry-run" || a == "-n");
+    let is_delete = args.iter().any(|a| a == "-d" || a == "--delete");
+    if is_dry_run || is_delete {
+        return;
+    }
+
     // 2) Push authorship refs to the appropriate remote
     let positional_remote = extract_remote_from_push_args(args, &remote_names);
 
@@ -678,7 +677,12 @@ fn handle_push(args: &[String]) {
         .or_else(|| get_default_remote(&repo));
 
     if let Some(remote) = remote {
+        // Forward relevant flags so the secondary push has matching semantics
+        let forwarded_flags = extract_forwarded_push_flags(args);
+
         let mut push_authorship = vec!["push".to_string()];
+        // Place options before positional args per git's CLI conventions
+        push_authorship.extend(forwarded_flags);
         push_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
         // Silence the second push unless we're in debug mode
         let silent = !cfg!(debug_assertions);
@@ -881,4 +885,114 @@ fn extract_remote_from_push_args(args: &[String], known_remotes: &[String]) -> O
         .iter()
         .find(|r| args.iter().any(|arg| arg == *r))
         .cloned()
+}
+
+fn extract_forwarded_push_flags(args: &[String]) -> Vec<String> {
+    let mut forwarded: Vec<String> = Vec::new();
+
+    // Helpers
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // --push-option/-o are handled via extract_push_options to preserve values
+        if let Some(val) = arg.strip_prefix("--push-option=") {
+            forwarded.push(format!("--push-option={}", val));
+            i += 1;
+            continue;
+        }
+        if arg == "--push-option" || arg == "-o" {
+            if i + 1 < args.len() {
+                forwarded.push(format!("--push-option={}", args[i + 1]));
+            }
+            i += 2;
+            continue;
+        }
+
+        // --signed, --no-signed, --signed=<mode>
+        if arg == "--signed" || arg == "--no-signed" || arg.starts_with("--signed=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --atomic / --no-atomic
+        if arg == "--atomic" || arg == "--no-atomic" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --receive-pack / --exec (with or without =)
+        if arg.starts_with("--receive-pack=") || arg.starts_with("--exec=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+        if arg == "--receive-pack" || arg == "--exec" {
+            if i + 1 < args.len() {
+                forwarded.push(arg.clone());
+                forwarded.push(args[i + 1].clone());
+            } else {
+                forwarded.push(arg.clone());
+            }
+            i += 2;
+            continue;
+        }
+
+        // --force-with-lease variants and --no-force-with-lease
+        if arg == "--force-with-lease" || arg == "--no-force-with-lease" || arg.starts_with("--force-with-lease=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --force-if-includes / --no-force-if-includes
+        if arg == "--force-if-includes" || arg == "--no-force-if-includes" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // -f / --force
+        if arg == "-f" || arg == "--force" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --thin / --no-thin
+        if arg == "--thin" || arg == "--no-thin" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --recurse-submodules forms
+        if arg == "--no-recurse-submodules" || arg.starts_with("--recurse-submodules=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --verify / --no-verify
+        if arg == "--verify" || arg == "--no-verify" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // -4 / --ipv4, -6 / --ipv6
+        if arg == "-4" || arg == "--ipv4" || arg == "-6" || arg == "--ipv6" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --repo should not be forwarded (we already compute the target remote)
+
+        i += 1;
+    }
+
+    forwarded
 }
