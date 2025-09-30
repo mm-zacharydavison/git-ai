@@ -199,6 +199,100 @@ impl AgentCheckpointPreset for CursorPreset {
 }
 
 impl CursorPreset {
+    /// Update Cursor conversations in working logs to their latest versions
+    /// This helps prevent race conditions where we miss the last message in a conversation
+    pub fn update_cursor_conversations_to_latest(
+        checkpoints: &mut [crate::log_fmt::working_log::Checkpoint],
+    ) -> Result<(), GitAiError> {
+        use std::collections::HashMap;
+
+        // Group checkpoints by Cursor conversation ID
+        let mut cursor_conversations: HashMap<
+            String,
+            Vec<&mut crate::log_fmt::working_log::Checkpoint>,
+        > = HashMap::new();
+
+        for checkpoint in checkpoints.iter_mut() {
+            if let Some(agent_id) = &checkpoint.agent_id {
+                if agent_id.tool == "cursor" {
+                    cursor_conversations
+                        .entry(agent_id.id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(checkpoint);
+                }
+            }
+        }
+
+        // For each unique Cursor conversation, fetch the latest version
+        for (conversation_id, conversation_checkpoints) in cursor_conversations {
+            crate::utils::debug_log(&format!(
+                "Updating Cursor conversation {} with {} checkpoints",
+                conversation_id,
+                conversation_checkpoints.len()
+            ));
+
+            // Fetch the latest conversation data
+            match Self::fetch_latest_cursor_conversation(&conversation_id) {
+                Ok(Some((latest_transcript, latest_model))) => {
+                    crate::utils::debug_log(&format!(
+                        "Fetched latest conversation with {} messages",
+                        latest_transcript.messages().len()
+                    ));
+
+                    // Update all checkpoints for this conversation
+                    for checkpoint in conversation_checkpoints {
+                        if let Some(agent_id) = &mut checkpoint.agent_id {
+                            agent_id.model = latest_model.clone();
+                        }
+                        checkpoint.transcript = Some(latest_transcript.clone());
+                    }
+                }
+                Ok(None) => {
+                    crate::utils::debug_log(&format!(
+                        "No latest conversation data found for {}",
+                        conversation_id
+                    ));
+                }
+                Err(e) => {
+                    crate::utils::debug_log(&format!(
+                        "Failed to fetch latest conversation for {}: {}",
+                        conversation_id, e
+                    ));
+                    // Continue with existing data rather than failing
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fetch the latest version of a Cursor conversation from the database
+    fn fetch_latest_cursor_conversation(
+        conversation_id: &str,
+    ) -> Result<Option<(AiTranscript, String)>, GitAiError> {
+        // Get Cursor user directory
+        let user_dir = Self::cursor_user_dir()?;
+        let global_db = user_dir.join("globalStorage").join("state.vscdb");
+
+        if !global_db.exists() {
+            return Ok(None);
+        }
+
+        // Fetch composer payload
+        let composer_payload = Self::fetch_composer_payload(&global_db, conversation_id)?;
+
+        // Extract transcript and model
+        let transcript =
+            Self::transcript_from_composer_payload(&composer_payload, &global_db, conversation_id)?;
+        let model =
+            Self::extract_model_from_cursor_data(&composer_payload, &global_db, conversation_id)?;
+
+        match transcript {
+            Some(transcript) => Ok(Some((transcript, model))),
+            None => Ok(None),
+        }
+    }
+
     fn cursor_user_dir() -> Result<PathBuf, GitAiError> {
         #[cfg(target_os = "windows")]
         {
@@ -256,55 +350,6 @@ impl CursorPreset {
 
             let data = serde_json::from_str::<serde_json::Value>(&value_text)
                 .map_err(|e| GitAiError::Generic(format!("Failed to parse JSON: {}", e)))?;
-
-            // Log the composer payload structure to find model information
-            println!(
-                "[DEBUG] Composer payload keys: {:?}",
-                data.as_object()
-                    .map(|obj| obj.keys().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            );
-
-            // Check for model-related fields
-            if let Some(model) = data.get("model") {
-                println!(
-                    "[DEBUG] Found model field: {}",
-                    serde_json::to_string_pretty(model).unwrap_or_default()
-                );
-            }
-            if let Some(ai_model) = data.get("aiModel") {
-                println!(
-                    "[DEBUG] Found aiModel field: {}",
-                    serde_json::to_string_pretty(ai_model).unwrap_or_default()
-                );
-            }
-            if let Some(llm) = data.get("llm") {
-                println!(
-                    "[DEBUG] Found llm field: {}",
-                    serde_json::to_string_pretty(llm).unwrap_or_default()
-                );
-            }
-            if let Some(config) = data.get("config") {
-                println!(
-                    "[DEBUG] Found config field: {}",
-                    serde_json::to_string_pretty(config).unwrap_or_default()
-                );
-            }
-            if let Some(settings) = data.get("settings") {
-                println!(
-                    "[DEBUG] Found settings field: {}",
-                    serde_json::to_string_pretty(settings).unwrap_or_default()
-                );
-            }
-            if let Some(capability_type) = data.get("capabilityType") {
-                println!("[DEBUG] Composer capabilityType: {}", capability_type);
-            }
-            if let Some(tool_former_data) = data.get("toolFormerData") {
-                println!(
-                    "[DEBUG] Composer toolFormerData: {}",
-                    serde_json::to_string_pretty(tool_former_data).unwrap_or_default()
-                );
-            }
 
             return Ok(data);
         }
@@ -425,51 +470,6 @@ impl CursorPreset {
 
             let data = serde_json::from_str::<serde_json::Value>(&value_text)
                 .map_err(|e| GitAiError::Generic(format!("Failed to parse JSON: {}", e)))?;
-
-            // Log bubble content structure to find model information
-            println!(
-                "[DEBUG] Bubble {} keys: {:?}",
-                bubble_id,
-                data.as_object()
-                    .map(|obj| obj.keys().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            );
-
-            // Check for model-related fields in bubble content
-            if let Some(model) = data.get("model") {
-                println!(
-                    "[DEBUG] Bubble {} model field: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(model).unwrap_or_default()
-                );
-            }
-            if let Some(ai_model) = data.get("aiModel") {
-                println!(
-                    "[DEBUG] Bubble {} aiModel field: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(ai_model).unwrap_or_default()
-                );
-            }
-            if let Some(llm) = data.get("llm") {
-                println!(
-                    "[DEBUG] Bubble {} llm field: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(llm).unwrap_or_default()
-                );
-            }
-            if let Some(capability_type) = data.get("capabilityType") {
-                println!(
-                    "[DEBUG] Bubble {} capabilityType: {}",
-                    bubble_id, capability_type
-                );
-            }
-            if let Some(tool_former_data) = data.get("toolFormerData") {
-                println!(
-                    "[DEBUG] Bubble {} toolFormerData: {}",
-                    bubble_id,
-                    serde_json::to_string_pretty(tool_former_data).unwrap_or_default()
-                );
-            }
 
             return Ok(Some(data));
         }
