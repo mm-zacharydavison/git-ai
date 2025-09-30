@@ -11,8 +11,8 @@ AuthorshipLogV3 {
                     hash: "1cee1d9",
                     line_ranges: [
                         Range(
-                            4,
-                            5,
+                            2,
+                            3,
                         ),
                     ],
                 },

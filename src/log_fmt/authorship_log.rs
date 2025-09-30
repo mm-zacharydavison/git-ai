@@ -131,6 +131,46 @@ impl LineRange {
             LineRange::Range(start, end) => (*start..=*end).collect(),
         }
     }
+
+    /// Shift line numbers by a given offset
+    /// - For insertions: offset is positive (shift lines down/forward)
+    /// - For deletions: offset is negative (shift lines up/backward)
+    /// - insertion_point: the line number where the change occurred
+    pub fn shift(&self, insertion_point: u32, offset: i32) -> Option<LineRange> {
+        match self {
+            LineRange::Single(l) => {
+                if *l >= insertion_point {
+                    let new_line = (*l as i32 + offset) as u32;
+                    Some(LineRange::Single(new_line))
+                } else {
+                    Some(LineRange::Single(*l))
+                }
+            }
+            LineRange::Range(start, end) => {
+                let new_start = if *start >= insertion_point {
+                    (*start as i32 + offset) as u32
+                } else {
+                    *start
+                };
+                let new_end = if *end >= insertion_point {
+                    (*end as i32 + offset) as u32
+                } else {
+                    *end
+                };
+                
+                // Ensure the range is still valid
+                if new_start <= new_end {
+                    if new_start == new_end {
+                        Some(LineRange::Single(new_start))
+                    } else {
+                        Some(LineRange::Range(new_start, new_end))
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for LineRange {
