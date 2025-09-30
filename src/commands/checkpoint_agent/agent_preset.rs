@@ -172,13 +172,20 @@ impl AgentCheckpointPreset for CursorPreset {
 
         // Fetch the composer data and extract transcript
         let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
-        let transcript =
-            Self::transcript_from_composer_payload(&payload, &global_db, &composer_id)?
-                .ok_or_else(|| {
-                    GitAiError::PresetError(
-                        "Could not extract transcript from Cursor composer".to_string(),
-                    )
-                })?;
+        let transcript = Self::transcript_from_composer_payload(
+            &payload,
+            &global_db,
+            &composer_id,
+        )?
+        .unwrap_or_else(|| {
+            // Return empty transcript as default
+            // There's a race condition causing new threads to sometimes not show up.
+            // We refresh and grab all the messages in post-commit so we're ok with returning an empty (placeholder)transcript here and not throwing
+            println!(
+                "[Warning] Could not extract transcript from Cursor composer. Retrying at commit."
+            );
+            AiTranscript::new()
+        });
 
         // Extract model information from the Cursor data
         let model = Self::extract_model_from_cursor_data(&payload, &global_db, &composer_id)?;
