@@ -308,7 +308,8 @@ impl TmpRepo {
         // Create agent run result
         let agent_run_result = AgentRunResult {
             agent_id,
-            transcript,
+            transcript: Some(transcript),
+            is_human: false,
             repo_working_dir: None,
         };
 

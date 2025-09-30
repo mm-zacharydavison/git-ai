@@ -128,7 +128,10 @@ fn main() {
 }
 
 fn handle_checkpoint(args: &[String]) {
-    let repository_working_dir = std::env::current_dir().unwrap();
+    let mut repository_working_dir = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
 
     // Parse checkpoint-specific arguments
     let mut author = None;
@@ -236,7 +239,14 @@ fn handle_checkpoint(args: &[String]) {
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
-                        agent_run_result = Some(agent_run);
+                        if agent_run.is_human {
+                            agent_run_result = None;
+                            if agent_run.repo_working_dir.is_some() {
+                                repository_working_dir = agent_run.repo_working_dir.unwrap();
+                            }
+                        } else {
+                            agent_run_result = Some(agent_run);
+                        }
                     }
                     Err(e) => {
                         eprintln!("Error running Cursor preset: {}", e);
@@ -251,7 +261,7 @@ fn handle_checkpoint(args: &[String]) {
     let final_working_dir = agent_run_result
         .as_ref()
         .and_then(|r| r.repo_working_dir.clone())
-        .unwrap_or_else(|| repository_working_dir.to_string_lossy().to_string());
+        .unwrap_or_else(|| repository_working_dir);
     // Find the git repository
     let repo = match find_repository_in_path(&final_working_dir) {
         Ok(repo) => repo,

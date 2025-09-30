@@ -16,7 +16,8 @@ pub struct AgentCheckpointFlags {
 
 pub struct AgentRunResult {
     pub agent_id: AgentId,
-    pub transcript: AiTranscript,
+    pub is_human: bool,
+    pub transcript: Option<AiTranscript>,
     pub repo_working_dir: Option<String>,
 }
 
@@ -79,7 +80,8 @@ impl AgentCheckpointPreset for ClaudePreset {
 
         Ok(AgentRunResult {
             agent_id,
-            transcript,
+            is_human: false,
+            transcript: Some(transcript),
             // use default.
             repo_working_dir: None,
         })
@@ -118,9 +120,39 @@ impl AgentCheckpointPreset for CursorPreset {
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect::<Vec<String>>();
 
+        let hook_event_name = hook_data
+            .get("hook_event_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError("hook_event_name not found in hook_input".to_string())
+            })?
+            .to_string();
+
+        // Validate hook_event_name
+        if hook_event_name != "beforeSubmitPrompt" && hook_event_name != "afterFileEdit" {
+            return Err(GitAiError::PresetError(format!(
+                "Invalid hook_event_name: {}. Expected 'beforeSubmitPrompt' or 'afterFileEdit'",
+                hook_event_name
+            )));
+        }
+
         let repo_working_dir = workspace_roots.first().cloned().ok_or_else(|| {
             GitAiError::PresetError("No workspace root found in hook_input".to_string())
         })?;
+
+        if hook_event_name == "beforeSubmitPrompt" {
+            // early return, we're just adding a human checkpoint.
+            return Ok(AgentRunResult {
+                agent_id: AgentId {
+                    tool: "cursor".to_string(),
+                    id: conversation_id.clone(),
+                    model: "unknown".to_string(),
+                },
+                is_human: true,
+                transcript: None,
+                repo_working_dir: Some(repo_working_dir),
+            });
+        }
 
         // Use prompt_id if provided, otherwise use conversation_id
         let composer_id = flags.prompt_id.unwrap_or(conversation_id);
@@ -159,7 +191,8 @@ impl AgentCheckpointPreset for CursorPreset {
 
         Ok(AgentRunResult {
             agent_id,
-            transcript,
+            is_human: false,
+            transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
         })
     }
@@ -585,9 +618,10 @@ mod tests {
             Ok(run) => {
                 println!("✓ Cursor Agent: {}:{}", run.agent_id.tool, run.agent_id.id);
                 println!("✓ Model: {}", run.agent_id.model);
-                println!("✓ Message count: {}", run.transcript.messages.len());
+                let transcript = run.transcript.unwrap();
+                println!("✓ Message count: {}", transcript.messages.len());
 
-                for (i, m) in run.transcript.messages.iter().enumerate() {
+                for (i, m) in transcript.messages.iter().enumerate() {
                     match m {
                         Message::User { text, .. } => {
                             let preview = if text.len() > 100 {
@@ -618,7 +652,7 @@ mod tests {
 
                 // Assert that we got at least some messages
                 assert!(
-                    !run.transcript.messages.is_empty(),
+                    !transcript.messages.is_empty(),
                     "Transcript should have at least one message"
                 );
                 assert_eq!(run.agent_id.tool, "cursor");

@@ -61,6 +61,27 @@ pub fn run(
                         .map(|id| id.tool.clone())
                         .unwrap_or_default()
                 ));
+
+                // Display first user message from transcript if available
+                if let Some(transcript) = &checkpoint.transcript {
+                    if let Some(first_message) = transcript.messages().first() {
+                        if let crate::log_fmt::transcript::Message::User { text, .. } =
+                            first_message
+                        {
+                            let agent_info = checkpoint
+                                .agent_id
+                                .as_ref()
+                                .map(|id| format!(" (Agent: {})", id.tool))
+                                .unwrap_or_default();
+                            let message_count = transcript.messages().len();
+                            debug_log(&format!(
+                                "  First message{} ({} messages): {}",
+                                agent_info, message_count, text
+                            ));
+                        }
+                    }
+                }
+
                 debug_log("  Entries:");
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
@@ -126,7 +147,7 @@ pub fn run(
 
         // Set transcript and agent_id if provided
         if let Some(agent_run) = &agent_run_result {
-            checkpoint.transcript = Some(agent_run.transcript.clone());
+            checkpoint.transcript = Some(agent_run.transcript.clone().unwrap_or_default());
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
 
