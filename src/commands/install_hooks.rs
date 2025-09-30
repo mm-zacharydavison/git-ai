@@ -89,13 +89,18 @@ fn binary_exists(name: &str) -> bool {
             // On Windows, executables usually have extensions listed in PATHEXT
             #[cfg(windows)]
             {
-                let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.BAT;.CMD;.COM".to_string());
+                let pathext =
+                    std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.BAT;.CMD;.COM".to_string());
                 for ext in pathext.split(';') {
                     let ext = ext.trim();
                     if ext.is_empty() {
                         continue;
                     }
-                    let ext = if ext.starts_with('.') { ext.to_string() } else { format!(".{}", ext) };
+                    let ext = if ext.starts_with('.') {
+                        ext.to_string()
+                    } else {
+                        format!(".{}", ext)
+                    };
                     let candidate = dir.join(format!("{}{}", name, ext));
                     if candidate.exists() && candidate.is_file() {
                         return true;

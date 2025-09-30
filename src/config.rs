@@ -73,5 +73,3 @@ fn is_executable(path: &Path) -> bool {
     // On Unix we could check permissions, but many filesystems differ. Keep it simple.
     true
 }
-
-
