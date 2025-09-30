@@ -64,6 +64,9 @@ AuthorshipLogV3 {
                         timestamp: None,
                     },
                 ],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 4,
             },
             "e9f6d77b-f181-4d85-b31b-2f8283629d27": PromptRecord {
                 agent_id: AgentId {
@@ -97,6 +100,9 @@ AuthorshipLogV3 {
                         timestamp: None,
                     },
                 ],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 5,
             },
         },
     },
