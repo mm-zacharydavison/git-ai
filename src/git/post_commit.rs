@@ -1,3 +1,4 @@
+use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
 use crate::git::refs::{delete_reference, put_reference};
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
@@ -47,12 +48,15 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
     let parent_working_log = get_working_log(repo, &parent_sha)?;
 
     // Filter out untracked files from the working log
-    let filtered_working_log = filter_untracked_files(repo, &parent_working_log)?;
+    let mut filtered_working_log = filter_untracked_files(repo, &parent_working_log)?;
 
     debug_log(&format!(
         "Working log entries: {}",
         filtered_working_log.len()
     ));
+
+    // mutates inline
+    CursorPreset::update_cursor_conversations_to_latest(&mut filtered_working_log)?;
 
     // Get git user information for human_author field
     let human_author = match repo.config() {
