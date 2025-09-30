@@ -17,6 +17,7 @@ pub struct AgentCheckpointFlags {
 pub struct AgentRunResult {
     pub agent_id: AgentId,
     pub transcript: AiTranscript,
+    pub repo_working_dir: Option<String>,
 }
 
 pub trait AgentCheckpointPreset {
@@ -79,6 +80,8 @@ impl AgentCheckpointPreset for ClaudePreset {
         Ok(AgentRunResult {
             agent_id,
             transcript,
+            // use default.
+            repo_working_dir: None,
         })
     }
 }
@@ -104,6 +107,127 @@ pub struct ConversationMetadata {
 
 // Cursor to checkpoint preset
 pub struct CursorPreset;
+
+impl AgentCheckpointPreset for CursorPreset {
+    fn run(&self, flags: AgentCheckpointFlags) -> Result<AgentRunResult, GitAiError> {
+        // Parse hook_input JSON to extract workspace_roots and conversation_id
+        let hook_input_json = flags.hook_input.ok_or_else(|| {
+            GitAiError::PresetError("hook_input is required for Cursor preset".to_string())
+        })?;
+
+        let hook_data: serde_json::Value = serde_json::from_str(&hook_input_json)
+            .map_err(|e| GitAiError::PresetError(format!("Invalid JSON in hook_input: {}", e)))?;
+
+        // Extract conversation_id and workspace_roots from the JSON
+        let conversation_id = hook_data
+            .get("conversation_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError("conversation_id not found in hook_input".to_string())
+            })?
+            .to_string();
+
+        let workspace_roots = hook_data
+            .get("workspace_roots")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                GitAiError::PresetError("workspace_roots not found in hook_input".to_string())
+            })?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect::<Vec<String>>();
+
+        let repo_working_dir = workspace_roots.first().cloned().ok_or_else(|| {
+            GitAiError::PresetError("No workspace root found in hook_input".to_string())
+        })?;
+
+        // Log the extracted data for debugging
+        eprintln!("Conversation ID: {}", conversation_id);
+        eprintln!("Workspace roots: {:?}", workspace_roots);
+        eprintln!("Repo working dir: {}", repo_working_dir);
+
+        // Locate Cursor storage
+        let user_dir = Self::cursor_user_dir()?;
+        let global_db = user_dir.join("globalStorage").join("state.vscdb");
+        if !global_db.exists() {
+            return Err(GitAiError::PresetError(format!(
+                "Cursor global state database not found at {:?}. \
+                Make sure Cursor is installed and has been used at least once. \
+                Expected location: {:?}",
+                global_db,
+                user_dir.join("globalStorage")
+            )));
+        }
+
+        // If explicit composer ID provided, use it
+        if let Some(composer_id) = flags.prompt_id {
+            let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
+            let transcript =
+                Self::transcript_from_composer_payload(&payload, &global_db, &composer_id)?
+                    .ok_or_else(|| {
+                        GitAiError::PresetError(
+                            "Could not extract transcript from Cursor composer".to_string(),
+                        )
+                    })?;
+
+            // Extract model information from the Cursor data
+            let model = Self::extract_model_from_cursor_data(&payload, &global_db, &composer_id)?;
+
+            let agent_id = AgentId {
+                tool: "cursor".to_string(),
+                id: composer_id,
+                model,
+            };
+
+            return Ok(AgentRunResult {
+                agent_id,
+                transcript,
+                repo_working_dir: Some(repo_working_dir),
+            });
+        }
+
+        // Get the 5 latest conversations
+        let conversations = Self::get_latest_conversations(&global_db, Some(5))?;
+
+        if conversations.is_empty() {
+            return Err(GitAiError::PresetError(
+                "No Cursor conversations found".to_string(),
+            ));
+        }
+
+        // Use the first (most recent) conversation
+        let latest_conversation = &conversations[0];
+
+        let payload = Self::fetch_composer_payload(&global_db, &latest_conversation.composer_id)?;
+        let transcript = Self::transcript_from_composer_payload(
+            &payload,
+            &global_db,
+            &latest_conversation.composer_id,
+        )?
+        .ok_or_else(|| {
+            GitAiError::PresetError("Could not extract transcript from Cursor composer".to_string())
+        })?;
+
+        // Extract model information from the Cursor data
+        let model = Self::extract_model_from_cursor_data(
+            &payload,
+            &global_db,
+            &latest_conversation.composer_id,
+        )?;
+
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: latest_conversation.composer_id.clone(),
+            model,
+        };
+
+        Ok(AgentRunResult {
+            agent_id,
+            transcript,
+            repo_working_dir: Some(repo_working_dir),
+        })
+    }
+}
 
 impl CursorPreset {
     fn cursor_user_dir() -> Result<PathBuf, GitAiError> {
@@ -820,89 +944,6 @@ impl CursorPreset {
 
         // Fallback: return a default model for Cursor
         Ok("claude-3.5-sonnet".to_string())
-    }
-}
-
-impl AgentCheckpointPreset for CursorPreset {
-    fn run(&self, flags: AgentCheckpointFlags) -> Result<AgentRunResult, GitAiError> {
-        // Locate Cursor storage
-        let user_dir = Self::cursor_user_dir()?;
-        let global_db = user_dir.join("globalStorage").join("state.vscdb");
-        if !global_db.exists() {
-            return Err(GitAiError::PresetError(format!(
-                "Cursor global state database not found at {:?}. \
-                Make sure Cursor is installed and has been used at least once. \
-                Expected location: {:?}",
-                global_db,
-                user_dir.join("globalStorage")
-            )));
-        }
-
-        // If explicit composer ID provided, use it
-        if let Some(composer_id) = flags.prompt_id {
-            let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
-            let transcript =
-                Self::transcript_from_composer_payload(&payload, &global_db, &composer_id)?
-                    .ok_or_else(|| {
-                        GitAiError::PresetError(
-                            "Could not extract transcript from Cursor composer".to_string(),
-                        )
-                    })?;
-
-            // Extract model information from the Cursor data
-            let model = Self::extract_model_from_cursor_data(&payload, &global_db, &composer_id)?;
-
-            let agent_id = AgentId {
-                tool: "cursor".to_string(),
-                id: composer_id,
-                model,
-            };
-
-            return Ok(AgentRunResult {
-                agent_id,
-                transcript,
-            });
-        }
-
-        // Get the 5 latest conversations
-        let conversations = Self::get_latest_conversations(&global_db, Some(5))?;
-
-        if conversations.is_empty() {
-            return Err(GitAiError::PresetError(
-                "No Cursor conversations found".to_string(),
-            ));
-        }
-
-        // Use the first (most recent) conversation
-        let latest_conversation = &conversations[0];
-
-        let payload = Self::fetch_composer_payload(&global_db, &latest_conversation.composer_id)?;
-        let transcript = Self::transcript_from_composer_payload(
-            &payload,
-            &global_db,
-            &latest_conversation.composer_id,
-        )?
-        .ok_or_else(|| {
-            GitAiError::PresetError("Could not extract transcript from Cursor composer".to_string())
-        })?;
-
-        // Extract model information from the Cursor data
-        let model = Self::extract_model_from_cursor_data(
-            &payload,
-            &global_db,
-            &latest_conversation.composer_id,
-        )?;
-
-        let agent_id = AgentId {
-            tool: "cursor".to_string(),
-            id: latest_conversation.composer_id.clone(),
-            model,
-        };
-
-        Ok(AgentRunResult {
-            agent_id,
-            transcript,
-        })
     }
 }
 

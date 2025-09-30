@@ -15,6 +15,7 @@ use utils::debug_log;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
 };
+use crate::git::find_repository_in_path;
 use crate::git::refs::DEFAULT_REFSPEC;
 
 #[derive(Parser)]
@@ -127,6 +128,8 @@ fn main() {
 }
 
 fn handle_checkpoint(args: &[String]) {
+    let repository_working_dir = std::env::current_dir().unwrap();
+
     // Parse checkpoint-specific arguments
     let mut author = None;
     let mut show_working_log = false;
@@ -245,8 +248,12 @@ fn handle_checkpoint(args: &[String]) {
         }
     }
 
+    let final_working_dir = agent_run_result
+        .as_ref()
+        .and_then(|r| r.repo_working_dir.clone())
+        .unwrap_or_else(|| repository_working_dir.to_string_lossy().to_string());
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository_in_path(&final_working_dir) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);

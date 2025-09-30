@@ -309,6 +309,7 @@ impl TmpRepo {
         let agent_run_result = AgentRunResult {
             agent_id,
             transcript,
+            repo_working_dir: None,
         };
 
         checkpoint(
