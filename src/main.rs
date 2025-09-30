@@ -8,7 +8,11 @@ mod utils;
 use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
-use std::io::{IsTerminal, Write};
+use git::repository::run_git_and_forward;
+use std::io::IsTerminal;
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 use utils::debug_log;
 
@@ -16,7 +20,6 @@ use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
 };
 use crate::git::find_repository_in_path;
-use crate::git::refs::DEFAULT_REFSPEC;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -29,6 +32,8 @@ struct Cli {
 }
 
 fn main() {
+    // Ensure SIGPIPE uses the default action (terminate), and do not inherit ignored SIGPIPE
+    reset_sigpipe_to_default();
     // Initialize global configuration early
     config::Config::init();
     // Get the binary name that was called
@@ -378,7 +383,124 @@ fn handle_blame(args: &[String]) {
     }
 }
 
+fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> String {
+    // According to git commit manual, --author flag overrides all other author information
+    if let Some(author_spec) = extract_author_from_args(args) {
+        return resolve_author_spec(repo, &author_spec);
+    }
+
+    // Normal precedence when --author is not specified:
+    // 1. GIT_AUTHOR_NAME environment variable
+    // 2. user.name config variable
+    // 3. EMAIL environment variable
+    // 4. System user name and hostname (we'll use 'unknown' as fallback)
+
+    // Check GIT_AUTHOR_NAME environment variable
+    if let Ok(author_name) = std::env::var("GIT_AUTHOR_NAME") {
+        if !author_name.trim().is_empty() {
+            return author_name.trim().to_string();
+        }
+    }
+
+    // Fall back to git config user.name
+    if let Ok(config) = repo.config() {
+        if let Ok(name) = config.get_string("user.name") {
+            if !name.trim().is_empty() {
+                return name.trim().to_string();
+            }
+        }
+    }
+
+    // Check EMAIL environment variable as fallback
+    if let Ok(email) = std::env::var("EMAIL") {
+        if !email.trim().is_empty() {
+            // Extract name part from email if it contains a name
+            if let Some(at_pos) = email.find('@') {
+                let name_part = &email[..at_pos];
+                if !name_part.is_empty() {
+                    return name_part.to_string();
+                }
+            }
+            return email;
+        }
+    }
+
+    // Final fallback (instead of trying to get system user name and hostname)
+    eprintln!("Warning: No author information found. Using 'unknown' as author.");
+    "unknown".to_string()
+}
+
+fn extract_author_from_args(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // Handle --author=<author> format
+        if let Some(author_value) = arg.strip_prefix("--author=") {
+            return Some(author_value.to_string());
+        }
+
+        // Handle --author <author> format (separate arguments)
+        if arg == "--author" && i + 1 < args.len() {
+            return Some(args[i + 1].clone());
+        }
+
+        i += 1;
+    }
+    None
+}
+
+fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
+    // According to git commit docs, --author can be:
+    // 1. "A U Thor <author@example.com>" format - use as explicit author
+    // 2. A pattern to search for existing commits via git rev-list --all -i --author=<pattern>
+
+    // If it looks like "Name <email>" format, extract the name part
+    if let Some(email_start) = author_spec.rfind('<') {
+        let name_part = author_spec[..email_start].trim();
+        if !name_part.is_empty() {
+            return name_part.to_string();
+        }
+    }
+
+    // If it doesn't look like an explicit format, treat it as a search pattern
+    // Try to find an existing commit by that author
+    if let Ok(mut revwalk) = repo.revwalk() {
+        if revwalk.push_glob("refs/*").is_ok() {
+            for oid_result in revwalk {
+                if let Ok(oid) = oid_result {
+                    if let Ok(commit) = repo.find_commit(oid) {
+                        let author = commit.author();
+                        if let Some(author_name) = author.name() {
+                            // Case-insensitive search (like git rev-list -i --author)
+                            if author_name
+                                .to_lowercase()
+                                .contains(&author_spec.to_lowercase())
+                            {
+                                return author_name.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If no matching commit found, use the pattern as-is
+    author_spec.trim().to_string()
+}
+
 fn handle_commit(args: &[String]) {
+    let mut full_args = vec!["commit".to_string()];
+    full_args.extend_from_slice(args);
+
+    // Check if this is a dry-run - if so, we should not modify any state
+    if args.iter().any(|arg| arg == "--dry-run") {
+        // For dry-run, just pass through to git without our hooks
+        proxy_to_git(&full_args);
+        return;
+    }
+
     // Find the git repository
     let repo = match find_repository() {
         Ok(repo) => repo,
@@ -388,20 +510,7 @@ fn handle_commit(args: &[String]) {
         }
     };
 
-    // Get the current user name from git config
-    let default_user_name = match repo.config() {
-        Ok(config) => match config.get_string("user.name") {
-            Ok(name) => name,
-            Err(_) => {
-                eprintln!("Warning: git user.name not configured. Using 'unknown' as author.");
-                "unknown".to_string()
-            }
-        },
-        Err(_) => {
-            eprintln!("Warning: Failed to get git config. Using 'unknown' as author.");
-            "unknown".to_string()
-        }
-    };
+    let default_user_name = get_commit_default_user_name(&repo, args);
 
     // Run pre-commit logic
     if let Err(e) = git::pre_commit::pre_commit(&repo, default_user_name.clone()) {
@@ -410,39 +519,49 @@ fn handle_commit(args: &[String]) {
     }
 
     // Proxy to git commit with interactive support
-    let mut full_args = vec!["commit".to_string()];
-    full_args.extend_from_slice(args);
+    let status_code = proxy_to_git_no_exit(&full_args);
 
-    let child = std::process::Command::new(config::Config::get().git_cmd())
-        .args(&full_args)
-        .spawn();
-
-    match child {
-        Ok(mut child) => {
-            // Wait for the process to complete
-            let status = child.wait();
-            match status {
-                Ok(status) => {
-                    let code = status.code().unwrap_or(1);
-                    // If commit succeeded, run post-commit
-                    if code == 0 {
-                        if let Err(e) = git::post_commit::post_commit(&repo, false) {
-                            eprintln!("Post-commit failed: {}", e);
-                        }
-                    }
-                    std::process::exit(code);
-                }
-                Err(e) => {
-                    eprintln!("Failed to wait for git commit process: {}", e);
-                    std::process::exit(1);
-                }
+    match status_code {
+        0 => {
+            if let Err(e) = git::post_commit::post_commit(&repo, false) {
+                eprintln!("Post-commit failed: {}", e);
             }
         }
-        Err(e) => {
-            eprintln!("Failed to execute git commit: {}", e);
-            std::process::exit(1);
+        _ => {
+            std::process::exit(status_code);
         }
     }
+
+    // let child = std::process::Command::new(config::Config::get().git_cmd())
+    //     .args(&full_args)
+    //     .spawn();
+
+    // match child {
+    //     Ok(mut child) => {
+    //         // Wait for the process to complete
+    //         let status = child.wait();
+    //         match status {
+    //             Ok(status) => {
+    //                 let code = status.code().unwrap_or(1);
+    //                 // If commit succeeded, run post-commit
+    //                 if code == 0 {
+    //                     if let Err(e) = git::post_commit::post_commit(&repo, false) {
+    //                         eprintln!("Post-commit failed: {}", e);
+    //                     }
+    //                 }
+    //                 std::process::exit(code);
+    //             }
+    //             Err(e) => {
+    //                 eprintln!("Failed to wait for git commit process: {}", e);
+    //                 std::process::exit(1);
+    //             }
+    //         }
+    //     }
+    //     Err(e) => {
+    //         eprintln!("Failed to execute git commit: {}", e);
+    //         std::process::exit(1);
+    //     }
+    // }
 }
 
 fn handle_fetch(args: &[String]) {
@@ -454,61 +573,6 @@ fn handle_fetch(args: &[String]) {
             std::process::exit(1);
         }
     };
-    let remotes = repo.remotes().ok();
-    let remote_names: Vec<String> = remotes
-        .as_ref()
-        .map(|r| {
-            (0..r.len())
-                .filter_map(|i| r.get(i).map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-    if args.is_empty() {
-        // git fetch (no remote): inject default remote and refspecs (heads + authorship)
-        if let Some(default_remote) = get_default_remote(&repo) {
-            // Use the default refspec but add --update-head-ok flag for fetch operations
-            let refspec = DEFAULT_REFSPEC.to_string();
-
-            let mut args_to_pass = vec!["fetch".to_string()];
-            args_to_pass.push("--update-head-ok".to_string());
-            args_to_pass.extend_from_slice(&[
-                default_remote.clone(),
-                AI_AUTHORSHIP_REFSPEC.to_string(),
-                refspec,
-            ]);
-            proxy_to_git(&args_to_pass);
-        } else {
-            eprintln!("No git remotes found.");
-            std::process::exit(1);
-        }
-        return;
-    }
-    if args.len() == 1 && remote_names.contains(&args[0]) {
-        // git fetch <remote>: inject refspec after remote
-        let mut args_to_pass = vec!["fetch".to_string()];
-        args_to_pass.push("--update-head-ok".to_string());
-        args_to_pass.extend_from_slice(&[args[0].clone(), AI_AUTHORSHIP_REFSPEC.to_string()]);
-        proxy_to_git(&args_to_pass);
-        return;
-    }
-    // More complex: just proxy as-is
-
-    let mut full_args = vec!["fetch".to_string()];
-
-    // println!("fetching or pulling from remote: {:?}", &full_args);
-    full_args.extend_from_slice(args);
-    proxy_to_git(&full_args);
-}
-
-fn handle_push(args: &[String]) {
-    // Find the git repository
-    let repo = match find_repository() {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
 
     let remotes = repo.remotes().ok();
     let remote_names: Vec<String> = remotes
@@ -519,40 +583,16 @@ fn handle_push(args: &[String]) {
                 .collect()
         })
         .unwrap_or_default();
-
-    // Helper to run a git command and optionally forward output, returning exit code
-    fn run_git_and_forward(args: &[String], quiet: bool) -> i32 {
-        let output = Command::new(config::Config::get().git_cmd())
-            .args(args)
-            .output();
-        match output {
-            Ok(output) => {
-                if !quiet {
-                    if !output.stdout.is_empty() {
-                        std::io::stdout().write_all(&output.stdout).unwrap();
-                    }
-                    if !output.stderr.is_empty() {
-                        std::io::stderr().write_all(&output.stderr).unwrap();
-                    }
-                }
-                output.status.code().unwrap_or(1)
-            }
-            Err(e) => {
-                eprintln!("Failed to execute git command: {}", e);
-                1
-            }
-        }
-    }
 
     // 1) Run exactly what the user typed (no arg mutation)
-    let mut user_push = vec!["push".to_string()];
-    user_push.extend_from_slice(args);
-    let status_code = run_git_and_forward(&user_push, false);
-    if status_code != 0 {
-        std::process::exit(status_code);
+    let mut user_fetch = vec!["fetch".to_string()];
+    user_fetch.extend_from_slice(args);
+    let status = run_git_and_forward(&user_fetch, false);
+    if !status.success() {
+        exit_with_status(status);
     }
 
-    // 2) Push authorship refs to the appropriate remote
+    // 2) Fetch authorship refs from the appropriate remote
     // Try to detect remote from args first
     let specified_remote = args
         .iter()
@@ -580,15 +620,91 @@ fn handle_push(args: &[String]) {
         .or_else(|| get_default_remote(&repo));
 
     if let Some(remote) = remote {
+        let mut fetch_authorship = vec!["fetch".to_string()];
+        fetch_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
+        // Silence the second fetch unless we're in debug mode
+        let silent = !cfg!(debug_assertions);
+        if !silent {
+            debug_log(&format!(
+                "fetching authorship refs: {:?}",
+                &fetch_authorship
+            ));
+        }
+        let auth_status = run_git_and_forward(&fetch_authorship, silent);
+        exit_with_status(auth_status);
+    } else {
+        eprintln!("No git remotes found.");
+        std::process::exit(1);
+    }
+}
+
+fn handle_push(args: &[String]) {
+    // Find the git repository
+    let repo = match find_repository() {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let remotes = repo.remotes().ok();
+    let remote_names: Vec<String> = remotes
+        .as_ref()
+        .map(|r| {
+            (0..r.len())
+                .filter_map(|i| r.get(i).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 1) Run exactly what the user typed (no arg mutation)
+    let mut user_push = vec!["push".to_string()];
+    user_push.extend_from_slice(args);
+    let status = run_git_and_forward(&user_push, false);
+    if !status.success() {
+        exit_with_status(status);
+    }
+
+    // 2) Push authorship refs to the appropriate remote
+    let positional_remote = extract_remote_from_push_args(args, &remote_names);
+
+    let specified_remote = positional_remote.or_else(|| {
+        args.iter()
+            .find(|a| remote_names.iter().any(|r| r == *a))
+            .cloned()
+    });
+
+    // If not specified, try to get upstream remote of current branch
+    fn upstream_remote(repo: &git2::Repository) -> Option<String> {
+        let head = repo.head().ok()?;
+        if !head.is_branch() {
+            return None;
+        }
+        let branch_name = head.shorthand()?;
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .ok()?;
+        let upstream = branch.upstream().ok()?;
+        let upstream_name = upstream.name().ok()??; // e.g., "origin/main"
+        let remote = upstream_name.split('/').next()?.to_string();
+        Some(remote)
+    }
+
+    let remote = specified_remote
+        .or_else(|| upstream_remote(&repo))
+        .or_else(|| get_default_remote(&repo));
+
+    if let Some(remote) = remote {
         let mut push_authorship = vec!["push".to_string()];
         push_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
         // Silence the second push unless we're in debug mode
-        let quiet_second_push = !cfg!(debug_assertions);
-        if !quiet_second_push {
+        let silent = !cfg!(debug_assertions);
+        if !silent {
             debug_log(&format!("pushing authorship refs: {:?}", &push_authorship));
         }
-        let auth_status = run_git_and_forward(&push_authorship, quiet_second_push);
-        std::process::exit(auth_status);
+        let auth_status = run_git_and_forward(&push_authorship, silent);
+        exit_with_status(auth_status);
     } else {
         eprintln!("No git remotes found.");
         std::process::exit(1);
@@ -616,6 +732,14 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
 }
 
 fn proxy_to_git(args: &[String]) {
+    _proxy_to_git(args, true);
+}
+
+fn proxy_to_git_no_exit(args: &[String]) -> i32 {
+    return _proxy_to_git(args, false);
+}
+
+fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
     // Use spawn for interactive commands
     let child = Command::new(config::Config::get().git_cmd())
         .args(args)
@@ -626,7 +750,10 @@ fn proxy_to_git(args: &[String]) {
             let status = child.wait();
             match status {
                 Ok(status) => {
-                    std::process::exit(status.code().unwrap_or(1));
+                    if exit_on_completion {
+                        exit_with_status(status);
+                    }
+                    return status.code().unwrap_or(1);
                 }
                 Err(e) => {
                     eprintln!("Failed to wait for git process: {}", e);
@@ -639,6 +766,30 @@ fn proxy_to_git(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+// Ensure SIGPIPE default action, even if inherited ignored from a parent shell
+fn reset_sigpipe_to_default() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+// Exit mirroring the child's termination: same signal if signaled, else exit code
+fn exit_with_status(status: std::process::ExitStatus) -> ! {
+    #[cfg(unix)]
+    {
+        if let Some(sig) = status.signal() {
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                libc::raise(sig);
+            }
+            // Should not return
+            unreachable!();
+        }
+    }
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 #[allow(dead_code)]
@@ -692,4 +843,60 @@ fn print_help() {
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("");
     std::process::exit(0);
+}
+
+fn is_push_option_with_inline_value(arg: &str) -> Option<(&str, &str)> {
+    if let Some((flag, value)) = arg.split_once('=') {
+        Some((flag, value))
+    } else if (arg.starts_with("-C") || arg.starts_with("-c")) && arg.len() > 2 {
+        // Treat -C<path> or -c<name>=<value> as inline values
+        let flag = &arg[..2];
+        let value = &arg[2..];
+        Some((flag, value))
+    } else {
+        None
+    }
+}
+
+fn option_consumes_separate_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--repo" | "--receive-pack" | "--exec" | "-o" | "--push-option" | "-c" | "-C"
+    )
+}
+
+fn extract_remote_from_push_args(args: &[String], known_remotes: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--" {
+            return args.get(i + 1).cloned();
+        }
+        if arg.starts_with('-') {
+            if let Some((flag, value)) = is_push_option_with_inline_value(arg) {
+                if flag == "--repo" {
+                    return Some(value.to_string());
+                }
+                i += 1;
+                continue;
+            }
+
+            if option_consumes_separate_value(arg.as_str()) {
+                if arg == "--repo" {
+                    return args.get(i + 1).cloned();
+                }
+                i += 2;
+                continue;
+            }
+
+            i += 1;
+            continue;
+        }
+        return Some(arg.clone());
+    }
+
+    known_remotes
+        .iter()
+        .find(|r| args.iter().any(|arg| arg == *r))
+        .cloned()
 }

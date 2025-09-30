@@ -39,6 +39,29 @@ impl TmpFile {
         self.flush_to_disk()
     }
 
+    /// Prepends content to the beginning of the file
+    pub fn prepend(&mut self, content: &str) -> Result<(), GitAiError> {
+        // Refresh from disk first – the file may have changed due to a branch checkout
+        if let Ok(disk_contents) = fs::read_to_string(self.repo.path.join(&self.filename)) {
+            self.contents = disk_contents;
+        }
+
+        // Create new content with prepended text
+        let mut new_contents = content.to_string();
+
+        // Add a newline separator if the prepended content doesn't end with one
+        if !content.ends_with('\n') {
+            new_contents.push('\n');
+        }
+
+        // Add the original content
+        new_contents.push_str(&self.contents);
+
+        self.contents = new_contents;
+        self.write_to_disk()?;
+        self.flush_to_disk()
+    }
+
     /// Inserts content at a specific position
     pub fn insert_at(&mut self, position: usize, content: &str) -> Result<(), GitAiError> {
         if position > self.contents.len() {

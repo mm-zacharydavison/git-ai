@@ -415,3 +415,89 @@ fn test_ai_adds_then_human_deletes_all_with_empty_replacement() {
     let blame = tmp_repo.blame_for_file(&file, None).unwrap();
     assert_debug_snapshot!(blame);
 }
+
+#[test]
+fn test_ai_adds_lines_and_human_deletes_most_of_them() {
+    let tmp_dir = tempdir().unwrap();
+    let repo_path = tmp_dir.path().to_path_buf();
+
+    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+
+    // Start with a base file
+    let mut file = tmp_repo
+        .write_file("empty_replacement.ts", "base_line\n", true)
+        .unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_author("test_user")
+        .unwrap();
+
+    // AI adds lines
+    file.append("ai_line1\nai_line2\nai_line3\nai_line4\n")
+        .unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
+
+    // Human deletes ALL AI lines and replaces with empty string
+    file.replace_range(2, 3, "").unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_author("test_user")
+        .unwrap();
+
+    let authorship_log = tmp_repo
+        .commit_with_message("AI adds lines, human deletes all AI content with empty replacement")
+        .unwrap();
+
+    assert_debug_snapshot!(authorship_log);
+
+    // Assert on specific fields
+    let prompt = authorship_log.metadata.prompts.values().next().unwrap();
+    assert_eq!(prompt.total_additions, 4);
+    assert_eq!(prompt.total_deletions, 0);
+    assert_eq!(prompt.accepted_lines, 2);
+
+    let blame = tmp_repo.blame_for_file(&file, None).unwrap();
+    assert_debug_snapshot!(blame);
+}
+
+#[test]
+fn test_ai_prepending_lines() {
+    let tmp_dir = tempdir().unwrap();
+    let repo_path = tmp_dir.path().to_path_buf();
+
+    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+
+    // Start with a base file
+    let mut file = tmp_repo
+        .write_file("test.ts", "human_line1\nhuman_line2\n", true)
+        .unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_author("test_user")
+        .unwrap();
+
+    // AI adds lines
+    file.prepend("ai_line1\nai_line2\nai_line3\nai_line4\n")
+        .unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
+
+    // Human deletes ALL AI lines and replaces with empty string
+    file.replace_range(1, 2, "NEW HUMAN LINE").unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_author("test_user")
+        .unwrap();
+
+    let authorship_log = tmp_repo.commit_with_message("test commit").unwrap();
+
+    // println!("Authorship log: {:?}", authorship_log);
+    let blame = tmp_repo.blame_for_file(&file, None).unwrap();
+    // println!("Blame: {:?}", blame);
+    assert_debug_snapshot!(blame);
+}

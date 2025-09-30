@@ -1,7 +1,7 @@
 use crate::log_fmt::authorship_log::{Author, LineRange, PromptRecord};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::{BufRead, Write};
 
@@ -16,6 +16,22 @@ fn generate_short_hash(agent_id: &str, tool: &str) -> String {
     let result = hasher.finalize();
     // Take first 7 characters of the hex representation
     format!("{:x}", result)[..7].to_string()
+}
+
+/// Count the number of lines represented by a working_log::Line
+fn count_working_log_lines(line: &crate::log_fmt::working_log::Line) -> u32 {
+    match line {
+        crate::log_fmt::working_log::Line::Single(_) => 1,
+        crate::log_fmt::working_log::Line::Range(start, end) => end - start + 1,
+    }
+}
+
+/// Count the number of lines represented by a LineRange
+fn count_line_range(range: &LineRange) -> u32 {
+    match range {
+        LineRange::Single(_) => 1,
+        LineRange::Range(start, end) => end - start + 1,
+    }
 }
 
 /// Metadata section that goes below the divider as JSON
@@ -71,6 +87,17 @@ impl AttestationEntry {
         }
 
         self.line_ranges = current_ranges;
+    }
+
+    /// Shift line ranges by a given offset starting at insertion_point
+    pub fn shift_line_ranges(&mut self, insertion_point: u32, offset: i32) {
+        let mut shifted_ranges = Vec::new();
+        for range in &self.line_ranges {
+            if let Some(shifted) = range.shift(insertion_point, offset) {
+                shifted_ranges.push(shifted);
+            }
+        }
+        self.line_ranges = shifted_ranges;
     }
 }
 
@@ -198,6 +225,10 @@ impl AuthorshipLog {
         let mut authorship_log = Self::new();
         authorship_log.metadata.base_commit_sha = base_commit_sha.to_string();
 
+        // Track additions and deletions per session_id
+        let mut session_additions: HashMap<String, u32> = HashMap::new();
+        let mut session_deletions: HashMap<String, u32> = HashMap::new();
+
         // Process checkpoints and create attributions
         for checkpoint in checkpoints.iter() {
             // If there is an agent session, record it by its short hash (agent_id + tool)
@@ -213,6 +244,9 @@ impl AuthorshipLog {
                             agent_id: agent.clone(),
                             human_author: human_author.map(|s| s.to_string()),
                             messages: transcript.messages().to_vec(),
+                            total_additions: 0,
+                            total_deletions: 0,
+                            accepted_lines: 0,
                         });
                     if entry.messages.len() < transcript.messages().len() {
                         entry.messages = transcript.messages().to_vec();
@@ -223,23 +257,65 @@ impl AuthorshipLog {
             };
 
             for entry in &checkpoint.entries {
-                // Process deletions first (remove lines from all authors)
-                {
+                // Track additions and deletions for this session
+                if let Some(ref session_id) = session_id_opt {
+                    // Count total additions
+                    let additions_count: u32 = entry
+                        .added_lines
+                        .iter()
+                        .map(|line| count_working_log_lines(line))
+                        .sum();
+                    *session_additions.entry(session_id.clone()).or_insert(0) += additions_count;
+
+                    // Count total deletions
+                    let deletions_count: u32 = entry
+                        .deleted_lines
+                        .iter()
+                        .map(|line| count_working_log_lines(line))
+                        .sum();
+                    *session_deletions.entry(session_id.clone()).or_insert(0) += deletions_count;
+                }
+
+                // Process deletions first (remove lines from all authors, then shift remaining lines up)
+                if !entry.deleted_lines.is_empty() {
                     let file_attestation = authorship_log.get_or_create_file(&entry.file);
+
+                    // Collect all deleted line numbers
+                    let mut all_deleted_lines = Vec::new();
                     for line in &entry.deleted_lines {
-                        let to_remove = match line {
-                            crate::log_fmt::working_log::Line::Single(l) => LineRange::Single(*l),
-                            crate::log_fmt::working_log::Line::Range(start, end) => {
-                                LineRange::Range(*start, *end)
+                        match line {
+                            crate::log_fmt::working_log::Line::Single(l) => {
+                                all_deleted_lines.push(*l)
                             }
-                        };
+                            crate::log_fmt::working_log::Line::Range(start, end) => {
+                                for l in *start..=*end {
+                                    all_deleted_lines.push(l);
+                                }
+                            }
+                        }
+                    }
+                    all_deleted_lines.sort_unstable();
+                    all_deleted_lines.dedup();
+
+                    let deleted_ranges = LineRange::compress_lines(&all_deleted_lines);
+
+                    // Remove the deleted lines from all attestations
+                    for attestation_entry in file_attestation.entries.iter_mut() {
+                        attestation_entry.remove_line_ranges(&deleted_ranges);
+                    }
+
+                    // Shift remaining lines up after deletions
+                    // Process deletions in reverse order to avoid shifting issues
+                    for line in all_deleted_lines.iter().rev() {
+                        let deletion_point = *line;
                         for attestation_entry in file_attestation.entries.iter_mut() {
-                            attestation_entry.remove_line_ranges(&[to_remove.clone()]);
+                            // Shift lines after the deletion point up by 1
+                            attestation_entry.shift_line_ranges(deletion_point + 1, -1);
                         }
                     }
                 }
 
-                // Then process additions (new author takes ownership)
+                // Then process additions (shift existing lines down, then add new author)
                 let mut added_lines = Vec::new();
                 for line in &entry.added_lines {
                     match line {
@@ -256,19 +332,22 @@ impl AuthorshipLog {
                     added_lines.sort_unstable();
                     added_lines.dedup();
 
-                    // Create compressed line ranges
-                    let lines_to_remove = LineRange::compress_lines(&added_lines);
+                    let num_lines_added = added_lines.len() as i32;
+                    let insertion_point = *added_lines.first().unwrap();
+
+                    // Shift existing line attributions down to make room for new lines
+                    let file_attestation = authorship_log.get_or_create_file(&entry.file);
+                    for attestation_entry in file_attestation.entries.iter_mut() {
+                        attestation_entry.shift_line_ranges(insertion_point, num_lines_added);
+                    }
+
+                    // Create compressed line ranges for the new additions
+                    let new_line_ranges = LineRange::compress_lines(&added_lines);
 
                     // Only process AI-generated content (entries with prompt_session_id)
                     if let Some(session_id) = session_id_opt.clone() {
-                        // Remove these lines from all other entries
-                        let file_attestation = authorship_log.get_or_create_file(&entry.file);
-                        for attestation_entry in file_attestation.entries.iter_mut() {
-                            attestation_entry.remove_line_ranges(&lines_to_remove);
-                        }
-
-                        // Add new attestation entry
-                        let entry = AttestationEntry::new(session_id, lines_to_remove);
+                        // Add new attestation entry for the AI-added lines
+                        let entry = AttestationEntry::new(session_id, new_line_ranges);
                         file_attestation.add_entry(entry);
                     }
                 }
@@ -288,6 +367,28 @@ impl AuthorshipLog {
         // Sort attestation entries by hash for deterministic ordering
         for file_attestation in &mut authorship_log.attestations {
             file_attestation.entries.sort_by(|a, b| a.hash.cmp(&b.hash));
+        }
+
+        // Calculate accepted_lines for each session from the final attestation log
+        let mut session_accepted_lines: HashMap<String, u32> = HashMap::new();
+        for file_attestation in &authorship_log.attestations {
+            for attestation_entry in &file_attestation.entries {
+                let accepted_count: u32 = attestation_entry
+                    .line_ranges
+                    .iter()
+                    .map(|range| count_line_range(range))
+                    .sum();
+                *session_accepted_lines
+                    .entry(attestation_entry.hash.clone())
+                    .or_insert(0) += accepted_count;
+            }
+        }
+
+        // Update all PromptRecords with the calculated metrics
+        for (session_id, prompt_record) in authorship_log.metadata.prompts.iter_mut() {
+            prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
+            prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
+            prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
         }
 
         authorship_log
@@ -681,6 +782,9 @@ mod tests {
                 agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 0,
             },
         );
 
@@ -743,6 +847,9 @@ mod tests {
                 agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 0,
             },
         );
 
@@ -787,6 +894,9 @@ mod tests {
                 agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 0,
             },
         );
 
@@ -832,5 +942,74 @@ mod tests {
         assert_eq!(entry.line_ranges.len(), 2);
         assert_eq!(entry.line_ranges[0], LineRange::Range(2, 4));
         assert_eq!(entry.line_ranges[1], LineRange::Range(8, 10));
+    }
+
+    #[test]
+    fn test_metrics_calculation() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::{AgentId, Checkpoint, Line, WorkingLogEntry};
+
+        // Create an agent ID
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "test_session".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+
+        // Create a transcript
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(Message::user("Add a function".to_string()));
+        transcript.add_message(Message::assistant("Here's the function".to_string()));
+
+        // Create working log entries
+        // First checkpoint: add 10 lines (single line + range of 9)
+        let entry1 =
+            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
+        let mut checkpoint1 = Checkpoint::new(
+            "abc123".to_string(),
+            "".to_string(),
+            "ai".to_string(),
+            vec![entry1],
+        );
+        checkpoint1.agent_id = Some(agent_id.clone());
+        checkpoint1.transcript = Some(transcript.clone());
+
+        // Second checkpoint: delete 3 lines, add 5 lines (modified some lines)
+        let entry2 = WorkingLogEntry::new(
+            "src/test.rs".to_string(),
+            vec![Line::Range(5, 9)], // 5 added lines
+            vec![Line::Range(5, 7)], // 3 deleted lines
+        );
+        let mut checkpoint2 = Checkpoint::new(
+            "def456".to_string(),
+            "".to_string(),
+            "ai".to_string(),
+            vec![entry2],
+        );
+        checkpoint2.agent_id = Some(agent_id.clone());
+        checkpoint2.transcript = Some(transcript);
+
+        // Convert to authorship log
+        let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
+            &[checkpoint1, checkpoint2],
+            "base123",
+            None,
+        );
+
+        // Get the prompt record
+        let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
+        let prompt_record = authorship_log.metadata.prompts.get(&session_hash).unwrap();
+
+        // Verify metrics
+        // total_additions: 10 (from first checkpoint) + 5 (from second) = 15
+        assert_eq!(prompt_record.total_additions, 15);
+        // total_deletions: 0 (from first) + 3 (from second) = 3
+        assert_eq!(prompt_record.total_deletions, 3);
+        // accepted_lines: After correct shifting logic:
+        // - Checkpoint 1 adds 1-10 (10 lines)
+        // - Checkpoint 2 deletes 5-7 (removes 3), shifts 8-10 up to 5-7 (7 lines remain)
+        // - Checkpoint 2 adds 5-9 (5 lines), shifts existing 5-7 down to 10-12
+        // - Final: AI owns 1-4, 5-9, 10-12 = 12 lines
+        assert_eq!(prompt_record.accepted_lines, 12);
     }
 }

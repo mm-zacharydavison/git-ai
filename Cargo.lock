@@ -660,6 +660,7 @@ dependencies = [
  "git2",
  "indicatif",
  "insta",
+ "libc",
  "predicates",
  "rusqlite",
  "serde",
