@@ -2,11 +2,7 @@ use std::time::{Duration, Instant};
 
 use git2::{Repository, StatusOptions};
 
-use crate::{
-    commands::checkpoint,
-    config,
-    git::{find_repository, find_repository_in_path, repository},
-};
+use crate::{commands::checkpoint, config, git::find_repository_in_path};
 
 pub fn profile_key_operations(working_dir: &str) {
     let repo = find_repository_in_path(working_dir).unwrap();
@@ -172,7 +168,7 @@ fn libgit_status_no_untracked(repo: &Repository) -> Duration {
 fn run_checkpoint(repo: &Repository) -> Duration {
     let now = Instant::now();
 
-    let checkpoint_run =
+    let _checkpoint_run =
         checkpoint::run(repo, "human", false, false, true, None, None, None).unwrap();
 
     let elapsed_time = now.elapsed();

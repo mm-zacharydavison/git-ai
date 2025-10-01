@@ -1,9 +1,10 @@
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::refs::{get_reference, put_reference};
+use crate::git::status::{EntryKind, StatusCode, status_porcelainv2};
 use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::utils::debug_log;
-use git2::{Repository, StatusOptions};
+use git2::Repository;
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -210,64 +211,33 @@ pub fn run(
 fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
 
-    let mut status_opts = StatusOptions::new();
-    status_opts.include_untracked(true);
-    status_opts.include_ignored(false);
-    status_opts.include_unmodified(false);
+    // Use porcelain v2 format to get status
+    let statuses = status_porcelainv2(repo)?;
 
-    let statuses = repo.statuses(Some(&mut status_opts))?;
-    for entry in statuses.iter() {
-        if let Some(path) = entry.path() {
-            // Only include text files
-            if is_text_file(repo, path) {
-                files.push(path.to_string());
-            }
+    for entry in statuses {
+        // Skip ignored files
+        if entry.kind == EntryKind::Ignored {
+            continue;
         }
-    }
 
-    // Also check for deleted files by looking at the working directory vs HEAD
-    if let Ok(head) = repo.head() {
-        if let Some(target) = head.target() {
-            if let Ok(commit) = repo.find_commit(target) {
-                if let Ok(tree) = commit.tree() {
-                    // Recursively traverse the tree to find files that exist in HEAD but not in working directory
-                    fn walk_tree(
-                        tree: &git2::Tree,
-                        repo: &Repository,
-                        files: &mut Vec<String>,
-                        prefix: &str,
-                    ) -> Result<(), GitAiError> {
-                        for entry in tree.iter() {
-                            let name = entry.name().unwrap_or("");
-                            let path = if prefix.is_empty() {
-                                name.to_string()
-                            } else {
-                                format!("{}/{}", prefix, name)
-                            };
+        // Include files that have any change (staged or unstaged) or are untracked
+        let has_change = entry.staged != StatusCode::Unmodified
+            || entry.unstaged != StatusCode::Unmodified
+            || entry.kind == EntryKind::Untracked;
 
-                            match entry.kind() {
-                                Some(git2::ObjectType::Blob) => {
-                                    // Check if file exists in working directory and is a text file
-                                    if !Path::new(&path).exists()
-                                        && !files.contains(&path)
-                                        && is_text_file(repo, &path)
-                                    {
-                                        files.push(path);
-                                    }
-                                }
-                                Some(git2::ObjectType::Tree) => {
-                                    if let Ok(subtree) = repo.find_tree(entry.id()) {
-                                        walk_tree(&subtree, repo, files, &path)?;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(())
-                    }
+        if has_change {
+            // For deleted files, check if they were text files in HEAD
+            let is_deleted =
+                entry.staged == StatusCode::Deleted || entry.unstaged == StatusCode::Deleted;
 
-                    walk_tree(&tree, repo, &mut files, "")?;
-                }
+            let is_text = if is_deleted {
+                is_text_file_in_head(repo, &entry.path)
+            } else {
+                is_text_file(repo, &entry.path)
+            };
+
+            if is_text {
+                files.push(entry.path.clone());
             }
         }
     }
@@ -652,5 +622,35 @@ fn is_text_file(repo: &Repository, path: &str) -> bool {
         !content.contains(&0)
     } else {
         false
+    }
+}
+
+fn is_text_file_in_head(repo: &Repository, path: &str) -> bool {
+    // For deleted files, check if they were text files in HEAD
+    let head_commit = match repo
+        .head()
+        .ok()
+        .and_then(|h| h.target())
+        .and_then(|oid| repo.find_commit(oid).ok())
+    {
+        Some(commit) => commit,
+        None => return false,
+    };
+
+    let head_tree = match head_commit.tree().ok() {
+        Some(tree) => tree,
+        None => return false,
+    };
+
+    match head_tree.get_path(std::path::Path::new(path)) {
+        Ok(entry) => {
+            if let Ok(blob) = repo.find_blob(entry.id()) {
+                // Consider a file text if it contains no null bytes
+                !blob.content().contains(&0)
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
     }
 }
