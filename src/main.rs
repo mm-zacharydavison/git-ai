@@ -91,9 +91,6 @@ fn main() {
             handle_checkpoint(positional_args);
         }
         "ai-blame" => {
-            if binary_name == "git" {
-                proxy_to_git(&cli.args);
-            }
             handle_blame(positional_args);
         }
         "commit" => {
