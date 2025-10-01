@@ -9,6 +9,7 @@ use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use git::repository::run_git_and_forward;
+use git_ai::log_fmt::transcript::AiTranscript;
 use once_cell::sync::OnceCell;
 use std::io::IsTerminal;
 
@@ -18,9 +19,10 @@ use std::process::Command;
 use utils::debug_log;
 
 use crate::commands::checkpoint_agent::agent_preset::{
-    AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset, CursorPreset,
+    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
 };
 use crate::git::find_repository_in_path;
+use crate::log_fmt::working_log::AgentId;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -540,6 +542,18 @@ fn handle_checkpoint(args: &[String]) {
                         std::process::exit(1);
                     }
                 }
+            }
+            "mock_ai" => {
+                agent_run_result = Some(AgentRunResult {
+                    agent_id: AgentId {
+                        tool: "some-ai".to_string(),
+                        id: "ai-thread".to_string(),
+                        model: "unknown".to_string(),
+                    },
+                    is_human: false,
+                    transcript: None,
+                    repo_working_dir: None,
+                });
             }
             _ => {}
         }
