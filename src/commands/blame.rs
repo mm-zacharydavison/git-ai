@@ -224,6 +224,7 @@ pub fn get_git_blame_hunks(
     let mut blame_opts = BlameOptions::new();
     blame_opts.min_line(start_line.try_into().unwrap());
     blame_opts.max_line(end_line.try_into().unwrap());
+    blame_opts.ignore_whitespace(true);
 
     // Apply boundary options
     if options.blank_boundary {
