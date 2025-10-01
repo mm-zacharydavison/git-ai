@@ -157,7 +157,7 @@ impl LineRange {
                 } else {
                     *end
                 };
-                
+
                 // Ensure the range is still valid
                 if new_start <= new_end {
                     if new_start == new_end {

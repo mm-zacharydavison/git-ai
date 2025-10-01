@@ -661,6 +661,7 @@ dependencies = [
  "indicatif",
  "insta",
  "libc",
+ "once_cell",
  "predicates",
  "rusqlite",
  "serde",

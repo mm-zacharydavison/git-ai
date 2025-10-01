@@ -67,7 +67,7 @@ fn run_git_ai_blame(repo_path: &std::path::Path, file_path: &str, args: &[&str])
     let binary_path = std::env::current_dir().unwrap().join("target/debug/git-ai");
     let output = Command::new(binary_path)
         .current_dir(repo_path)
-        .arg("blame")
+        .arg("ai-blame")
         .args(args)
         .arg(file_path)
         .env("GIT_PAGER", "cat") // Force use of cat instead of less

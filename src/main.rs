@@ -9,6 +9,7 @@ use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use git::repository::run_git_and_forward;
+use once_cell::sync::OnceCell;
 use std::io::IsTerminal;
 
 #[cfg(unix)]
@@ -31,11 +32,28 @@ struct Cli {
     args: Vec<String>,
 }
 
+#[derive(Default, Debug)]
+struct GlobalGitOptions {
+    /// Options that should be passed to every git invocation
+    passthrough_args: Vec<String>,
+    work_tree: Option<String>,
+    super_prefix: Option<String>,
+}
+
+static GLOBAL_GIT_OPTIONS: OnceCell<GlobalGitOptions> = OnceCell::new();
+
 fn main() {
     // Ensure SIGPIPE uses the default action (terminate), and do not inherit ignored SIGPIPE
     reset_sigpipe_to_default();
     // Initialize global configuration early
     config::Config::init();
+    // If we're being invoked from a shell completion context, bypass git-ai logic
+    // and delegate directly to the real git so existing completion scripts work.
+    if in_shell_completion_context() {
+        let orig_args: Vec<String> = std::env::args().skip(1).collect();
+        proxy_to_git(&orig_args);
+        return;
+    }
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
@@ -60,37 +78,29 @@ fn main() {
         return;
     }
 
-    let command = &cli.args[0];
-    let args = &cli.args[1..];
+    let (command, positional_args) = parse_top_level_args(&cli.args);
+
+    // debug_log(&format!("in main, command: {}", command));
+    // debug_log(&format!("in main, args: {:?}", positional_args));
 
     match command.as_str() {
         "stats-delta" => {
-            handle_stats_delta(args);
+            handle_stats_delta(positional_args);
         }
         "checkpoint" => {
-            handle_checkpoint(args);
+            handle_checkpoint(positional_args);
         }
-        "blame" => {
-            debug_log(&format!("overriding: git blame"));
-            handle_blame(args);
+        "ai-blame" => {
+            handle_ai_blame(positional_args);
         }
         "commit" => {
-            // debug_log(&format!("wrapping: git commit"));
-            handle_commit(args);
-        }
-        "pre-commit" => {
-            // Backwards compatibility: do nothing and exit 0
-            std::process::exit(0);
-        }
-        "post-commit" => {
-            // Backwards compatibility: do nothing and exit 0
-            std::process::exit(0);
+            handle_commit(positional_args);
         }
         "fetch" => {
-            handle_fetch(args);
+            handle_fetch(positional_args);
         }
         "push" => {
-            handle_push(args);
+            handle_push(positional_args);
         }
         "install-hooks" => {
             // This command only works when called as git-ai, not as git alias
@@ -108,7 +118,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            if let Err(e) = commands::install_hooks::run(args) {
+            if let Err(e) = commands::install_hooks::run(positional_args) {
                 eprintln!("Install hooks failed: {}", e);
                 std::process::exit(1);
             }
@@ -122,14 +132,278 @@ fn main() {
                 std::process::exit(1);
             }
 
-            commands::rebase_authorship::handle_squash_authorship(args);
+            commands::rebase_authorship::handle_squash_authorship(positional_args);
         }
         _ => {
-            // debug_log(&format!("proxying: git {}", command));
             // Proxy all other commands to git
             proxy_to_git(&cli.args);
         }
     }
+}
+
+fn parse_top_level_args(args: &[String]) -> (String, &[String]) {
+    if args.is_empty() {
+        return (String::new(), &[]);
+    }
+
+    let mut current_dir: Option<std::path::PathBuf> = None;
+    let mut work_tree: Option<String> = None;
+    let mut git_dir: Option<String> = None;
+    let mut namespace: Option<String> = None;
+    let replace_objects = false;
+    let lazy_fetch = true;
+    let optional_locks = true;
+    let advice = true;
+    let mut attr_source: Option<String> = None;
+    let mut super_prefix: Option<String> = None;
+
+    let mut options = GlobalGitOptions::default();
+    let mut idx = 0;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+
+        let raw = arg.as_str();
+        let (flag, inline_value) = if let Some(eq_idx) = raw.find('=') {
+            (&raw[..eq_idx], Some(raw[eq_idx + 1..].to_string()))
+        } else {
+            (raw, None)
+        };
+
+        match flag {
+            "-C" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                current_dir = Some(match current_dir.take() {
+                    Some(mut base) => {
+                        base.push(&value);
+                        base
+                    }
+                    None => std::path::PathBuf::from(&value),
+                });
+                idx += 1;
+                continue;
+            }
+            "--work-tree" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                work_tree = Some(value.clone());
+                options.passthrough_args.push("--work-tree".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--git-dir" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                git_dir = Some(value.clone());
+                options.passthrough_args.push("--git-dir".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--namespace" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                namespace = Some(value.clone());
+                options.passthrough_args.push("--namespace".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--attr-source" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                attr_source = Some(value.clone());
+                options.passthrough_args.push("--attr-source".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--super-prefix" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                super_prefix = Some(value.clone());
+                options.passthrough_args.push("--super-prefix".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--exec-path" => {
+                if let Some(value) = inline_value {
+                    options
+                        .passthrough_args
+                        .push(format!("--exec-path={}", value));
+                } else {
+                    options.passthrough_args.push("--exec-path".to_string());
+                }
+                idx += 1;
+                continue;
+            }
+            "-h"
+            | "--help"
+            | "--man-path"
+            | "--html-path"
+            | "--info-path"
+            | "-P"
+            | "--no-pager"
+            | "-p"
+            | "--paginate"
+            | "--no-replace-objects"
+            | "--no-lazy-fetch"
+            | "--no-optional-locks"
+            | "--no-advice"
+            | "--literal-pathspecs"
+            | "--glob-pathspecs"
+            | "--noglob-pathspecs"
+            | "--icase-pathspecs"
+            | "--bare"
+            | "-v"
+            | "--version" => {
+                options.passthrough_args.push(arg.clone());
+                idx += 1;
+                continue;
+            }
+            "--config-env" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                options.passthrough_args.push("--config-env".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            _ => {
+                if raw.starts_with("-c") && raw.len() > 2 {
+                    options.passthrough_args.push(arg.clone());
+                    idx += 1;
+                    continue;
+                }
+                if flag == "-c" {
+                    let value = inline_value.unwrap_or_else(|| {
+                        idx += 1;
+                        args.get(idx).cloned().unwrap_or_default()
+                    });
+                    options.passthrough_args.push("-c".to_string());
+                    options.passthrough_args.push(value);
+                    idx += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Finalize options by storing work_tree and super_prefix
+        if let Some(wt) = work_tree {
+            options.work_tree = Some(wt);
+        }
+        if let Some(sp) = super_prefix {
+            options.super_prefix = Some(sp);
+        }
+
+        GLOBAL_GIT_OPTIONS.set(options).ok();
+
+        let command = arg.clone();
+        let remaining = &args[idx + 1..];
+
+        if let Some(dir) = current_dir {
+            if std::env::set_current_dir(&dir).is_err() {
+                eprintln!("Failed to change directory to {}", dir.display());
+                std::process::exit(1);
+            }
+        }
+
+        let stored = GLOBAL_GIT_OPTIONS.get().unwrap();
+        unsafe {
+            if let Some(dir) = &stored.work_tree {
+                std::env::set_var("GIT_WORK_TREE", dir);
+            }
+            if let Some(dir) = git_dir {
+                std::env::set_var("GIT_DIR", dir);
+            }
+            if let Some(ns) = namespace {
+                std::env::set_var("GIT_NAMESPACE", ns);
+            }
+            if replace_objects {
+                std::env::set_var("GIT_NO_REPLACE_OBJECTS", "1");
+            }
+            if !lazy_fetch {
+                std::env::set_var("GIT_NO_LAZY_FETCH", "1");
+            }
+            if !optional_locks {
+                std::env::set_var("GIT_OPTIONAL_LOCKS", "0");
+            }
+            if !advice {
+                std::env::set_var("GIT_NO_ADVICE", "1");
+            }
+            if let Some(attr) = attr_source {
+                std::env::set_var("GIT_ATTR_SOURCE", attr);
+            }
+        }
+
+        // TODO handle super-prefix by invoking binary via exec
+
+        return (command, remaining);
+    }
+
+    // If we get here, all arguments were global flags - there's no actual command
+    // Finalize options and apply environment
+    if let Some(wt) = work_tree {
+        options.work_tree = Some(wt);
+    }
+    if let Some(sp) = super_prefix {
+        options.super_prefix = Some(sp);
+    }
+    GLOBAL_GIT_OPTIONS.set(options).ok();
+
+    if let Some(dir) = current_dir {
+        if std::env::set_current_dir(&dir).is_err() {
+            eprintln!("Failed to change directory to {}", dir.display());
+            std::process::exit(1);
+        }
+    }
+
+    let stored = GLOBAL_GIT_OPTIONS.get().unwrap();
+    unsafe {
+        if let Some(dir) = &stored.work_tree {
+            std::env::set_var("GIT_WORK_TREE", dir);
+        }
+        if let Some(dir) = git_dir {
+            std::env::set_var("GIT_DIR", dir);
+        }
+        if let Some(ns) = namespace {
+            std::env::set_var("GIT_NAMESPACE", ns);
+        }
+        if replace_objects {
+            std::env::set_var("GIT_NO_REPLACE_OBJECTS", "1");
+        }
+        if !lazy_fetch {
+            std::env::set_var("GIT_NO_LAZY_FETCH", "1");
+        }
+        if !optional_locks {
+            std::env::set_var("GIT_OPTIONAL_LOCKS", "0");
+        }
+        if !advice {
+            std::env::set_var("GIT_NO_ADVICE", "1");
+        }
+        if let Some(attr) = attr_source {
+            std::env::set_var("GIT_ATTR_SOURCE", attr);
+        }
+    }
+
+    (String::new(), &[])
 }
 
 fn handle_checkpoint(args: &[String]) {
@@ -341,7 +615,7 @@ fn handle_stats_delta(args: &[String]) {
     }
 }
 
-fn handle_blame(args: &[String]) {
+fn handle_ai_blame(args: &[String]) {
     if args.is_empty() {
         eprintln!("Error: blame requires a file argument");
         std::process::exit(1);
@@ -593,11 +867,13 @@ fn handle_fetch(args: &[String]) {
     }
 
     // 2) Fetch authorship refs from the appropriate remote
-    // Try to detect remote from args first
-    let specified_remote = args
-        .iter()
-        .find(|a| remote_names.iter().any(|r| r == *a))
-        .cloned();
+    // Try to detect remote (named remote, URL, or local path) from args first
+    let positional_remote = extract_remote_from_fetch_args(args);
+    let specified_remote = positional_remote.or_else(|| {
+        args.iter()
+            .find(|a| remote_names.iter().any(|r| r == *a))
+            .cloned()
+    });
 
     // If not specified, try to get upstream remote of current branch
     fn upstream_remote(repo: &git2::Repository) -> Option<String> {
@@ -620,11 +896,24 @@ fn handle_fetch(args: &[String]) {
         .or_else(|| get_default_remote(&repo));
 
     if let Some(remote) = remote {
+        // Forward relevant fetch flags so semantics match the primary fetch
+        let forwarded_flags = extract_forwarded_fetch_flags(args);
+
         let mut fetch_authorship = vec!["fetch".to_string()];
+        // Place options before positional args per git's CLI conventions
+        fetch_authorship.extend(forwarded_flags);
+        // Unless explicitly requested otherwise, do not fetch tags on the
+        // secondary authorship fetch to avoid creating unexpected tag refs
+        let user_specified_tags_pref = args.iter().any(|a| a == "--tags" || a == "--no-tags");
+        if !user_specified_tags_pref {
+            fetch_authorship.push("--no-tags".to_string());
+        }
+        // Do not clobber FETCH_HEAD from the user's fetch (see git t5515 expectations)
+        fetch_authorship.push("--no-write-fetch-head".to_string());
         fetch_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
-        // Silence the second fetch unless we're in debug mode
-        let silent = !cfg!(debug_assertions);
-        if !silent {
+        // Always silence the secondary fetch to avoid interfering with caller output/trace
+        let silent = true;
+        if cfg!(debug_assertions) {
             debug_log(&format!(
                 "fetching authorship refs: {:?}",
                 &fetch_authorship
@@ -666,6 +955,13 @@ fn handle_push(args: &[String]) {
         exit_with_status(status);
     }
 
+    // If this was a dry-run or delete, do not perform any secondary pushes
+    let is_dry_run = args.iter().any(|a| a == "--dry-run" || a == "-n");
+    let is_delete = args.iter().any(|a| a == "-d" || a == "--delete");
+    if is_dry_run || is_delete {
+        return;
+    }
+
     // 2) Push authorship refs to the appropriate remote
     let positional_remote = extract_remote_from_push_args(args, &remote_names);
 
@@ -696,7 +992,22 @@ fn handle_push(args: &[String]) {
         .or_else(|| get_default_remote(&repo));
 
     if let Some(remote) = remote {
+        // Skip secondary push for mirrored pushes/remotes to avoid combining --mirror with refspecs
+        let has_mirror_flag = args
+            .iter()
+            .any(|a| a == "--mirror" || a.starts_with("--mirror="));
+        if has_mirror_flag || remote_is_mirror(&repo, &remote) {
+            return;
+        }
+
+        // Forward relevant flags so the secondary push has matching semantics
+        let forwarded_flags = extract_forwarded_push_flags(args);
+
         let mut push_authorship = vec!["push".to_string()];
+        // Place options before positional args per git's CLI conventions
+        // Always bypass hooks for internal authorship push to avoid interfering with user's hooks
+        push_authorship.push("--no-verify".to_string());
+        push_authorship.extend(forwarded_flags);
         push_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
         // Silence the second push unless we're in debug mode
         let silent = !cfg!(debug_assertions);
@@ -731,6 +1042,24 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
     }
 }
 
+fn remote_is_mirror(repo: &git2::Repository, remote: &str) -> bool {
+    if let Ok(cfg) = repo.config() {
+        let key = format!("remote.{}.mirror", remote);
+        if let Ok(val) = cfg.get_string(&key) {
+            let v = val.to_lowercase();
+            if v == "true" || v == "push" || v == "yes" || v == "on" || v == "1" {
+                return true;
+            }
+        }
+        if let Ok(b) = cfg.get_bool(&key) {
+            if b {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn proxy_to_git(args: &[String]) {
     _proxy_to_git(args, true);
 }
@@ -740,9 +1069,11 @@ fn proxy_to_git_no_exit(args: &[String]) -> i32 {
 }
 
 fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
+    // debug_log(&format!("proxying to git with args: {:?}", args));
+    // debug_log(&format!("prepended global args: {:?}", prepend_global(args)));
     // Use spawn for interactive commands
     let child = Command::new(config::Config::get().git_cmd())
-        .args(args)
+        .args(prepend_global(args))
         .spawn();
 
     match child {
@@ -768,6 +1099,18 @@ fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
     }
 }
 
+fn prepend_global(args: &[String]) -> Vec<String> {
+    if let Some(opts) = GLOBAL_GIT_OPTIONS.get() {
+        let mut combined: Vec<String> =
+            Vec::with_capacity(opts.passthrough_args.len() + args.len());
+        combined.extend_from_slice(&opts.passthrough_args);
+        combined.extend_from_slice(args);
+        combined
+    } else {
+        args.to_vec()
+    }
+}
+
 // Ensure SIGPIPE default action, even if inherited ignored from a parent shell
 fn reset_sigpipe_to_default() {
     #[cfg(unix)]
@@ -790,6 +1133,15 @@ fn exit_with_status(status: std::process::ExitStatus) -> ! {
         }
     }
     std::process::exit(status.code().unwrap_or(1));
+}
+
+// Detect if current process invocation is coming from shell completion machinery
+// (bash, zsh via bashcompinit). If so, we should proxy directly to the real git
+// without any extra behavior that could interfere with completion scripts.
+fn in_shell_completion_context() -> bool {
+    std::env::var("COMP_LINE").is_ok()
+        || std::env::var("COMP_POINT").is_ok()
+        || std::env::var("COMP_TYPE").is_ok()
 }
 
 #[allow(dead_code)]
@@ -899,4 +1251,214 @@ fn extract_remote_from_push_args(args: &[String], known_remotes: &[String]) -> O
         .iter()
         .find(|r| args.iter().any(|arg| arg == *r))
         .cloned()
+}
+
+fn extract_forwarded_push_flags(args: &[String]) -> Vec<String> {
+    let mut forwarded: Vec<String> = Vec::new();
+
+    // Helpers
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // --push-option/-o are handled via extract_push_options to preserve values
+        if let Some(val) = arg.strip_prefix("--push-option=") {
+            forwarded.push(format!("--push-option={}", val));
+            i += 1;
+            continue;
+        }
+        if arg == "--push-option" || arg == "-o" {
+            if i + 1 < args.len() {
+                forwarded.push(format!("--push-option={}", args[i + 1]));
+            }
+            i += 2;
+            continue;
+        }
+
+        // --signed, --no-signed, --signed=<mode>
+        if arg == "--signed" || arg == "--no-signed" || arg.starts_with("--signed=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --atomic / --no-atomic
+        if arg == "--atomic" || arg == "--no-atomic" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --receive-pack / --exec (with or without =)
+        if arg.starts_with("--receive-pack=") || arg.starts_with("--exec=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+        if arg == "--receive-pack" || arg == "--exec" {
+            if i + 1 < args.len() {
+                forwarded.push(arg.clone());
+                forwarded.push(args[i + 1].clone());
+            } else {
+                forwarded.push(arg.clone());
+            }
+            i += 2;
+            continue;
+        }
+
+        // --force-with-lease variants and --no-force-with-lease
+        if arg == "--force-with-lease"
+            || arg == "--no-force-with-lease"
+            || arg.starts_with("--force-with-lease=")
+        {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --force-if-includes / --no-force-if-includes
+        if arg == "--force-if-includes" || arg == "--no-force-if-includes" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // -f / --force
+        if arg == "-f" || arg == "--force" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --thin / --no-thin
+        if arg == "--thin" || arg == "--no-thin" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --recurse-submodules forms
+        if arg == "--no-recurse-submodules" || arg.starts_with("--recurse-submodules=") {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Do not forward --verify / --no-verify. Our internal push always uses --no-verify.
+        if arg == "--verify" || arg == "--no-verify" {
+            i += 1;
+            continue;
+        }
+
+        // -4 / --ipv4, -6 / --ipv6
+        if arg == "-4" || arg == "--ipv4" || arg == "-6" || arg == "--ipv6" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // --repo should not be forwarded (we already compute the target remote)
+
+        i += 1;
+    }
+
+    forwarded
+}
+
+fn extract_forwarded_fetch_flags(args: &[String]) -> Vec<String> {
+    let mut forwarded: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // Do not forward remote selection/grouping; we compute our own remote
+        if arg == "--all" || arg == "--multiple" {
+            i += 1;
+            continue;
+        }
+
+        // Forward FETCH_HEAD write behavior
+        if arg == "--no-write-fetch-head" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Forward tags behavior
+        if arg == "--tags" || arg == "--no-tags" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Forward dry-run
+        if arg == "-n" || arg == "--dry-run" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Forward IP version preferences
+        if arg == "-4" || arg == "--ipv4" || arg == "-6" || arg == "--ipv6" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    forwarded
+}
+
+fn extract_remote_from_fetch_args(args: &[String]) -> Option<String> {
+    let mut after_double_dash = false;
+
+    for arg in args {
+        if !after_double_dash {
+            if arg == "--" {
+                after_double_dash = true;
+                continue;
+            }
+            if arg.starts_with('-') {
+                // Option; skip
+                continue;
+            }
+        }
+
+        // Candidate positional arg; determine if it's a repository URL/path
+        let s = arg.as_str();
+
+        // 1) URL forms (https://, ssh://, file://, git://, etc.)
+        if s.contains("://") || s.starts_with("file://") {
+            return Some(arg.clone());
+        }
+
+        // 2) SCP-like syntax: user@host:path
+        if s.contains('@') && s.contains(':') && !s.contains("://") {
+            return Some(arg.clone());
+        }
+
+        // 3) Local path forms
+        if s.starts_with('/') || s.starts_with("./") || s.starts_with("../") || s.starts_with("~/")
+        {
+            return Some(arg.clone());
+        }
+
+        // Heuristic: bare repo directories often end with .git
+        if s.ends_with(".git") {
+            return Some(arg.clone());
+        }
+
+        // 4) As a last resort, if the path exists on disk, treat as local path
+        if std::path::Path::new(s).exists() {
+            return Some(arg.clone());
+        }
+
+        // Otherwise, do not treat this positional token as a repository; likely a refspec
+        break;
+    }
+
+    None
 }
