@@ -134,6 +134,14 @@ fn main() {
 
             commands::rebase_authorship::handle_squash_authorship(positional_args);
         }
+        "benchmark" => {
+            let working_dir = std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+
+            commands::benchmark::profile_key_operations(&working_dir);
+        }
         _ => {
             // Proxy all other commands to git
             proxy_to_git(&cli.args);
