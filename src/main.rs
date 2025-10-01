@@ -36,6 +36,13 @@ fn main() {
     reset_sigpipe_to_default();
     // Initialize global configuration early
     config::Config::init();
+    // If we're being invoked from a shell completion context, bypass git-ai logic
+    // and delegate directly to the real git so existing completion scripts work.
+    if in_shell_completion_context() {
+        let orig_args: Vec<String> = std::env::args().skip(1).collect();
+        proxy_to_git(&orig_args);
+        return;
+    }
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
@@ -794,6 +801,15 @@ fn exit_with_status(status: std::process::ExitStatus) -> ! {
         }
     }
     std::process::exit(status.code().unwrap_or(1));
+}
+
+// Detect if current process invocation is coming from shell completion machinery
+// (bash, zsh via bashcompinit). If so, we should proxy directly to the real git
+// without any extra behavior that could interfere with completion scripts.
+fn in_shell_completion_context() -> bool {
+    std::env::var("COMP_LINE").is_ok()
+        || std::env::var("COMP_POINT").is_ok()
+        || std::env::var("COMP_TYPE").is_ok()
 }
 
 #[allow(dead_code)]
