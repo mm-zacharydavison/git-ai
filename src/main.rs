@@ -6,10 +6,10 @@ mod log_fmt;
 mod utils;
 
 use clap::Parser;
-use once_cell::sync::OnceCell;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use git::repository::run_git_and_forward;
+use once_cell::sync::OnceCell;
 use std::io::IsTerminal;
 
 #[cfg(unix)]
@@ -91,7 +91,7 @@ fn main() {
             handle_checkpoint(positional_args);
         }
         "ai-blame" => {
-            handle_blame(positional_args);
+            handle_ai_blame(positional_args);
         }
         "commit" => {
             handle_commit(positional_args);
@@ -243,14 +243,35 @@ fn parse_top_level_args(args: &[String]) -> (String, &[String]) {
             }
             "--exec-path" => {
                 if let Some(value) = inline_value {
-                    options.passthrough_args.push(format!("--exec-path={}", value));
+                    options
+                        .passthrough_args
+                        .push(format!("--exec-path={}", value));
                 } else {
                     options.passthrough_args.push("--exec-path".to_string());
                 }
                 idx += 1;
                 continue;
             }
-            "-h" | "--help" | "--man-path" | "--html-path" | "--info-path" | "-P" | "--no-pager" | "-p" | "--paginate" | "--no-replace-objects" | "--no-lazy-fetch" | "--no-optional-locks" | "--no-advice" | "--literal-pathspecs" | "--glob-pathspecs" | "--noglob-pathspecs" | "--icase-pathspecs" | "--bare" | "-v" | "--version" => {
+            "-h"
+            | "--help"
+            | "--man-path"
+            | "--html-path"
+            | "--info-path"
+            | "-P"
+            | "--no-pager"
+            | "-p"
+            | "--paginate"
+            | "--no-replace-objects"
+            | "--no-lazy-fetch"
+            | "--no-optional-locks"
+            | "--no-advice"
+            | "--literal-pathspecs"
+            | "--glob-pathspecs"
+            | "--noglob-pathspecs"
+            | "--icase-pathspecs"
+            | "--bare"
+            | "-v"
+            | "--version" => {
                 options.passthrough_args.push(arg.clone());
                 idx += 1;
                 continue;
@@ -291,7 +312,7 @@ fn parse_top_level_args(args: &[String]) -> (String, &[String]) {
         if let Some(sp) = super_prefix {
             options.super_prefix = Some(sp);
         }
-        
+
         GLOBAL_GIT_OPTIONS.set(options).ok();
 
         let command = arg.clone();
@@ -594,7 +615,7 @@ fn handle_stats_delta(args: &[String]) {
     }
 }
 
-fn handle_blame(args: &[String]) {
+fn handle_ai_blame(args: &[String]) {
     if args.is_empty() {
         eprintln!("Error: blame requires a file argument");
         std::process::exit(1);
@@ -883,9 +904,7 @@ fn handle_fetch(args: &[String]) {
         fetch_authorship.extend(forwarded_flags);
         // Unless explicitly requested otherwise, do not fetch tags on the
         // secondary authorship fetch to avoid creating unexpected tag refs
-        let user_specified_tags_pref = args
-            .iter()
-            .any(|a| a == "--tags" || a == "--no-tags");
+        let user_specified_tags_pref = args.iter().any(|a| a == "--tags" || a == "--no-tags");
         if !user_specified_tags_pref {
             fetch_authorship.push("--no-tags".to_string());
         }
@@ -974,7 +993,9 @@ fn handle_push(args: &[String]) {
 
     if let Some(remote) = remote {
         // Skip secondary push for mirrored pushes/remotes to avoid combining --mirror with refspecs
-        let has_mirror_flag = args.iter().any(|a| a == "--mirror" || a.starts_with("--mirror="));
+        let has_mirror_flag = args
+            .iter()
+            .any(|a| a == "--mirror" || a.starts_with("--mirror="));
         if has_mirror_flag || remote_is_mirror(&repo, &remote) {
             return;
         }
@@ -1048,9 +1069,11 @@ fn proxy_to_git_no_exit(args: &[String]) -> i32 {
 }
 
 fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
+    // debug_log(&format!("proxying to git with args: {:?}", args));
+    // debug_log(&format!("prepended global args: {:?}", prepend_global(args)));
     // Use spawn for interactive commands
     let child = Command::new(config::Config::get().git_cmd())
-        .args(args)
+        .args(prepend_global(args))
         .spawn();
 
     match child {
@@ -1073,6 +1096,18 @@ fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
             eprintln!("Failed to execute git command: {}", e);
             std::process::exit(1);
         }
+    }
+}
+
+fn prepend_global(args: &[String]) -> Vec<String> {
+    if let Some(opts) = GLOBAL_GIT_OPTIONS.get() {
+        let mut combined: Vec<String> =
+            Vec::with_capacity(opts.passthrough_args.len() + args.len());
+        combined.extend_from_slice(&opts.passthrough_args);
+        combined.extend_from_slice(args);
+        combined
+    } else {
+        args.to_vec()
     }
 }
 
@@ -1272,7 +1307,10 @@ fn extract_forwarded_push_flags(args: &[String]) -> Vec<String> {
         }
 
         // --force-with-lease variants and --no-force-with-lease
-        if arg == "--force-with-lease" || arg == "--no-force-with-lease" || arg.starts_with("--force-with-lease=") {
+        if arg == "--force-with-lease"
+            || arg == "--no-force-with-lease"
+            || arg.starts_with("--force-with-lease=")
+        {
             forwarded.push(arg.clone());
             i += 1;
             continue;
@@ -1403,7 +1441,8 @@ fn extract_remote_from_fetch_args(args: &[String]) -> Option<String> {
         }
 
         // 3) Local path forms
-        if s.starts_with('/') || s.starts_with("./") || s.starts_with("../") || s.starts_with("~/") {
+        if s.starts_with('/') || s.starts_with("./") || s.starts_with("../") || s.starts_with("~/")
+        {
             return Some(arg.clone());
         }
 
