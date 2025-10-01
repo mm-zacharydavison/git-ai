@@ -3,22 +3,7 @@ source: tests/simple_additions.rs
 expression: authorship_log
 ---
 AuthorshipLogV3 {
-    attestations: [
-        FileAttestation {
-            file_path: "empty_replacement.ts",
-            entries: [
-                AttestationEntry {
-                    hash: "1cee1d9",
-                    line_ranges: [
-                        Range(
-                            2,
-                            4,
-                        ),
-                    ],
-                },
-            ],
-        },
-    ],
+    attestations: [],
     metadata: AuthorshipMetadata {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "initial",
@@ -33,9 +18,23 @@ AuthorshipLogV3 {
                     "Test User <test@example.com>",
                 ),
                 messages: [],
-                total_additions: 4,
+                total_additions: 1,
                 total_deletions: 0,
-                accepted_lines: 3,
+                accepted_lines: 0,
+            },
+            "ed4b7ea": PromptRecord {
+                agent_id: AgentId {
+                    tool: "windsurf",
+                    id: "test_session_fixed",
+                    model: "gpt-4",
+                },
+                human_author: Some(
+                    "Test User <test@example.com>",
+                ),
+                messages: [],
+                total_additions: 1,
+                total_deletions: 1,
+                accepted_lines: 0,
             },
         },
     },
