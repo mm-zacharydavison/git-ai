@@ -29,8 +29,8 @@ impl TmpFile {
             self.contents = disk_contents;
         }
 
-        // Guarantee we have a newline separator before appending
-        if !self.contents.ends_with('\n') {
+        // Guarantee we have a newline separator before appending (but not for empty files)
+        if !self.contents.is_empty() && !self.contents.ends_with('\n') {
             self.contents.push('\n');
         }
 
@@ -139,8 +139,11 @@ impl TmpFile {
         }
 
         // Add lines after the range (1-indexed to 0-indexed conversion)
-        if end_line <= file_lines.len() {
-            for line in file_lines[end_line..].iter() {
+        // end_line is exclusive and 1-indexed, so we convert to 0-indexed: (end_line - 1)
+        // But since it's exclusive, we actually want the line AT end_line (1-indexed), which is at index (end_line - 1)
+        // Wait, if end_line is exclusive, we want lines starting from end_line (1-indexed) = index (end_line - 1)
+        if end_line - 1 < file_lines.len() {
+            for line in file_lines[(end_line - 1)..].iter() {
                 new_contents.push_str(line);
                 new_contents.push('\n');
             }

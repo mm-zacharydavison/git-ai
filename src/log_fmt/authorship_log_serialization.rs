@@ -146,7 +146,7 @@ impl AuthorshipLog {
     }
 
     /// Merge overlapping and adjacent line ranges
-    fn _merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
+    fn merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
         if ranges.is_empty() {
             return Vec::new();
         }
@@ -167,8 +167,8 @@ impl AuthorshipLog {
         let mut merged = Vec::new();
         for current in sorted_ranges {
             if let Some(last) = merged.last_mut() {
-                if Self::_ranges_can_merge(last, &current) {
-                    *last = Self::_merge_ranges(last, &current);
+                if Self::ranges_can_merge(last, &current) {
+                    *last = Self::merge_ranges(last, &current);
                 } else {
                     merged.push(current);
                 }
@@ -181,7 +181,7 @@ impl AuthorshipLog {
     }
 
     /// Check if two ranges can be merged (overlapping or adjacent)
-    fn _ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
+    fn ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
         let (start1, end1) = match range1 {
             LineRange::Single(line) => (*line, *line),
             LineRange::Range(start, end) => (*start, *end),
@@ -196,7 +196,7 @@ impl AuthorshipLog {
     }
 
     /// Merge two ranges into one
-    fn _merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
+    fn merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
         let (start1, end1) = match range1 {
             LineRange::Single(line) => (*line, *line),
             LineRange::Range(start, end) => (*start, *end),
@@ -367,6 +367,37 @@ impl AuthorshipLog {
         // Sort attestation entries by hash for deterministic ordering
         for file_attestation in &mut authorship_log.attestations {
             file_attestation.entries.sort_by(|a, b| a.hash.cmp(&b.hash));
+        }
+
+        // Consolidate entries with the same hash
+        for file_attestation in &mut authorship_log.attestations {
+            let mut consolidated_entries = Vec::new();
+            let mut current_hash: Option<String> = None;
+            let mut current_ranges: Vec<LineRange> = Vec::new();
+
+            for entry in &file_attestation.entries {
+                if current_hash.as_ref() == Some(&entry.hash) {
+                    // Same hash, accumulate line ranges
+                    current_ranges.extend(entry.line_ranges.clone());
+                } else {
+                    // Different hash, save previous entry and start new one
+                    if let Some(hash) = current_hash.take() {
+                        // Merge overlapping and adjacent ranges before adding
+                        let merged_ranges = Self::merge_line_ranges(&current_ranges);
+                        consolidated_entries.push(AttestationEntry::new(hash, merged_ranges));
+                    }
+                    current_hash = Some(entry.hash.clone());
+                    current_ranges = entry.line_ranges.clone();
+                }
+            }
+
+            // Don't forget the last entry
+            if let Some(hash) = current_hash {
+                let merged_ranges = Self::merge_line_ranges(&current_ranges);
+                consolidated_entries.push(AttestationEntry::new(hash, merged_ranges));
+            }
+
+            file_attestation.entries = consolidated_entries;
         }
 
         // Calculate accepted_lines for each session from the final attestation log

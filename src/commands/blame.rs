@@ -10,8 +10,10 @@ use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct BlameHunk {
-    /// Line range [start, end] (inclusive)
+    /// Line range [start, end] (inclusive) - current line numbers in the file
     pub range: (u32, u32),
+    /// Original line range [start, end] (inclusive) - line numbers in the commit that introduced them
+    pub orig_range: (u32, u32),
     /// Commit SHA that introduced this hunk
     pub commit_sha: String,
     /// Abbreviated commit SHA
@@ -245,6 +247,10 @@ pub fn get_git_blame_hunks(
         let start = hunk.final_start_line(); // Already 1-indexed
         let end = start + hunk.lines_in_hunk() - 1;
 
+        // Get original line numbers in the commit
+        let orig_start = hunk.orig_start_line(); // Already 1-indexed
+        let orig_end = orig_start + hunk.lines_in_hunk() - 1;
+
         let commit_id = hunk.final_commit_id();
         let commit = match repo.find_commit(commit_id) {
             Ok(commit) => commit,
@@ -294,6 +300,7 @@ pub fn get_git_blame_hunks(
 
         hunks.push(BlameHunk {
             range: (start.try_into().unwrap(), end.try_into().unwrap()),
+            orig_range: (orig_start.try_into().unwrap(), orig_end.try_into().unwrap()),
             commit_sha,
             abbrev_sha,
             original_author,
@@ -339,19 +346,24 @@ pub fn overlay_ai_authorship(
         // If we have AI authorship data, look up the author for lines in this hunk
         if let Some(authorship_log) = authorship_log {
             // Check each line in this hunk for AI authorship using compact schema
-            for line_num in hunk.range.0..=hunk.range.1 {
+            // IMPORTANT: Use the original line numbers from the commit, not the current line numbers
+            let num_lines = hunk.range.1 - hunk.range.0 + 1;
+            for i in 0..num_lines {
+                let current_line_num = hunk.range.0 + i;
+                let orig_line_num = hunk.orig_range.0 + i;
+
                 if let Some((author, prompt)) =
-                    authorship_log.get_line_attribution(file_path, line_num)
+                    authorship_log.get_line_attribution(file_path, orig_line_num)
                 {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
                     if let Some(prompt_record) = prompt {
-                        line_authors.insert(line_num, prompt_record.agent_id.tool.clone());
+                        line_authors.insert(current_line_num, prompt_record.agent_id.tool.clone());
                     } else {
-                        line_authors.insert(line_num, author.username.clone());
+                        line_authors.insert(current_line_num, author.username.clone());
                     }
                 } else {
                     // Fall back to original author if no AI authorship
-                    line_authors.insert(line_num, hunk.original_author.clone());
+                    line_authors.insert(current_line_num, hunk.original_author.clone());
                 }
             }
         } else {

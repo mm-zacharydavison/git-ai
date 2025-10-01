@@ -4,7 +4,5 @@ expression: blame
 ---
 {
     1: "Test User",
-    2: "cursor",
-    3: "cursor",
-    4: "cursor",
+    2: "Test User",
 }

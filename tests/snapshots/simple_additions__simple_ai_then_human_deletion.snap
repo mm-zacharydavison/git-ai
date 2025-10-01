@@ -5,14 +5,14 @@ expression: authorship_log
 AuthorshipLogV3 {
     attestations: [
         FileAttestation {
-            file_path: "empty_replacement.ts",
+            file_path: "file.txt",
             entries: [
                 AttestationEntry {
-                    hash: "1cee1d9",
+                    hash: "d6f9ad9",
                     line_ranges: [
                         Range(
+                            1,
                             2,
-                            4,
                         ),
                     ],
                 },
@@ -23,9 +23,9 @@ AuthorshipLogV3 {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "initial",
         prompts: {
-            "1cee1d9": PromptRecord {
+            "d6f9ad9": PromptRecord {
                 agent_id: AgentId {
-                    tool: "cursor",
+                    tool: "some-ai",
                     id: "test_session_fixed",
                     model: "claude-3-sonnet",
                 },
@@ -33,9 +33,9 @@ AuthorshipLogV3 {
                     "Test User <test@example.com>",
                 ),
                 messages: [],
-                total_additions: 4,
-                total_deletions: 0,
-                accepted_lines: 3,
+                total_additions: 3,
+                total_deletions: 1,
+                accepted_lines: 2,
             },
         },
     },
