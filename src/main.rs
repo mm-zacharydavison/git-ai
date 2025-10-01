@@ -592,11 +592,13 @@ fn handle_fetch(args: &[String]) {
     }
 
     // 2) Fetch authorship refs from the appropriate remote
-    // Try to detect remote from args first
-    let specified_remote = args
-        .iter()
-        .find(|a| remote_names.iter().any(|r| r == *a))
-        .cloned();
+    // Try to detect remote (named remote, URL, or local path) from args first
+    let positional_remote = extract_remote_from_fetch_args(args);
+    let specified_remote = positional_remote.or_else(|| {
+        args.iter()
+            .find(|a| remote_names.iter().any(|r| r == *a))
+            .cloned()
+    });
 
     // If not specified, try to get upstream remote of current branch
     fn upstream_remote(repo: &git2::Repository) -> Option<String> {
@@ -619,11 +621,26 @@ fn handle_fetch(args: &[String]) {
         .or_else(|| get_default_remote(&repo));
 
     if let Some(remote) = remote {
+        // Forward relevant fetch flags so semantics match the primary fetch
+        let forwarded_flags = extract_forwarded_fetch_flags(args);
+
         let mut fetch_authorship = vec!["fetch".to_string()];
+        // Place options before positional args per git's CLI conventions
+        fetch_authorship.extend(forwarded_flags);
+        // Unless explicitly requested otherwise, do not fetch tags on the
+        // secondary authorship fetch to avoid creating unexpected tag refs
+        let user_specified_tags_pref = args
+            .iter()
+            .any(|a| a == "--tags" || a == "--no-tags");
+        if !user_specified_tags_pref {
+            fetch_authorship.push("--no-tags".to_string());
+        }
+        // Do not clobber FETCH_HEAD from the user's fetch (see git t5515 expectations)
+        fetch_authorship.push("--no-write-fetch-head".to_string());
         fetch_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
-        // Silence the second fetch unless we're in debug mode
-        let silent = !cfg!(debug_assertions);
-        if !silent {
+        // Always silence the secondary fetch to avoid interfering with caller output/trace
+        let silent = true;
+        if cfg!(debug_assertions) {
             debug_log(&format!(
                 "fetching authorship refs: {:?}",
                 &fetch_authorship
@@ -702,11 +719,19 @@ fn handle_push(args: &[String]) {
         .or_else(|| get_default_remote(&repo));
 
     if let Some(remote) = remote {
+        // Skip secondary push for mirrored pushes/remotes to avoid combining --mirror with refspecs
+        let has_mirror_flag = args.iter().any(|a| a == "--mirror" || a.starts_with("--mirror="));
+        if has_mirror_flag || remote_is_mirror(&repo, &remote) {
+            return;
+        }
+
         // Forward relevant flags so the secondary push has matching semantics
         let forwarded_flags = extract_forwarded_push_flags(args);
 
         let mut push_authorship = vec!["push".to_string()];
         // Place options before positional args per git's CLI conventions
+        // Always bypass hooks for internal authorship push to avoid interfering with user's hooks
+        push_authorship.push("--no-verify".to_string());
         push_authorship.extend(forwarded_flags);
         push_authorship.extend_from_slice(&[remote, AI_AUTHORSHIP_REFSPEC.to_string()]);
         // Silence the second push unless we're in debug mode
@@ -740,6 +765,24 @@ fn get_default_remote(repo: &git2::Repository) -> Option<String> {
     } else {
         None
     }
+}
+
+fn remote_is_mirror(repo: &git2::Repository, remote: &str) -> bool {
+    if let Ok(cfg) = repo.config() {
+        let key = format!("remote.{}.mirror", remote);
+        if let Ok(val) = cfg.get_string(&key) {
+            let v = val.to_lowercase();
+            if v == "true" || v == "push" || v == "yes" || v == "on" || v == "1" {
+                return true;
+            }
+        }
+        if let Ok(b) = cfg.get_bool(&key) {
+            if b {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn proxy_to_git(args: &[String]) {
@@ -1009,9 +1052,8 @@ fn extract_forwarded_push_flags(args: &[String]) -> Vec<String> {
             continue;
         }
 
-        // --verify / --no-verify
+        // Do not forward --verify / --no-verify. Our internal push always uses --no-verify.
         if arg == "--verify" || arg == "--no-verify" {
-            forwarded.push(arg.clone());
             i += 1;
             continue;
         }
@@ -1029,4 +1071,101 @@ fn extract_forwarded_push_flags(args: &[String]) -> Vec<String> {
     }
 
     forwarded
+}
+
+fn extract_forwarded_fetch_flags(args: &[String]) -> Vec<String> {
+    let mut forwarded: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+
+        // Do not forward remote selection/grouping; we compute our own remote
+        if arg == "--all" || arg == "--multiple" {
+            i += 1;
+            continue;
+        }
+
+        // Forward FETCH_HEAD write behavior
+        if arg == "--no-write-fetch-head" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Forward tags behavior
+        if arg == "--tags" || arg == "--no-tags" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Forward dry-run
+        if arg == "-n" || arg == "--dry-run" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        // Forward IP version preferences
+        if arg == "-4" || arg == "--ipv4" || arg == "-6" || arg == "--ipv6" {
+            forwarded.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    forwarded
+}
+
+fn extract_remote_from_fetch_args(args: &[String]) -> Option<String> {
+    let mut after_double_dash = false;
+
+    for arg in args {
+        if !after_double_dash {
+            if arg == "--" {
+                after_double_dash = true;
+                continue;
+            }
+            if arg.starts_with('-') {
+                // Option; skip
+                continue;
+            }
+        }
+
+        // Candidate positional arg; determine if it's a repository URL/path
+        let s = arg.as_str();
+
+        // 1) URL forms (https://, ssh://, file://, git://, etc.)
+        if s.contains("://") || s.starts_with("file://") {
+            return Some(arg.clone());
+        }
+
+        // 2) SCP-like syntax: user@host:path
+        if s.contains('@') && s.contains(':') && !s.contains("://") {
+            return Some(arg.clone());
+        }
+
+        // 3) Local path forms
+        if s.starts_with('/') || s.starts_with("./") || s.starts_with("../") || s.starts_with("~/") {
+            return Some(arg.clone());
+        }
+
+        // Heuristic: bare repo directories often end with .git
+        if s.ends_with(".git") {
+            return Some(arg.clone());
+        }
+
+        // 4) As a last resort, if the path exists on disk, treat as local path
+        if std::path::Path::new(s).exists() {
+            return Some(arg.clone());
+        }
+
+        // Otherwise, do not treat this positional token as a repository; likely a refspec
+        break;
+    }
+
+    None
 }
