@@ -279,9 +279,7 @@ fn parse_top_level_args(args: &[String]) -> (String, &[String]) {
             | "--glob-pathspecs"
             | "--noglob-pathspecs"
             | "--icase-pathspecs"
-            | "--bare"
-            | "-v"
-            | "--version" => {
+            | "--bare" => {
                 options.passthrough_args.push(arg.clone());
                 idx += 1;
                 continue;
