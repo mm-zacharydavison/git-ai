@@ -549,11 +549,17 @@ fn bare_and_no_optional_locks_and_no_advice_and_no_lazy_fetch() {
 
 #[test]
 fn blame_double_dash_then_filename() {
-    let args = vec!["blame", "--", "Readme.md"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["blame", "--", "Readme.md"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let got = parse_git_cli_args(&args);
     assert!(got.global_args.is_empty());
     assert_eq!(got.command.as_deref(), Some("blame"));
-    assert_eq!(got.command_args, vec!["--".to_string(), "Readme.md".to_string()]);
+    assert_eq!(
+        got.command_args,
+        vec!["--".to_string(), "Readme.md".to_string()]
+    );
     assert!(!got.saw_end_of_opts);
 
     assert_eq!(got.to_invocation_vec(), args);
@@ -561,17 +567,25 @@ fn blame_double_dash_then_filename() {
 
 #[test]
 fn blame_filename_starts_with_dash() {
-    let args = vec!["blame", "--", "--weird"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["blame", "--", "--weird"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let got = parse_git_cli_args(&args);
     assert_eq!(got.command.as_deref(), Some("blame"));
-    assert_eq!(got.command_args, vec!["--".to_string(), "--weird".to_string()]);
+    assert_eq!(
+        got.command_args,
+        vec!["--".to_string(), "--weird".to_string()]
+    );
     assert!(!got.saw_end_of_opts);
 }
 
 #[test]
 fn inverse_with_end_of_opts_roundtrips() {
-    let args = vec!["-C",".","--","--weird"]
-        .into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["-C", ".", "--", "--weird"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let parsed = parse_git_cli_args(&args);
     assert_eq!(parsed.global_args, vec!["-C".to_string(), ".".to_string()]);
     assert_eq!(parsed.command.as_deref(), Some("--weird"));
@@ -581,7 +595,10 @@ fn inverse_with_end_of_opts_roundtrips() {
 
 #[test]
 fn inverse_with_end_of_opts_no_command() {
-    let args = vec!["-C",".","--"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["-C", ".", "--"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let parsed = parse_git_cli_args(&args);
     assert_eq!(parsed.command, None);
     assert!(parsed.saw_end_of_opts);
@@ -590,14 +607,20 @@ fn inverse_with_end_of_opts_no_command() {
 
 #[test]
 fn inverse_simple_commit() {
-    let args = vec!["-C","..","commit","-m","foo"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["-C", "..", "commit", "-m", "foo"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let parsed = parse_git_cli_args(&args);
     assert_eq!(parsed.to_invocation_vec(), args);
 }
 
 #[test]
 fn inverse_meta_no_command() {
-    let args = vec!["--version"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["--version"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let parsed = parse_git_cli_args(&args);
     // global=[], command=None, command_args=["--version"]
     assert_eq!(parsed.to_invocation_vec(), args);
@@ -605,7 +628,10 @@ fn inverse_meta_no_command() {
 
 #[test]
 fn inverse_unknown_option_passthrough() {
-    let args = vec!["--mystery","status","-s"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["--mystery", "status", "-s"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let parsed = parse_git_cli_args(&args);
     assert_eq!(parsed.command, None);
     assert_eq!(parsed.to_invocation_vec(), args);
@@ -613,10 +639,21 @@ fn inverse_unknown_option_passthrough() {
 
 #[test]
 fn inverse_end_of_opts_note() {
-    let args = vec!["-C",".","--","--weird"].into_iter().map(String::from).collect::<Vec<_>>();
+    let args = vec!["-C", ".", "--", "--weird"]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
     let parsed = parse_git_cli_args(&args);
     assert_eq!(parsed.global_args, vec!["-C".to_string(), ".".to_string()]);
     assert_eq!(parsed.command.as_deref(), Some("--weird"));
     assert_eq!(parsed.command_args, Vec::<String>::new());
-    assert_eq!(parsed.to_invocation_vec(), vec!["-C".to_string(), ".".to_string(), "--".to_string(), "--weird".to_string()]);
+    assert_eq!(
+        parsed.to_invocation_vec(),
+        vec![
+            "-C".to_string(),
+            ".".to_string(),
+            "--".to_string(),
+            "--weird".to_string()
+        ]
+    );
 }

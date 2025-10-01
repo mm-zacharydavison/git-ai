@@ -1,20 +1,30 @@
-use crate::git::cli_parser::parse_git_cli_args;
 use crate::config;
-use std::process::Command;
+use crate::git::cli_parser::parse_git_cli_args;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+use std::process::Command;
 
 pub fn handle_git(args: &[String]) {
+    // If we're being invoked from a shell completion context, bypass git-ai logic
+    // and delegate directly to the real git so existing completion scripts work.
+    if in_shell_completion_context() {
+        let orig_args: Vec<String> = std::env::args().skip(1).collect();
+        proxy_to_git(&orig_args, true);
+        return;
+    }
+
     let parsed_args = parse_git_cli_args(args);
     // println!("command: {:?}", parsed_args.command);
     // println!("global_args: {:?}", parsed_args.global_args);
     // println!("command_args: {:?}", parsed_args.command_args);
     reset_sigpipe_to_default();
-    let exit_status = _proxy_to_git(&parsed_args.to_invocation_vec(), true);
+    // TODO Pre-command hooks
+    let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
+    // TODO Post-command hooks
     exit_with_status(exit_status);
 }
 
-fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> std::process::ExitStatus {
+fn proxy_to_git(args: &[String], exit_on_completion: bool) -> std::process::ExitStatus {
     // debug_log(&format!("proxying to git with args: {:?}", args));
     // debug_log(&format!("prepended global args: {:?}", prepend_global(args)));
     // Use spawn for interactive commands
@@ -67,4 +77,13 @@ fn exit_with_status(status: std::process::ExitStatus) -> ! {
         }
     }
     std::process::exit(status.code().unwrap_or(1));
+}
+
+// Detect if current process invocation is coming from shell completion machinery
+// (bash, zsh via bashcompinit). If so, we should proxy directly to the real git
+// without any extra behavior that could interfere with completion scripts.
+fn in_shell_completion_context() -> bool {
+    std::env::var("COMP_LINE").is_ok()
+        || std::env::var("COMP_POINT").is_ok()
+        || std::env::var("COMP_TYPE").is_ok()
 }

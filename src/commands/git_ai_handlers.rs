@@ -8,7 +8,14 @@ use crate::log_fmt::working_log::AgentId;
 use std::io::IsTerminal;
 
 pub fn handle_git_ai(args: &[String]) {
+    if args.is_empty() {
+        print_help();
+        return;
+    }
     match args[0].as_str() {
+        "help" | "--help" | "-h" => {
+            print_help();
+        }
         "stats-delta" => {
             handle_stats_delta(&args[1..]);
         }
@@ -46,6 +53,35 @@ pub fn handle_git_ai(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+fn print_help() {
+    eprintln!("git-ai - git proxy with AI authorship tracking");
+    eprintln!("");
+    eprintln!("Usage: git-ai <git or git-ai command> [args...]");
+    eprintln!("");
+    eprintln!("Commands:");
+    eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
+    eprintln!("    Presets: claude, cursor");
+    eprintln!("    --author <name>       Override default author");
+    eprintln!("    --model <model>       Override default model");
+    eprintln!("    --prompt <json>       Override default prompt with JSON");
+    eprintln!("    --prompt-path <path>  Override default prompt with file path");
+    eprintln!("    --prompt-id <id>      Override default prompt with ID");
+    eprintln!("    --show-working-log    Display current working log");
+    eprintln!("    --reset               Reset working log");
+    eprintln!("  blame         [override] git blame with AI authorship tracking");
+    eprintln!(
+        "  commit        [wrapper] pass through to 'git commit' with git-ai before/after hooks"
+    );
+    eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
+    eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
+    eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
+    eprintln!("  squash-authorship [new] Generate authorship from squashed commits");
+    eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
+    eprintln!("    --dry-run             Show what would be done without making changes");
+    eprintln!("");
+    std::process::exit(0);
 }
 
 fn handle_checkpoint(args: &[String]) {

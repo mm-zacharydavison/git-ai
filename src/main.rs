@@ -33,17 +33,6 @@ struct Cli {
 }
 
 fn main() {
-    // Ensure SIGPIPE uses the default action (terminate), and do not inherit ignored SIGPIPE
-    reset_sigpipe_to_default();
-    // Initialize global configuration early
-    config::Config::init();
-    // If we're being invoked from a shell completion context, bypass git-ai logic
-    // and delegate directly to the real git so existing completion scripts work.
-    if in_shell_completion_context() {
-        let orig_args: Vec<String> = std::env::args().skip(1).collect();
-        proxy_to_git(&orig_args);
-        return;
-    }
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
@@ -57,17 +46,6 @@ fn main() {
         .unwrap_or("git-ai".to_string());
 
     let cli = Cli::parse();
-    if cli.args.is_empty() {
-        if binary_name == "git" {
-            // User called 'git'
-            proxy_to_git(&[]);
-        } else {
-            // User called 'git-ai', show git-ai specific help
-            print_help();
-        }
-        return;
-    }
-
     if binary_name == "git-ai" {
         commands::git_ai_handlers::handle_git_ai(&cli.args);
         std::process::exit(0);
@@ -521,14 +499,6 @@ fn _proxy_to_git(args: &[String], exit_on_completion: bool) -> i32 {
     }
 }
 
-// Ensure SIGPIPE default action, even if inherited ignored from a parent shell
-fn reset_sigpipe_to_default() {
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
-}
-
 // Exit mirroring the child's termination: same signal if signaled, else exit code
 fn exit_with_status(status: std::process::ExitStatus) -> ! {
     #[cfg(unix)]
@@ -576,35 +546,6 @@ fn parse_file_with_line_range(file_arg: &str) -> (String, Option<(u32, u32)>) {
         }
     }
     (file_arg.to_string(), None)
-}
-
-fn print_help() {
-    eprintln!("git-ai - git proxy with AI authorship tracking");
-    eprintln!("");
-    eprintln!("Usage: git-ai <git or git-ai command> [args...]");
-    eprintln!("");
-    eprintln!("Commands:");
-    eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
-    eprintln!("    Presets: claude, cursor");
-    eprintln!("    --author <name>       Override default author");
-    eprintln!("    --model <model>       Override default model");
-    eprintln!("    --prompt <json>       Override default prompt with JSON");
-    eprintln!("    --prompt-path <path>  Override default prompt with file path");
-    eprintln!("    --prompt-id <id>      Override default prompt with ID");
-    eprintln!("    --show-working-log    Display current working log");
-    eprintln!("    --reset               Reset working log");
-    eprintln!("  blame         [override] git blame with AI authorship tracking");
-    eprintln!(
-        "  commit        [wrapper] pass through to 'git commit' with git-ai before/after hooks"
-    );
-    eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
-    eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
-    eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
-    eprintln!("  squash-authorship [new] Generate authorship from squashed commits");
-    eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
-    eprintln!("    --dry-run             Show what would be done without making changes");
-    eprintln!("");
-    std::process::exit(0);
 }
 
 fn is_push_option_with_inline_value(arg: &str) -> Option<(&str, &str)> {
