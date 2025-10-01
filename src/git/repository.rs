@@ -36,5 +36,4 @@ pub fn run_git_and_forward(args: &[String], quiet: bool) -> std::process::ExitSt
             std::process::exit(1);
         }
     }
-  }
-
+}

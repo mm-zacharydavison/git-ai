@@ -6,6 +6,7 @@ mod log_fmt;
 mod utils;
 
 use clap::Parser;
+use once_cell::sync::OnceCell;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use git::repository::run_git_and_forward;
@@ -30,6 +31,16 @@ struct Cli {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
+
+#[derive(Default, Debug)]
+struct GlobalGitOptions {
+    /// Options that should be passed to every git invocation
+    passthrough_args: Vec<String>,
+    work_tree: Option<String>,
+    super_prefix: Option<String>,
+}
+
+static GLOBAL_GIT_OPTIONS: OnceCell<GlobalGitOptions> = OnceCell::new();
 
 fn main() {
     // Ensure SIGPIPE uses the default action (terminate), and do not inherit ignored SIGPIPE
@@ -67,30 +78,32 @@ fn main() {
         return;
     }
 
-    let command = &cli.args[0];
-    let args = &cli.args[1..];
+    let (command, positional_args) = parse_top_level_args(&cli.args);
+
+    // debug_log(&format!("in main, command: {}", command));
+    // debug_log(&format!("in main, args: {:?}", positional_args));
 
     match command.as_str() {
         "stats-delta" => {
-            handle_stats_delta(args);
+            handle_stats_delta(positional_args);
         }
         "checkpoint" => {
-            handle_checkpoint(args);
+            handle_checkpoint(positional_args);
         }
-        "blame" => {
+        "ai-blame" => {
             if binary_name == "git" {
                 proxy_to_git(&cli.args);
             }
-            handle_blame(args);
+            handle_blame(positional_args);
         }
         "commit" => {
-            handle_commit(args);
+            handle_commit(positional_args);
         }
         "fetch" => {
-            handle_fetch(args);
+            handle_fetch(positional_args);
         }
         "push" => {
-            handle_push(args);
+            handle_push(positional_args);
         }
         "install-hooks" => {
             // This command only works when called as git-ai, not as git alias
@@ -108,7 +121,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            if let Err(e) = commands::install_hooks::run(args) {
+            if let Err(e) = commands::install_hooks::run(positional_args) {
                 eprintln!("Install hooks failed: {}", e);
                 std::process::exit(1);
             }
@@ -122,13 +135,257 @@ fn main() {
                 std::process::exit(1);
             }
 
-            commands::rebase_authorship::handle_squash_authorship(args);
+            commands::rebase_authorship::handle_squash_authorship(positional_args);
         }
         _ => {
             // Proxy all other commands to git
             proxy_to_git(&cli.args);
         }
     }
+}
+
+fn parse_top_level_args(args: &[String]) -> (String, &[String]) {
+    if args.is_empty() {
+        return (String::new(), &[]);
+    }
+
+    let mut current_dir: Option<std::path::PathBuf> = None;
+    let mut work_tree: Option<String> = None;
+    let mut git_dir: Option<String> = None;
+    let mut namespace: Option<String> = None;
+    let replace_objects = false;
+    let lazy_fetch = true;
+    let optional_locks = true;
+    let advice = true;
+    let mut attr_source: Option<String> = None;
+    let mut super_prefix: Option<String> = None;
+
+    let mut options = GlobalGitOptions::default();
+    let mut idx = 0;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+
+        let raw = arg.as_str();
+        let (flag, inline_value) = if let Some(eq_idx) = raw.find('=') {
+            (&raw[..eq_idx], Some(raw[eq_idx + 1..].to_string()))
+        } else {
+            (raw, None)
+        };
+
+        match flag {
+            "-C" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                current_dir = Some(match current_dir.take() {
+                    Some(mut base) => {
+                        base.push(&value);
+                        base
+                    }
+                    None => std::path::PathBuf::from(&value),
+                });
+                idx += 1;
+                continue;
+            }
+            "--work-tree" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                work_tree = Some(value.clone());
+                options.passthrough_args.push("--work-tree".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--git-dir" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                git_dir = Some(value.clone());
+                options.passthrough_args.push("--git-dir".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--namespace" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                namespace = Some(value.clone());
+                options.passthrough_args.push("--namespace".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--attr-source" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                attr_source = Some(value.clone());
+                options.passthrough_args.push("--attr-source".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--super-prefix" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                super_prefix = Some(value.clone());
+                options.passthrough_args.push("--super-prefix".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            "--exec-path" => {
+                if let Some(value) = inline_value {
+                    options.passthrough_args.push(format!("--exec-path={}", value));
+                } else {
+                    options.passthrough_args.push("--exec-path".to_string());
+                }
+                idx += 1;
+                continue;
+            }
+            "-h" | "--help" | "--man-path" | "--html-path" | "--info-path" | "-P" | "--no-pager" | "-p" | "--paginate" | "--no-replace-objects" | "--no-lazy-fetch" | "--no-optional-locks" | "--no-advice" | "--literal-pathspecs" | "--glob-pathspecs" | "--noglob-pathspecs" | "--icase-pathspecs" | "--bare" | "-v" | "--version" => {
+                options.passthrough_args.push(arg.clone());
+                idx += 1;
+                continue;
+            }
+            "--config-env" => {
+                let value = inline_value.unwrap_or_else(|| {
+                    idx += 1;
+                    args.get(idx).cloned().unwrap_or_default()
+                });
+                options.passthrough_args.push("--config-env".to_string());
+                options.passthrough_args.push(value);
+                idx += 1;
+                continue;
+            }
+            _ => {
+                if raw.starts_with("-c") && raw.len() > 2 {
+                    options.passthrough_args.push(arg.clone());
+                    idx += 1;
+                    continue;
+                }
+                if flag == "-c" {
+                    let value = inline_value.unwrap_or_else(|| {
+                        idx += 1;
+                        args.get(idx).cloned().unwrap_or_default()
+                    });
+                    options.passthrough_args.push("-c".to_string());
+                    options.passthrough_args.push(value);
+                    idx += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Finalize options by storing work_tree and super_prefix
+        if let Some(wt) = work_tree {
+            options.work_tree = Some(wt);
+        }
+        if let Some(sp) = super_prefix {
+            options.super_prefix = Some(sp);
+        }
+        
+        GLOBAL_GIT_OPTIONS.set(options).ok();
+
+        let command = arg.clone();
+        let remaining = &args[idx + 1..];
+
+        if let Some(dir) = current_dir {
+            if std::env::set_current_dir(&dir).is_err() {
+                eprintln!("Failed to change directory to {}", dir.display());
+                std::process::exit(1);
+            }
+        }
+
+        let stored = GLOBAL_GIT_OPTIONS.get().unwrap();
+        unsafe {
+            if let Some(dir) = &stored.work_tree {
+                std::env::set_var("GIT_WORK_TREE", dir);
+            }
+            if let Some(dir) = git_dir {
+                std::env::set_var("GIT_DIR", dir);
+            }
+            if let Some(ns) = namespace {
+                std::env::set_var("GIT_NAMESPACE", ns);
+            }
+            if replace_objects {
+                std::env::set_var("GIT_NO_REPLACE_OBJECTS", "1");
+            }
+            if !lazy_fetch {
+                std::env::set_var("GIT_NO_LAZY_FETCH", "1");
+            }
+            if !optional_locks {
+                std::env::set_var("GIT_OPTIONAL_LOCKS", "0");
+            }
+            if !advice {
+                std::env::set_var("GIT_NO_ADVICE", "1");
+            }
+            if let Some(attr) = attr_source {
+                std::env::set_var("GIT_ATTR_SOURCE", attr);
+            }
+        }
+
+        // TODO handle super-prefix by invoking binary via exec
+
+        return (command, remaining);
+    }
+
+    // If we get here, all arguments were global flags - there's no actual command
+    // Finalize options and apply environment
+    if let Some(wt) = work_tree {
+        options.work_tree = Some(wt);
+    }
+    if let Some(sp) = super_prefix {
+        options.super_prefix = Some(sp);
+    }
+    GLOBAL_GIT_OPTIONS.set(options).ok();
+
+    if let Some(dir) = current_dir {
+        if std::env::set_current_dir(&dir).is_err() {
+            eprintln!("Failed to change directory to {}", dir.display());
+            std::process::exit(1);
+        }
+    }
+
+    let stored = GLOBAL_GIT_OPTIONS.get().unwrap();
+    unsafe {
+        if let Some(dir) = &stored.work_tree {
+            std::env::set_var("GIT_WORK_TREE", dir);
+        }
+        if let Some(dir) = git_dir {
+            std::env::set_var("GIT_DIR", dir);
+        }
+        if let Some(ns) = namespace {
+            std::env::set_var("GIT_NAMESPACE", ns);
+        }
+        if replace_objects {
+            std::env::set_var("GIT_NO_REPLACE_OBJECTS", "1");
+        }
+        if !lazy_fetch {
+            std::env::set_var("GIT_NO_LAZY_FETCH", "1");
+        }
+        if !optional_locks {
+            std::env::set_var("GIT_OPTIONAL_LOCKS", "0");
+        }
+        if !advice {
+            std::env::set_var("GIT_NO_ADVICE", "1");
+        }
+        if let Some(attr) = attr_source {
+            std::env::set_var("GIT_ATTR_SOURCE", attr);
+        }
+    }
+
+    (String::new(), &[])
 }
 
 fn handle_checkpoint(args: &[String]) {
