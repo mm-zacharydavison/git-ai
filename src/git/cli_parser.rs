@@ -20,6 +20,8 @@ pub struct ParsedGitInvocation {
     pub command_args: Vec<String>,
     /// Whether a top-level `--` was present between global args and the command.
     pub saw_end_of_opts: bool,
+    /// True if this invocation requests help: presence of -h/--help or `help` command.
+    pub is_help: bool,
 }
 
 impl ParsedGitInvocation {
@@ -84,10 +86,9 @@ pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     enum Kind {
         GlobalNoValue,
-        GlobalTakesValue,
-        MetaNoValue,    // e.g., --version, --help, --html-path, --man-path, --info-path
-        MetaTakesValue, // e.g., --exec-path[=path]
-        Unknown,        // something starting with '-' that isn't recognized at top-level
+        GlobalTakesValue, // e.g., --exec-path[=path]
+        MetaNoValue,      // e.g., --version, --help, --html-path, --man-path, --info-path
+        Unknown,          // something starting with '-' that isn't recognized at top-level
     }
 
     // Helpers to recognize/parse options.
@@ -105,7 +106,7 @@ pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
             _ => {}
         }
         if tok == "--exec-path" || is_eq_form(tok, "--exec-path") {
-            return MetaTakesValue;
+            return GlobalTakesValue;
         }
 
         // Global no-value options.
@@ -261,26 +262,13 @@ pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
                 pre_command_meta.push(tok.clone());
                 i += 1;
             }
-            MetaTakesValue => {
-                let (taken, consumed) = take_valueish(args, i, "--exec-path");
-                pre_command_meta.extend(taken);
-                i += consumed;
-            }
             Unknown => {
                 if tok.starts_with('-') {
                     // Unknown top-level dash-option: treat as a meta-ish/invalid sequence.
-                    // We won't assign a command; remaining tokens become command_args.
+                    // We won't assign a command; remaining tokens will become command_args later.
+                    // Do not mutate `pre_command_meta` here; post-parse rewrites rely on it.
                     command = None;
-                    // Move any already-buffered meta first.
-                    command_args.extend(pre_command_meta.drain(..));
-                    // Then append the rest of the arguments as command_args.
-                    command_args.extend_from_slice(&args[i..]);
-                    return ParsedGitInvocation {
-                        global_args,
-                        command,
-                        command_args,
-                        saw_end_of_opts: false,
-                    };
+                    break;
                 } else {
                     // Non-dash token => this is the command.
                     break;
@@ -318,14 +306,111 @@ pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
         // If you want to emulate conversion, you can special-case it here.
     } else {
         // No command: meta options are considered "command args".
-        command_args.extend(pre_command_meta);
+        command_args.extend(pre_command_meta.clone());
         command_args.extend_from_slice(&args[i..]);
     }
+
+    // --- NEW: post-parse rewrite for help/version to match git(1) semantics ---
+    // Top-level presence of -h/--help or -v/--version (before any command)
+    let pre_has_help = pre_command_meta.iter().any(|t| t == "--help" || t == "-h");
+    let pre_has_version = pre_command_meta
+        .iter()
+        .any(|t| t == "--version" || t == "-v");
+
+    // NOTE: git docs: --help takes precedence over --version. (git(1) OPTIONS)
+    // So we always check/perform help rewrites before version rewrites.
+    if command.is_some() {
+        // Case: `git --help <cmd> [rest]`  ==>  `git help <cmd> [rest]`
+        if pre_has_help {
+            let orig_cmd = command.take().unwrap();
+            let mut new_args = vec![orig_cmd];
+            // Pass trailing tokens after the command to `git help` unchanged.
+            new_args.extend(command_args.drain(..));
+            command = Some("help".into());
+            command_args = new_args;
+        }
+        // NEW: `git --version ...` should rewrite to `git version` even if we
+        // happened to parse a command token. Help still takes precedence.
+        else if pre_has_version {
+            // Drop the previously parsed command entirely and keep only version-relevant flags.
+            command = Some("version".into());
+
+            // Build args for `git version`: keep pre-command meta except the first -v/--version.
+            let mut new_args = Vec::new();
+            let mut dropped_one_version = false;
+            for t in pre_command_meta.iter() {
+                if !dropped_one_version && (t == "--version" || t == "-v") {
+                    dropped_one_version = true;
+                    continue;
+                }
+                new_args.push(t.clone()); // e.g., "--build-options"
+            }
+
+            // Do NOT carry over the previously parsed command or its args.
+            command_args = new_args;
+        }
+    } else {
+        // No subcommand parsed.
+
+        // Case: `git --help [<cmd>|<help-opts>]`  ==>  `git help [<cmd>|<help-opts>]`
+        if pre_has_help {
+            command = Some("help".into());
+
+            // Build args for `git help`: keep pre-command meta except the first help token.
+            let mut new_args: Vec<String> = Vec::new();
+            let mut dropped_one_help = false;
+            for t in pre_command_meta.iter() {
+                if !dropped_one_help && (t == "--help" || t == "-h") {
+                    dropped_one_help = true;
+                    continue;
+                }
+                // Help takes precedence: drop any version tokens when rewriting to help
+                if t == "--version" || t == "-v" {
+                    continue;
+                }
+                new_args.push(t.clone());
+            }
+            // Plus anything we already copied into `command_args` (drop stray help/version tokens)
+            for t in command_args.iter() {
+                if t == "--help" || t == "-h" || t == "--version" || t == "-v" {
+                    continue;
+                }
+                new_args.push(t.clone());
+            }
+            command_args = new_args;
+        }
+        // Case: `git --version [--build-options]`  ==>  `git version [--build-options]`
+        // (Only rewrite version when no command; --help would have taken precedence above.)
+        else if pre_has_version {
+            command = Some("version".into());
+            // Remove the first occurrence of -v/--version; drop any non-dash tokens (e.g., stray commands)
+            let mut new_args = Vec::new();
+            let mut dropped_one_version = false;
+            for t in command_args.iter() {
+                if !dropped_one_version && (t == "--version" || t == "-v") {
+                    dropped_one_version = true;
+                    continue;
+                }
+                if t.starts_with('-') {
+                    new_args.push(t.clone());
+                }
+            }
+            command_args = new_args;
+        }
+    }
+    // --- End NEW block ---
+
+    // Determine whether this invocation represents a help request.
+    let is_help = command.as_deref() == Some("help")
+        || command.as_deref() == Some("--help")
+        || pre_command_meta.iter().any(|t| t == "--help" || t == "-h")
+        || command_args.iter().any(|t| t == "--help" || t == "-h");
 
     ParsedGitInvocation {
         global_args,
         command,
         command_args,
         saw_end_of_opts,
+        is_help,
     }
 }

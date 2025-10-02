@@ -515,39 +515,6 @@ fn exit_with_status(status: std::process::ExitStatus) -> ! {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-// Detect if current process invocation is coming from shell completion machinery
-// (bash, zsh via bashcompinit). If so, we should proxy directly to the real git
-// without any extra behavior that could interfere with completion scripts.
-fn in_shell_completion_context() -> bool {
-    std::env::var("COMP_LINE").is_ok()
-        || std::env::var("COMP_POINT").is_ok()
-        || std::env::var("COMP_TYPE").is_ok()
-}
-
-#[allow(dead_code)]
-fn parse_file_with_line_range(file_arg: &str) -> (String, Option<(u32, u32)>) {
-    if let Some(colon_pos) = file_arg.rfind(':') {
-        let file_path = file_arg[..colon_pos].to_string();
-        let range_part = &file_arg[colon_pos + 1..];
-
-        if let Some(dash_pos) = range_part.find('-') {
-            // Range format: start-end
-            let start_str = &range_part[..dash_pos];
-            let end_str = &range_part[dash_pos + 1..];
-
-            if let (Ok(start), Ok(end)) = (start_str.parse::<u32>(), end_str.parse::<u32>()) {
-                return (file_path, Some((start, end)));
-            }
-        } else {
-            // Single line format: line
-            if let Ok(line) = range_part.parse::<u32>() {
-                return (file_path, Some((line, line)));
-            }
-        }
-    }
-    (file_arg.to_string(), None)
-}
-
 fn is_push_option_with_inline_value(arg: &str) -> Option<(&str, &str)> {
     if let Some((flag, value)) = arg.split_once('=') {
         Some((flag, value))

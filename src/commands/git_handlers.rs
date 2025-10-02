@@ -1,8 +1,47 @@
 use crate::config;
 use crate::git::cli_parser::parse_git_cli_args;
 #[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicI32, Ordering};
+
+#[cfg(unix)]
+static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
+
+#[cfg(unix)]
+extern "C" fn forward_signal_handler(sig: libc::c_int) {
+    let pgid = CHILD_PGID.load(Ordering::Relaxed);
+    if pgid > 0 {
+        unsafe {
+            // Send to the whole child process group
+            let _ = libc::kill(-pgid, sig);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn install_forwarding_handlers() {
+    unsafe {
+        let handler = forward_signal_handler as usize;
+        let _ = libc::signal(libc::SIGTERM, handler);
+        let _ = libc::signal(libc::SIGINT, handler);
+        let _ = libc::signal(libc::SIGHUP, handler);
+        let _ = libc::signal(libc::SIGQUIT, handler);
+    }
+}
+
+#[cfg(unix)]
+fn uninstall_forwarding_handlers() {
+    unsafe {
+        let _ = libc::signal(libc::SIGTERM, libc::SIG_DFL);
+        let _ = libc::signal(libc::SIGINT, libc::SIG_DFL);
+        let _ = libc::signal(libc::SIGHUP, libc::SIG_DFL);
+        let _ = libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+    }
+}
 
 pub fn handle_git(args: &[String]) {
     // If we're being invoked from a shell completion context, bypass git-ai logic
@@ -17,7 +56,7 @@ pub fn handle_git(args: &[String]) {
     // println!("command: {:?}", parsed_args.command);
     // println!("global_args: {:?}", parsed_args.global_args);
     // println!("command_args: {:?}", parsed_args.command_args);
-    reset_sigpipe_to_default();
+    // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
     // TODO Pre-command hooks
     let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
     // TODO Post-command hooks
@@ -28,10 +67,88 @@ fn proxy_to_git(args: &[String], exit_on_completion: bool) -> std::process::Exit
     // debug_log(&format!("proxying to git with args: {:?}", args));
     // debug_log(&format!("prepended global args: {:?}", prepend_global(args)));
     // Use spawn for interactive commands
-    let child = Command::new(config::Config::get().git_cmd())
-        .args(args)
-        .spawn();
+    let child = {
+        #[cfg(unix)]
+        {
+            // Only create a new process group for non-interactive runs.
+            // If stdin is a TTY, the child must remain in the foreground
+            // terminal process group to avoid SIGTTIN/SIGTTOU hangs.
+            let is_interactive = unsafe { libc::isatty(libc::STDIN_FILENO) == 1 };
+            let should_setpgid = !is_interactive;
 
+            let mut cmd = Command::new(config::Config::get().git_cmd());
+            cmd.args(args);
+            unsafe {
+                let setpgid_flag = should_setpgid;
+                cmd.pre_exec(move || {
+                    if setpgid_flag {
+                        // Make the child its own process group leader so we can signal the group
+                        let _ = libc::setpgid(0, 0);
+                    }
+                    Ok(())
+                });
+            }
+            // We return both the spawned child and whether we changed PGID
+            match cmd.spawn() {
+                Ok(child) => Ok((child, should_setpgid)),
+                Err(e) => Err(e),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Command::new(config::Config::get().git_cmd())
+                .args(args)
+                .spawn()
+        }
+    };
+
+    #[cfg(unix)]
+    match child {
+        Ok((mut child, setpgid)) => {
+            #[cfg(unix)]
+            {
+                if setpgid {
+                    // Record the child's process group id (same as its pid after setpgid)
+                    let pgid: i32 = child.id() as i32;
+                    CHILD_PGID.store(pgid, Ordering::Relaxed);
+                    install_forwarding_handlers();
+                }
+            }
+            let status = child.wait();
+            match status {
+                Ok(status) => {
+                    #[cfg(unix)]
+                    {
+                        if setpgid {
+                            CHILD_PGID.store(0, Ordering::Relaxed);
+                            uninstall_forwarding_handlers();
+                        }
+                    }
+                    if exit_on_completion {
+                        exit_with_status(status);
+                    }
+                    return status;
+                }
+                Err(e) => {
+                    #[cfg(unix)]
+                    {
+                        if setpgid {
+                            CHILD_PGID.store(0, Ordering::Relaxed);
+                            uninstall_forwarding_handlers();
+                        }
+                    }
+                    eprintln!("Failed to wait for git process: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to execute git command: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(unix))]
     match child {
         Ok(mut child) => {
             let status = child.wait();
@@ -52,14 +169,6 @@ fn proxy_to_git(args: &[String], exit_on_completion: bool) -> std::process::Exit
             eprintln!("Failed to execute git command: {}", e);
             std::process::exit(1);
         }
-    }
-}
-
-// Ensure SIGPIPE default action, even if inherited ignored from a parent shell
-fn reset_sigpipe_to_default() {
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 }
 

@@ -12,7 +12,6 @@ and produces:
 
 import argparse
 import datetime
-import glob
 import os
 import re
 import shlex
@@ -20,14 +19,16 @@ import stat
 import subprocess
 import sys
 import hashlib
+import csv
 from typing import Dict, List, Set, Tuple
 
 DEFAULT_STANDARD = "/opt/homebrew/bin"
 DEFAULT_GITAI = "/Users/svarlamov/projects/git-ai/target/gitwrap/bin"
-DEFAULT_PATTERN = "t[0-9]*ack.sh"  # Test filter pattern
+DEFAULT_PATTERN = "t[0-9]*.sh"  # Test filter pattern
 GIT_TESTS_DIR = "/Users/svarlamov/projects/git/t"
 REPORT_PATH = "./tests/git-compat/report.txt"
 RERUN_PATH = "./tests/git-compat/re-run-failed.sh"
+WHITELIST_PATH = "./tests/git-compat/whitelist.csv"
 
 def compute_standard_cache_path() -> str:
     """Compute cache file path for the standard git run based on defaults.
@@ -204,6 +205,49 @@ def compute_diff(
     return diff
 
 
+def load_whitelist(path: str) -> Dict[str, Set[int]]:
+    """Load whitelist CSV mapping test script -> set of subtest indices to ignore.
+    Expects header with columns including 'file' and 'test' (or 'tests').
+    The 'test(s)' field may contain comma/range lists like '1-3, 5, 8'.
+    """
+    whitelist: Dict[str, Set[int]] = {}
+    if not os.path.exists(path):
+        return whitelist
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                file_key = (row.get("file") or "").strip().strip('"')
+                tests_field = (row.get("test") or row.get("tests") or "").strip().strip('"')
+                if not file_key or not tests_field:
+                    continue
+                indices = parse_failed_indices_list(tests_field)
+                if not indices:
+                    continue
+                whitelist.setdefault(file_key, set()).update(indices)
+    except Exception as e:
+        print(f"[!] Failed to read whitelist {path}: {e}")
+    return whitelist
+
+
+def apply_whitelist(diff: Dict[str, List[int]], whitelist: Dict[str, Set[int]]) -> Dict[str, List[int]]:
+    """Filter out any diff entries that are whitelisted.
+    If a test has all its failing indices whitelisted, drop it from the diff entirely.
+    """
+    if not whitelist:
+        return diff
+    filtered: Dict[str, List[int]] = {}
+    for test_name, indices in diff.items():
+        wl = whitelist.get(test_name)
+        if wl:
+            remaining = [i for i in indices if i not in wl]
+        else:
+            remaining = list(indices)
+        if remaining:
+            filtered[test_name] = remaining
+    return filtered
+
+
 def write_rerun_script(diff: Dict[str, List[int]], git_ai_path: str) -> None:
     """Create ./re-run-failed.sh with one command per impacted test."""
     lines = [
@@ -264,6 +308,9 @@ def main():
     ai_fail = parse_failures(ai_summary)
 
     diff = compute_diff(ai_fail, std_fail)
+    whitelist = load_whitelist(WHITELIST_PATH)
+    if whitelist:
+        diff = apply_whitelist(diff, whitelist)
     write_rerun_script(diff, args.gitai)
 
     # Build a concise report
