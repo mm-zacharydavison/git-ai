@@ -1,11 +1,11 @@
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
-use crate::git::refs::{delete_reference, put_reference};
+use crate::git::refs::put_reference;
+use crate::git::repo_storage::RepoStorage;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
 use git2::Repository;
-use serde_json;
 
 pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, AuthorshipLog), GitAiError> {
     // Get the current commit SHA (the commit that was just made)
@@ -44,8 +44,12 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
         Err(_) => "initial".to_string(), // No parent commit found, use "initial" like in checkpoint.rs
     };
 
+    // Initialize the new storage system
+    let repo_storage = RepoStorage::for_repo_path(repo.path());
+    let working_log = repo_storage.working_log_for_base_commit(&parent_sha);
+
     // Pull all working log entries from the parent commit
-    let parent_working_log = get_working_log(repo, &parent_sha)?;
+    let parent_working_log = working_log.read_all_checkpoints()?;
 
     // Filter out untracked files from the working log
     let mut filtered_working_log = filter_untracked_files(repo, &parent_working_log)?;
@@ -97,11 +101,12 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
         commit_sha
     ));
 
-    // Delete the working log after successfully creating the authorship log
-    let working_log_ref = format!("ai-working-log/{}", parent_sha);
-    delete_reference(repo, &working_log_ref)?;
+    repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
 
-    debug_log(&format!("Working log deleted: refs/{}", working_log_ref));
+    debug_log(&format!(
+        "Working log deleted for base commit: {}",
+        parent_sha
+    ));
 
     Ok((ref_name, authorship_log))
 }
@@ -158,16 +163,4 @@ fn filter_untracked_files(
     }
 
     Ok(filtered_checkpoints)
-}
-
-fn get_working_log(repo: &Repository, base_commit: &str) -> Result<Vec<Checkpoint>, GitAiError> {
-    use crate::git::refs::get_reference;
-
-    match get_reference(repo, &format!("ai-working-log/{}", base_commit)) {
-        Ok(content) => {
-            let working_log: Vec<Checkpoint> = serde_json::from_str(&content)?;
-            Ok(working_log)
-        }
-        Err(_) => Ok(Vec::new()), // No working log exists yet
-    }
 }

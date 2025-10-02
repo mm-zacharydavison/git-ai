@@ -6,7 +6,6 @@ use serde_json;
 use std::fs;
 
 pub const AI_AUTHORSHIP_REFSPEC: &str = "+refs/ai/authorship/*:refs/ai/authorship/*";
-pub const DEFAULT_REFSPEC: &str = "+refs/heads/*:refs/heads/*";
 
 ///
 pub fn put_reference(
@@ -84,6 +83,7 @@ pub fn get_reference_as_authorship_log_v3(
     Ok(authorship_log)
 }
 
+#[allow(dead_code)]
 pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
     let full_ref_name = format!("refs/{}", ref_name);
 

@@ -1,14 +1,10 @@
-use git_ai::tmp_repo::TmpRepo;
+use git_ai::git::test_utils::TmpRepo;
 use insta::assert_debug_snapshot;
-use tempfile::tempdir;
 
 #[test]
 fn test_blame_after_merge_with_ai_contributions() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
     // Create initial repository with base commit
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
 
     // Create a feature branch
     tmp_repo.create_branch("feature").unwrap();
@@ -85,11 +81,8 @@ fn test_blame_after_merge_with_ai_contributions() {
 
 #[test]
 fn test_blame_after_complex_merge_scenario() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
     // Create initial repository with base commit
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
 
     // Create multiple branches
     tmp_repo.create_branch("feature-a").unwrap();
@@ -185,11 +178,8 @@ fn test_blame_after_complex_merge_scenario() {
 
 #[test]
 fn test_blame_after_merge_conflict_resolution() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
     // Create initial repository with base commit
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
 
     // Create a feature branch
     tmp_repo.create_branch("feature").unwrap();

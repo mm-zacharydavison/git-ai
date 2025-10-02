@@ -1,8 +1,7 @@
 use git_ai::config;
-use git_ai::tmp_repo::TmpRepo;
+use git_ai::git::test_utils::TmpRepo;
 use std::collections::BTreeMap;
 use std::process::Command;
-use tempfile::tempdir;
 
 // Helper function to run git blame and capture output
 fn run_git_blame(repo_path: &std::path::Path, file_path: &str, args: &[&str]) -> String {
@@ -207,10 +206,7 @@ fn create_blame_comparison(
 
 #[test]
 fn test_blame_basic_format() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo
         .write_file("test.txt", "Line 1\nLine 2\n", true)
         .unwrap();
@@ -224,8 +220,8 @@ fn test_blame_basic_format() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &[]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &[]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &[]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &[]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "basic_format");
 
@@ -242,10 +238,7 @@ fn test_blame_basic_format() {
 
 #[test]
 fn test_blame_line_range() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo
         .write_file("test.txt", "Line 1\nLine 2\nLine 3\nLine 4\n", true)
         .unwrap();
@@ -260,8 +253,8 @@ fn test_blame_line_range() {
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     // Test -L flag
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-L", "2,4"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-L", "2,4"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-L", "2,4"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-L", "2,4"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "line_range");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -276,10 +269,7 @@ fn test_blame_line_range() {
 
 #[test]
 fn test_blame_porcelain_format() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -291,8 +281,8 @@ fn test_blame_porcelain_format() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["--porcelain"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--porcelain"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--porcelain"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--porcelain"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "porcelain_format");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -307,10 +297,7 @@ fn test_blame_porcelain_format() {
 
 #[test]
 fn test_blame_show_email() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -322,8 +309,8 @@ fn test_blame_show_email() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-e"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-e"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-e"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-e"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_email");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -345,10 +332,7 @@ fn test_blame_show_email() {
 
 #[test]
 fn test_blame_show_name() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -360,8 +344,8 @@ fn test_blame_show_name() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-f"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-f"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-f"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-f"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_name");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -386,10 +370,7 @@ fn test_blame_show_name() {
 
 #[test]
 fn test_blame_show_number() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -401,8 +382,8 @@ fn test_blame_show_number() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-n"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-n"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-n"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-n"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_number");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -417,10 +398,7 @@ fn test_blame_show_number() {
 
 #[test]
 fn test_blame_suppress_author() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -432,8 +410,8 @@ fn test_blame_suppress_author() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-s"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-s"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-s"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-s"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "suppress_author");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -458,10 +436,7 @@ fn test_blame_suppress_author() {
 
 #[test]
 fn test_blame_long_rev() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -473,8 +448,8 @@ fn test_blame_long_rev() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-l"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-l"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-l"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-l"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "long_rev");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -510,10 +485,7 @@ fn test_blame_long_rev() {
 
 #[test]
 fn test_blame_raw_timestamp() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -525,8 +497,8 @@ fn test_blame_raw_timestamp() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-t"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-t"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-t"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-t"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "raw_timestamp");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -551,10 +523,7 @@ fn test_blame_raw_timestamp() {
 
 #[test]
 fn test_blame_abbrev() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -566,8 +535,8 @@ fn test_blame_abbrev() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["--abbrev", "4"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--abbrev", "4"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--abbrev", "4"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--abbrev", "4"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "abbrev");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -582,10 +551,7 @@ fn test_blame_abbrev() {
 
 #[test]
 fn test_blame_blank_boundary() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -597,8 +563,8 @@ fn test_blame_blank_boundary() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-b"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-b"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-b"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-b"]);
 
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
@@ -612,10 +578,7 @@ fn test_blame_blank_boundary() {
 
 #[test]
 fn test_blame_show_root() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -627,8 +590,8 @@ fn test_blame_show_root() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["--root"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--root"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--root"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--root"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_root");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -656,7 +619,7 @@ fn test_blame_show_root() {
 //     let tmp_dir = tempdir().unwrap();
 //     let repo_path = tmp_dir.path().to_path_buf();
 
-//     let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+//     let tmp_repo = TmpRepo::new().unwrap();
 //     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
 //     tmp_repo
@@ -666,8 +629,8 @@ fn test_blame_show_root() {
 //     tmp_repo.trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor")).unwrap();
 //     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-//     let git_output = run_git_blame(&repo_path, "test.txt", &["--show-stats"]);
-//     let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--show-stats"]);
+//     let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--show-stats"]);
+//     let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--show-stats"]);
 
 //     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_stats");
 //     let git_norm = normalize_for_snapshot(&git_output);
@@ -691,10 +654,7 @@ fn test_blame_show_root() {
 // }
 #[test]
 fn test_blame_date_format() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -706,8 +666,8 @@ fn test_blame_date_format() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["--date", "short"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--date", "short"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--date", "short"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--date", "short"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "date_format");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -729,10 +689,7 @@ fn test_blame_date_format() {
 
 #[test]
 fn test_blame_multiple_flags() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo
         .write_file("test.txt", "Line 1\nLine 2\nLine 3\n", true)
         .unwrap();
@@ -747,8 +704,8 @@ fn test_blame_multiple_flags() {
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
     // Test multiple flags together
-    let git_output = run_git_blame(&repo_path, "test.txt", &["-L", "2,4", "-e", "-n"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["-L", "2,4", "-e", "-n"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-L", "2,4", "-e", "-n"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-L", "2,4", "-e", "-n"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "multiple_flags");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -780,10 +737,7 @@ fn test_blame_multiple_flags() {
 
 #[test]
 fn test_blame_incremental_format() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -795,8 +749,8 @@ fn test_blame_incremental_format() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["--incremental"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--incremental"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--incremental"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--incremental"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "incremental_format");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -811,10 +765,7 @@ fn test_blame_incremental_format() {
 
 #[test]
 fn test_blame_line_porcelain() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     tmp_repo
@@ -826,8 +777,8 @@ fn test_blame_line_porcelain() {
         .unwrap();
     tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &["--line-porcelain"]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &["--line-porcelain"]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--line-porcelain"]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--line-porcelain"]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "line_porcelain");
     let git_norm = normalize_for_snapshot(&git_output);
@@ -842,10 +793,7 @@ fn test_blame_line_porcelain() {
 
 #[test]
 fn test_blame_with_ai_authorship() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
 
     // First commit by human
@@ -870,8 +818,8 @@ fn test_blame_with_ai_authorship() {
         .commit_with_message("Mixed authorship commit")
         .unwrap();
 
-    let git_output = run_git_blame(&repo_path, "test.txt", &[]);
-    let git_ai_output = run_git_ai_blame(&repo_path, "test.txt", &[]);
+    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &[]);
+    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &[]);
 
     let _comparison = create_blame_comparison(&git_output, &git_ai_output, "ai_authorship");
     let git_norm = normalize_for_snapshot(&git_output);

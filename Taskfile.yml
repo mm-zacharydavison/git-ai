@@ -10,15 +10,32 @@ tasks:
       - Cargo.toml
     generates:
       - target/release/git-ai-cli
+  build-debug:
+    desc: Build the project in debug mode (native Apple Silicon)
+    cmds:
+      - cargo build
+    sources:
+      - src/**/*.rs
+      - Cargo.toml
+    generates:
+      - target/debug/git-ai-cli
   clean:
     desc: Clean build artifacts
     cmds:
       - cargo clean
+
   release:local:
     desc: Build release and install to user bin directory
     deps: [build]
     cmds:
       - cp target/release/git-ai ~/.local/bin/git-ai
+      - chmod +x ~/.local/bin/git-ai
+
+  debug:local:
+    desc: Build release and install to user bin directory
+    deps: [build-debug]
+    cmds:
+      - cp target/debug/git-ai ~/.local/bin/git-ai
       - chmod +x ~/.local/bin/git-ai
 
   # Extensions

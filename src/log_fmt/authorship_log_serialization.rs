@@ -994,29 +994,24 @@ mod tests {
 
         // Create working log entries
         // First checkpoint: add 10 lines (single line + range of 9)
-        let entry1 =
-            WorkingLogEntry::new("src/test.rs".to_string(), vec![Line::Range(1, 10)], vec![]);
-        let mut checkpoint1 = Checkpoint::new(
-            "abc123".to_string(),
-            "".to_string(),
-            "ai".to_string(),
-            vec![entry1],
+        let entry1 = WorkingLogEntry::new(
+            "src/test.rs".to_string(),
+            "blob_sha_1".to_string(),
+            vec![Line::Range(1, 10)],
+            vec![],
         );
+        let mut checkpoint1 = Checkpoint::new("".to_string(), "ai".to_string(), vec![entry1]);
         checkpoint1.agent_id = Some(agent_id.clone());
         checkpoint1.transcript = Some(transcript.clone());
 
         // Second checkpoint: delete 3 lines, add 5 lines (modified some lines)
         let entry2 = WorkingLogEntry::new(
             "src/test.rs".to_string(),
+            "blob_sha_2".to_string(),
             vec![Line::Range(5, 9)], // 5 added lines
             vec![Line::Range(5, 7)], // 3 deleted lines
         );
-        let mut checkpoint2 = Checkpoint::new(
-            "def456".to_string(),
-            "".to_string(),
-            "ai".to_string(),
-            vec![entry2],
-        );
+        let mut checkpoint2 = Checkpoint::new("".to_string(), "ai".to_string(), vec![entry2]);
         checkpoint2.agent_id = Some(agent_id.clone());
         checkpoint2.transcript = Some(transcript);
 
