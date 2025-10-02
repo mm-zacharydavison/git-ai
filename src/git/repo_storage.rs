@@ -168,16 +168,15 @@ impl PersistedWorkingLog {
 #[cfg(test)]
 mod tests {
 
+    use crate::git::test_utils::TmpRepo;
+
     use super::*;
-    // agents! ignore lint error here. It works when tests running
-    use crate::tmp_repo::TmpRepo;
     use std::fs;
 
     #[test]
     fn test_ensure_config_directory_creates_structure() {
         // Create a temporary repository
-        let tmp_dir = std::env::temp_dir().join("test_repo_config");
-        let tmp_repo = TmpRepo::new(tmp_dir.clone()).expect("Failed to create tmp repo");
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage
         let _repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
@@ -210,8 +209,7 @@ mod tests {
     #[test]
     fn test_ensure_config_directory_handles_existing_files() {
         // Create a temporary repository
-        let tmp_dir = std::env::temp_dir().join("test_repo_config_existing");
-        let tmp_repo = TmpRepo::new(tmp_dir.clone()).expect("Failed to create tmp repo");
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage
         let repo_storage = RepoStorage::for_repo_path(&tmp_repo.repo().path());
@@ -245,8 +243,7 @@ mod tests {
     #[test]
     fn test_persisted_working_log_blob_storage() {
         // Create a temporary repository
-        let tmp_dir = std::env::temp_dir().join("test_persisted_working_log_blobs");
-        let tmp_repo = TmpRepo::new(tmp_dir.clone()).expect("Failed to create tmp repo");
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
         let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
@@ -287,8 +284,7 @@ mod tests {
     #[test]
     fn test_persisted_working_log_checkpoint_storage() {
         // Create a temporary repository
-        let tmp_dir = std::env::temp_dir().join("test_persisted_working_log_checkpoints");
-        let tmp_repo = TmpRepo::new(tmp_dir.clone()).expect("Failed to create tmp repo");
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
         let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
@@ -311,6 +307,8 @@ mod tests {
         let checkpoints = working_log
             .read_all_checkpoints()
             .expect("Failed to read checkpoints");
+
+        println!("checkpoints: {:?}", checkpoints);
 
         assert_eq!(checkpoints.len(), 1, "Should have one checkpoint");
         assert_eq!(checkpoints[0].snapshot, "test-snapshot");
@@ -343,8 +341,7 @@ mod tests {
     #[test]
     fn test_persisted_working_log_reset() {
         // Create a temporary repository
-        let tmp_dir = std::env::temp_dir().join("test_persisted_working_log_reset");
-        let tmp_repo = TmpRepo::new(tmp_dir.clone()).expect("Failed to create tmp repo");
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
         let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
@@ -412,8 +409,7 @@ mod tests {
     #[test]
     fn test_working_log_for_base_commit_creates_directory() {
         // Create a temporary repository
-        let tmp_dir = std::env::temp_dir().join("test_working_log_directory_creation");
-        let tmp_repo = TmpRepo::new(tmp_dir.clone()).expect("Failed to create tmp repo");
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage
         let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());

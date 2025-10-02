@@ -8,6 +8,38 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+// Simple Linear Congruential Generator for generating random temporary directory names
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new() -> Self {
+        // Use current time as seed
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        Self { state: seed }
+    }
+
+    fn next(&mut self) -> u64 {
+        // LCG parameters: a = 1664525, c = 1013904223, m = 2^32
+        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+        self.state
+    }
+
+    fn gen_random_string(&mut self, len: usize) -> String {
+        const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let mut result = String::with_capacity(len);
+        for _ in 0..len {
+            let idx = (self.next() % CHARS.len() as u64) as usize;
+            result.push(CHARS[idx] as char);
+        }
+        result
+    }
+}
+
 pub struct TmpFile {
     repo: TmpRepo,
     filename: String,
@@ -229,8 +261,13 @@ pub struct TmpRepo {
 }
 
 impl TmpRepo {
-    /// Creates a new temporary repository at the given path
-    pub fn new(tmp_dir: PathBuf) -> Result<Self, GitAiError> {
+    /// Creates a new temporary repository with a randomly generated directory
+    pub fn new() -> Result<Self, GitAiError> {
+        // Generate a random temporary directory path using our simple RNG
+        let mut rng = SimpleRng::new();
+        let random_suffix = rng.gen_random_string(8);
+        let tmp_dir = std::env::temp_dir().join(format!("git-ai-tmp-{}", random_suffix));
+
         // Create the directory if it doesn't exist
         fs::create_dir_all(&tmp_dir)?;
 
@@ -249,8 +286,8 @@ impl TmpRepo {
         })
     }
 
-    pub fn new_with_base_commit(tmp_dir: PathBuf) -> Result<(Self, TmpFile, TmpFile), GitAiError> {
-        let repo = TmpRepo::new(tmp_dir)?;
+    pub fn new_with_base_commit() -> Result<(Self, TmpFile, TmpFile), GitAiError> {
+        let repo = TmpRepo::new()?;
         let lines_file = repo.write_file("lines.md", LINES, true)?;
         let alphabet_file = repo.write_file("alphabet.md", ALPHABET, true)?;
         repo.trigger_checkpoint_with_author("test_user")?;

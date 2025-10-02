@@ -1,14 +1,9 @@
-use git_ai::tmp_repo::TmpRepo;
+use git_ai::git::test_utils::TmpRepo;
 use insta::assert_debug_snapshot;
-use tempfile::tempdir;
 
 #[test]
 fn test_simple_additions_empty_repo() {
-    // Create a temporary directory
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     let mut file = tmp_repo.write_file("test.txt", "Line1\n", true).unwrap();
 
@@ -30,10 +25,7 @@ fn test_simple_additions_empty_repo() {
 
 #[test]
 fn test_simple_additions_with_base_commit() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
 
     lines
         .append("NEW LINEs From Claude!\nHello\nWorld\n")
@@ -52,10 +44,7 @@ fn test_simple_additions_with_base_commit() {
 
 #[test]
 fn test_simple_additions_on_top_of_ai_contributions() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit(repo_path.clone()).unwrap();
+    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
 
     lines
         .append("NEW LINEs From Claude!\nHello\nWorld\n")
@@ -81,10 +70,7 @@ fn test_simple_additions_on_top_of_ai_contributions() {
 
 #[test]
 fn test_simple_additions_new_file_not_git_added() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Create a new file that hasn't been git added yet
     let mut file = tmp_repo
@@ -118,10 +104,7 @@ fn test_simple_additions_new_file_not_git_added() {
 
 #[test]
 fn test_ai_adds_then_human_deletes_and_replaces() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -158,10 +141,7 @@ fn test_ai_adds_then_human_deletes_and_replaces() {
 
 #[test]
 fn test_ai_adds_middle_then_human_deletes_and_replaces() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -197,10 +177,7 @@ fn test_ai_adds_middle_then_human_deletes_and_replaces() {
 
 #[test]
 fn test_multiple_ai_checkpoints_with_human_deletions() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -241,10 +218,7 @@ fn test_multiple_ai_checkpoints_with_human_deletions() {
 
 #[test]
 fn test_ai_adds_then_human_deletes_all_ai_lines() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -279,10 +253,7 @@ fn test_ai_adds_then_human_deletes_all_ai_lines() {
 
 #[test]
 fn test_human_adds_then_ai_modifies_then_human_deletes() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -324,10 +295,7 @@ fn test_human_adds_then_ai_modifies_then_human_deletes() {
 
 #[test]
 fn test_complex_mixed_additions_and_deletions() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo.write_file("complex.ts", "start\n", true).unwrap();
@@ -377,10 +345,7 @@ fn test_complex_mixed_additions_and_deletions() {
 
 #[test]
 fn test_ai_adds_then_human_deletes_all_with_empty_replacement() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -418,10 +383,7 @@ fn test_ai_adds_then_human_deletes_all_with_empty_replacement() {
 
 #[test]
 fn test_ai_adds_lines_and_human_deletes_most_of_them() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -465,10 +427,7 @@ fn test_ai_adds_lines_and_human_deletes_most_of_them() {
 
 #[test]
 fn test_ai_prepending_lines() {
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -506,10 +465,7 @@ fn test_ai_prepending_lines() {
 fn test_duplicate_prompt_entries_bug() {
     // This test reproduces the bug where the same AI session creates multiple
     // separate attestation entries instead of consolidating them
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     // Start with a base file
     let mut file = tmp_repo
@@ -572,10 +528,7 @@ fn test_duplicate_prompt_entries_bug() {
 fn test_ai_human_interleaved_line_attribution() {
     // This test checks that line ranges are correctly attributed when
     // AI and human alternate making changes
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
 
     let mut file = tmp_repo.write_file("file.txt", "", true).unwrap();
 
@@ -633,10 +586,7 @@ fn test_ai_human_interleaved_line_attribution() {
 #[test]
 fn test_simple_ai_then_human_deletion() {
     // Simplified test: AI adds 3 lines, human deletes the middle one
-    let tmp_dir = tempdir().unwrap();
-    let repo_path = tmp_dir.path().to_path_buf();
-
-    let tmp_repo = TmpRepo::new(repo_path.clone()).unwrap();
+    let tmp_repo = TmpRepo::new().unwrap();
     let mut file = tmp_repo.write_file("file.txt", "", true).unwrap();
 
     // AI adds 3 lines (lines 1-3: ai1, ai2, ai3)
