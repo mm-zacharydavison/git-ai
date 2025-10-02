@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -x
+set -euo pipefail
 
 mkdir -p ./target/gitwrap/bin
 
@@ -13,4 +13,4 @@ echo "1. Remove any artifacts from running 'install.sh'"
 echo "2. Remove any aliases to git"
 echo "3. Add the following to your shell profile:"
 echo "# git-ai local dev"
-echo "export PATH=\"/Users/svarlamov/projects/git-ai/target/gitwrap/bin:\$PATH\""
+echo "export PATH=\"$(pwd)/target/gitwrap/bin:\$PATH\""
