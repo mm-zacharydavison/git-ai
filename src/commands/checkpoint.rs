@@ -268,16 +268,8 @@ fn save_current_file_states(
             String::new()
         };
 
-        debug_log(&format!(
-            "[SAVE] File: {}, Content length: {}, Content: {:?}",
-            file_path,
-            content.len(),
-            content
-        ));
-
         // Persist the file content and get the content hash
         let content_hash = working_log.persist_file_version(&content)?;
-        debug_log(&format!("[SAVE] Generated hash: {}", content_hash));
         file_content_hashes.insert(file_path.clone(), content_hash);
     }
 
@@ -397,15 +389,8 @@ fn get_subsequent_checkpoint_entries(
 
     // Get the file version mapping from the previous checkpoint
     let previous_file_hashes = if let Some(prev_commit) = previous_commit {
-        debug_log(&format!(
-            "Looking up file version mapping for previous commit: {}",
-            prev_commit
-        ));
-        let mapping = working_log.get_file_version_mapping(prev_commit)?;
-        debug_log(&format!("Found {} file mappings", mapping.len()));
-        mapping
+        working_log.get_file_version_mapping(prev_commit)?
     } else {
-        debug_log("No previous commit, using empty mapping");
         HashMap::new()
     };
 
@@ -415,31 +400,15 @@ fn get_subsequent_checkpoint_entries(
         // Read the previous content from the blob storage using the previous checkpoint's content hash
         let previous_content = if let Some(prev_content_hash) = previous_file_hashes.get(file_path)
         {
-            debug_log(&format!(
-                "Found previous content hash for {}: {}",
-                file_path, prev_content_hash
-            ));
             working_log
                 .get_file_version(prev_content_hash)
                 .unwrap_or_default()
         } else {
-            debug_log(&format!("No previous content hash found for {}", file_path));
             String::new() // No previous version, treat as empty
         };
 
         // Read current content directly from the file system
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
-
-        debug_log(&format!(
-            "File: {}, Previous content length: {}, Current content length: {}",
-            file_path,
-            previous_content.len(),
-            current_content.len()
-        ));
-        debug_log(&format!("File path: {:?}", abs_path));
-        debug_log(&format!("File exists: {}", abs_path.exists()));
-        debug_log(&format!("Previous content: {:?}", previous_content));
-        debug_log(&format!("Current content: {:?}", current_content));
 
         // Normalize by ensuring trailing newline to avoid off-by-one when appending lines
         let prev_norm = if previous_content.ends_with('\n') {

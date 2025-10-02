@@ -6,6 +6,7 @@ mod log_fmt;
 mod utils;
 
 use clap::Parser;
+use git_ai::utils::debug_log;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -30,14 +31,13 @@ fn main() {
         })
         .unwrap_or("git-ai".to_string());
 
+    debug_log(&format!("calling {:?}", &binary_name));
+
     let cli = Cli::parse();
     if binary_name == "git-ai" {
         commands::git_ai_handlers::handle_git_ai(&cli.args);
         std::process::exit(0);
     }
-
-    // debug_log(&format!("in main, command: {}", command));
-    // debug_log(&format!("in main, args: {:?}", positional_args));
 
     commands::git_handlers::handle_git(&cli.args);
 }
