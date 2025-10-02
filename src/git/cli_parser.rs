@@ -46,38 +46,6 @@ impl ParsedGitInvocation {
         v.extend(self.command_args.iter().cloned());
         v
     }
-
-    /// Convenience: return a shell-safe single-line string suitable for logging or
-    /// re-running in POSIX-y shells. (This quotes conservatively.)
-    /// If you want Windows/PowerShell quoting too, I can add a sibling helper.
-    pub fn to_shell_line(&self) -> String {
-        fn sh_quote(s: &str) -> String {
-            // allow a common safe subset unquoted
-            if !s.is_empty()
-                && s.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+,=~".contains(c))
-            {
-                s.to_string()
-            } else {
-                // POSIX single-quote, with embedded ' escaped as: '\''
-                let mut out = String::from("'");
-                for ch in s.chars() {
-                    if ch == '\'' {
-                        out.push_str("'\\''");
-                    } else {
-                        out.push(ch);
-                    }
-                }
-                out.push('\'');
-                out
-            }
-        }
-        self.to_invocation_vec()
-            .into_iter()
-            .map(|t| sh_quote(&t))
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
 }
 
 pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
@@ -413,4 +381,8 @@ pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
         saw_end_of_opts,
         is_help,
     }
+}
+
+pub fn is_dry_run(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--dry-run")
 }

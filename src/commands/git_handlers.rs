@@ -1,5 +1,8 @@
+use crate::commands::commit_hooks;
+use crate::commands::fetch_hooks;
+use crate::commands::push_hooks;
 use crate::config;
-use crate::git::cli_parser::parse_git_cli_args;
+use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
@@ -57,10 +60,35 @@ pub fn handle_git(args: &[String]) {
     // println!("global_args: {:?}", parsed_args.global_args);
     // println!("command_args: {:?}", parsed_args.command_args);
     // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
-    // TODO Pre-command hooks
+    if !parsed_args.is_help {
+        run_pre_command_hooks(&parsed_args);
+    }
     let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
-    // TODO Post-command hooks
+    if !parsed_args.is_help {
+        run_post_command_hooks(&parsed_args, exit_status);
+    }
     exit_with_status(exit_status);
+}
+
+fn run_pre_command_hooks(parsed_args: &ParsedGitInvocation) {
+    // Pre-command hooks
+    match parsed_args.command.as_deref() {
+        Some("commit") => commit_hooks::commit_pre_command_hook(parsed_args),
+        _ => {}
+    }
+}
+
+fn run_post_command_hooks(
+    parsed_args: &ParsedGitInvocation,
+    exit_status: std::process::ExitStatus,
+) {
+    // Post-command hooks
+    match parsed_args.command.as_deref() {
+        Some("commit") => commit_hooks::commit_post_command_hook(parsed_args, exit_status),
+        Some("fetch") => fetch_hooks::fetch_post_command_hook(parsed_args, exit_status),
+        Some("push") => push_hooks::push_post_command_hook(parsed_args, exit_status),
+        _ => {}
+    }
 }
 
 fn proxy_to_git(args: &[String], exit_on_completion: bool) -> std::process::ExitStatus {
