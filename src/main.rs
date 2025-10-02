@@ -24,10 +24,26 @@ fn main() {
         .next()
         .and_then(|arg| arg.into_string().ok())
         .and_then(|path| {
-            std::path::Path::new(&path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(|s| s.to_string())
+            // Check if this is a symlink and get the symlink name instead of the target
+            let path_obj = std::path::Path::new(&path);
+            if let Ok(metadata) = std::fs::metadata(path_obj) {
+                if metadata.file_type().is_symlink() {
+                    // If it's a symlink, use the symlink name
+                    path_obj.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|s| s.to_string())
+                } else {
+                    // If it's not a symlink, use the file name as before
+                    path_obj.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|s| s.to_string())
+                }
+            } else {
+                // Fallback to original behavior
+                path_obj.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|s| s.to_string())
+            }
         })
         .unwrap_or("git-ai".to_string());
 
