@@ -1,6 +1,6 @@
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
-use crate::git::refs::{get_reference, put_reference};
+use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::status::{EntryKind, StatusCode, status_porcelainv2};
 use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::utils::debug_log;
@@ -8,7 +8,6 @@ use git2::Repository;
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
-use std::path::Path;
 
 pub fn run(
     repo: &Repository,
@@ -32,25 +31,26 @@ pub fn run(
         Err(_) => "initial".to_string(),
     };
 
-    let files = get_all_tracked_files(repo, &base_commit)?;
-    let mut working_log = if reset {
+    // Initialize the new storage system
+    let repo_storage = RepoStorage::for_repo_path(repo.path());
+    let working_log = repo_storage.working_log_for_base_commit(&base_commit);
+
+    let files = get_all_tracked_files(repo, &base_commit, &working_log)?;
+    let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
+        working_log.reset_working_log()?;
         Vec::new()
     } else {
-        get_or_create_working_log(repo, &base_commit)?
+        working_log.read_all_checkpoints()?
     };
 
-    if reset {
-        clear_working_log_diffs(repo, &base_commit)?;
-    }
-
     if show_working_log {
-        if working_log.is_empty() {
+        if checkpoints.is_empty() {
             debug_log("No working log entries found.");
         } else {
             debug_log("Working Log Entries:");
             debug_log(&format!("{}", "=".repeat(80)));
-            for (i, checkpoint) in working_log.iter().enumerate() {
+            for (i, checkpoint) in checkpoints.iter().enumerate() {
                 debug_log(&format!("Checkpoint {}: {}", i + 1, checkpoint.snapshot));
                 debug_log(&format!("  Diff: {}", checkpoint.diff));
                 debug_log(&format!("  Author: {}", checkpoint.author));
@@ -92,27 +92,20 @@ pub fn run(
                 debug_log("");
             }
         }
-        return Ok((0, files.len(), working_log.len()));
+        return Ok((0, files.len(), checkpoints.len()));
     }
 
     let previous_commit = if reset {
         None
     } else {
-        working_log.last().map(|c| c.snapshot.clone())
+        checkpoints.last().map(|c| c.snapshot.clone())
     };
 
-    let file_hashes: std::collections::HashMap<String, String> = files
-        .iter()
-        .map(|file_path| {
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(file_path.as_bytes());
-            let file_hash = format!("{:x}", hasher.finalize());
-            (file_path.clone(), file_hash)
-        })
-        .collect();
+    // Save current file states and get content hashes
+    let file_content_hashes = save_current_file_states(&working_log, &files)?;
 
     // Order file hashes by key and create a hash of the ordered hashes
-    let mut ordered_hashes: Vec<_> = file_hashes.iter().collect();
+    let mut ordered_hashes: Vec<_> = file_content_hashes.iter().collect();
     ordered_hashes.sort_by_key(|(file_path, _)| *file_path);
 
     let mut combined_hasher = Sha256::new();
@@ -123,15 +116,15 @@ pub fn run(
     let combined_hash = format!("{:x}", combined_hasher.finalize());
 
     // If this is not the first checkpoint, diff against the last saved state
-    let entries = if working_log.is_empty() || reset {
+    let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
         get_initial_checkpoint_entries(repo, &files, &base_commit)?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
-            repo,
+            &working_log,
             &files,
-            &file_hashes,
+            &file_content_hashes,
             previous_commit.as_deref(),
             &base_commit,
         )?
@@ -152,7 +145,9 @@ pub fn run(
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
 
-        working_log.push(checkpoint);
+        // Append checkpoint to the working log with file content hashes
+        working_log.append_checkpoint(&checkpoint, &file_content_hashes)?;
+        checkpoints.push(checkpoint);
     }
 
     let agent_tool = if let Some(agent_run_result) = &agent_run_result {
@@ -160,22 +155,6 @@ pub fn run(
     } else {
         None
     };
-
-    // Use pretty formatting in debug builds, single-line in release builds
-    let working_log_json = if cfg!(debug_assertions) {
-        serde_json::to_string_pretty(&working_log)?
-    } else {
-        serde_json::to_string(&working_log)?
-    };
-
-    put_reference(
-        repo,
-        &format!("ai-working-log/{}", base_commit),
-        &working_log_json,
-        &format!("Checkpoint by {}", author),
-    )?;
-
-    save_current_file_states(repo, &base_commit, &files)?;
 
     // Print summary with new format
     if reset {
@@ -205,7 +184,7 @@ pub fn run(
     }
 
     // Return the requested values: (entries_len, files_len, working_log_len)
-    Ok((entries.len(), files.len(), working_log.len()))
+    Ok((entries.len(), files.len(), checkpoints.len()))
 }
 
 fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
@@ -246,13 +225,17 @@ fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
 }
 
 /// Get all files that should be tracked, including those from previous checkpoints
-fn get_all_tracked_files(repo: &Repository, base_commit: &str) -> Result<Vec<String>, GitAiError> {
+fn get_all_tracked_files(
+    repo: &Repository,
+    _base_commit: &str,
+    working_log: &PersistedWorkingLog,
+) -> Result<Vec<String>, GitAiError> {
     let mut files = get_all_files(repo)?;
 
     // Also include files that were in previous checkpoints but might not show up in git status
     // This ensures we track deletions when files return to their original state
-    if let Ok(working_log) = get_or_create_working_log(repo, base_commit) {
-        for checkpoint in &working_log {
+    if let Ok(checkpoints) = working_log.read_all_checkpoints() {
+        for checkpoint in &checkpoints {
             for entry in &checkpoint.entries {
                 if !files.contains(&entry.file) {
                     // Check if it's a text file before adding
@@ -268,15 +251,13 @@ fn get_all_tracked_files(repo: &Repository, base_commit: &str) -> Result<Vec<Str
 }
 
 fn save_current_file_states(
-    repo: &Repository,
-    base_commit: &str,
+    working_log: &PersistedWorkingLog,
     files: &[String],
 ) -> Result<HashMap<String, String>, GitAiError> {
-    let mut file_hashes = HashMap::new();
+    let mut file_content_hashes = HashMap::new();
 
     for file_path in files {
-        let repo_workdir = repo.workdir().unwrap_or_else(|| Path::new("."));
-        let abs_path = repo_workdir.join(file_path);
+        let abs_path = working_log.repo_root.join(file_path);
         let content = if abs_path.exists() {
             // Read file as bytes first, then convert to string with UTF-8 lossy conversion
             match std::fs::read(&abs_path) {
@@ -287,36 +268,20 @@ fn save_current_file_states(
             String::new()
         };
 
-        // Create a hash for the file name to use as ref name
-        let mut hasher = Sha256::new();
-        hasher.update(file_path.as_bytes());
-        let file_hash = format!("{:x}", hasher.finalize());
+        debug_log(&format!(
+            "[SAVE] File: {}, Content length: {}, Content: {:?}",
+            file_path,
+            content.len(),
+            content
+        ));
 
-        let ref_name = format!("ai-working-log/diffs/{}-{}", base_commit, file_hash);
-        put_reference(
-            repo,
-            &ref_name,
-            &content,
-            &format!("File state for {}", file_path),
-        )?;
-
-        file_hashes.insert(file_path.clone(), file_hash);
+        // Persist the file content and get the content hash
+        let content_hash = working_log.persist_file_version(&content)?;
+        debug_log(&format!("[SAVE] Generated hash: {}", content_hash));
+        file_content_hashes.insert(file_path.clone(), content_hash);
     }
 
-    Ok(file_hashes)
-}
-
-fn get_or_create_working_log(
-    repo: &Repository,
-    base_commit: &str,
-) -> Result<Vec<Checkpoint>, GitAiError> {
-    match get_reference(repo, &format!("ai-working-log/{}", base_commit)) {
-        Ok(content) => {
-            let working_log: Vec<Checkpoint> = serde_json::from_str(&content)?;
-            Ok(working_log)
-        }
-        Err(_) => Ok(Vec::new()), // No working log exists yet
-    }
+    Ok(file_content_hashes)
 }
 
 fn get_initial_checkpoint_entries(
@@ -422,25 +387,59 @@ fn get_initial_checkpoint_entries(
 }
 
 fn get_subsequent_checkpoint_entries(
-    repo: &Repository,
+    working_log: &PersistedWorkingLog,
     files: &[String],
-    file_hashes: &HashMap<String, String>,
-    _previous_commit: Option<&str>,
-    base_commit: &str,
+    _file_content_hashes: &HashMap<String, String>,
+    previous_commit: Option<&str>,
+    _base_commit: &str,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
-    for file_path in files {
-        let repo_workdir = repo.workdir().unwrap();
-        let abs_path = repo_workdir.join(file_path);
+    // Get the file version mapping from the previous checkpoint
+    let previous_file_hashes = if let Some(prev_commit) = previous_commit {
+        debug_log(&format!(
+            "Looking up file version mapping for previous commit: {}",
+            prev_commit
+        ));
+        let mapping = working_log.get_file_version_mapping(prev_commit)?;
+        debug_log(&format!("Found {} file mappings", mapping.len()));
+        mapping
+    } else {
+        debug_log("No previous commit, using empty mapping");
+        HashMap::new()
+    };
 
-        // Read the content from the ai-working-log/diffs reference
-        let file_hash = &file_hashes[file_path];
-        let ref_name = format!("ai-working-log/diffs/{}-{}", base_commit, file_hash);
-        let previous_content = get_reference(repo, &ref_name).unwrap_or_default();
+    for file_path in files {
+        let abs_path = working_log.repo_root.join(file_path);
+
+        // Read the previous content from the blob storage using the previous checkpoint's content hash
+        let previous_content = if let Some(prev_content_hash) = previous_file_hashes.get(file_path)
+        {
+            debug_log(&format!(
+                "Found previous content hash for {}: {}",
+                file_path, prev_content_hash
+            ));
+            working_log
+                .get_file_version(prev_content_hash)
+                .unwrap_or_default()
+        } else {
+            debug_log(&format!("No previous content hash found for {}", file_path));
+            String::new() // No previous version, treat as empty
+        };
 
         // Read current content directly from the file system
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+        debug_log(&format!(
+            "File: {}, Previous content length: {}, Current content length: {}",
+            file_path,
+            previous_content.len(),
+            current_content.len()
+        ));
+        debug_log(&format!("File path: {:?}", abs_path));
+        debug_log(&format!("File exists: {}", abs_path.exists()));
+        debug_log(&format!("Previous content: {:?}", previous_content));
+        debug_log(&format!("Current content: {:?}", current_content));
 
         // Normalize by ensuring trailing newline to avoid off-by-one when appending lines
         let prev_norm = if previous_content.ends_with('\n') {
@@ -504,23 +503,6 @@ fn get_subsequent_checkpoint_entries(
     }
 
     Ok(entries)
-}
-
-fn clear_working_log_diffs(repo: &Repository, base_commit: &str) -> Result<(), GitAiError> {
-    // Overwrite the refs with empty content to "clear" them
-    for reference in repo.references()? {
-        let reference = reference?;
-        if let Some(name) = reference.name() {
-            if name.starts_with(&format!(
-                "refs/{}ai-working-log/diffs/{}-",
-                crate::git::refs::DEFAULT_REFSPEC,
-                base_commit
-            )) {
-                put_reference(repo, name, "", "Cleared working log diff")?;
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Consolidate consecutive line numbers into ranges for efficiency

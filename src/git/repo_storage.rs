@@ -1,10 +1,11 @@
 use crate::error::GitAiError;
 use crate::log_fmt::working_log::Checkpoint;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-struct RepoStorage {
+pub struct RepoStorage {
     pub repo_path: PathBuf,
     pub working_logs: PathBuf,
     pub rewrite_log: PathBuf,
@@ -45,7 +46,9 @@ impl RepoStorage {
     pub fn working_log_for_base_commit(&self, sha: &str) -> PersistedWorkingLog {
         let working_log_dir = self.working_logs.join(sha);
         fs::create_dir_all(&working_log_dir).unwrap();
-        PersistedWorkingLog::new(working_log_dir, sha)
+        // The repo_path is the .git directory, so we need to go up one level to get the actual repo root
+        let repo_root = self.repo_path.parent().unwrap().to_path_buf();
+        PersistedWorkingLog::new(working_log_dir, sha, repo_root)
     }
 
     pub fn delete_working_log_for_base_commit(&self, sha: &str) -> Result<(), GitAiError> {
@@ -71,13 +74,15 @@ impl RepoStorage {
 pub struct PersistedWorkingLog {
     pub dir: PathBuf,
     pub base_commit: String,
+    pub repo_root: PathBuf,
 }
 
 impl PersistedWorkingLog {
-    pub fn new(dir: PathBuf, base_commit: &str) -> Self {
+    pub fn new(dir: PathBuf, base_commit: &str, repo_root: PathBuf) -> Self {
         Self {
             dir,
             base_commit: base_commit.to_string(),
+            repo_root,
         }
     }
 
@@ -91,6 +96,10 @@ impl PersistedWorkingLog {
         // Clear checkpoints by truncating the JSONL file
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
         fs::write(&checkpoints_file, "")?;
+
+        // Clear file version mappings
+        let file_versions_file = self.dir.join("file_versions.jsonl");
+        fs::write(&file_versions_file, "")?;
 
         Ok(())
     }
@@ -119,7 +128,11 @@ impl PersistedWorkingLog {
     }
 
     /* append checkpoint */
-    pub fn append_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), GitAiError> {
+    pub fn append_checkpoint(
+        &self,
+        checkpoint: &Checkpoint,
+        file_content_hashes: &HashMap<String, String>,
+    ) -> Result<(), GitAiError> {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
 
         // Serialize checkpoint to JSON and append to JSONL file
@@ -136,7 +149,81 @@ impl PersistedWorkingLog {
 
         writeln!(file, "{}", json_line)?;
 
+        // Save the file content hashes for this checkpoint
+        self.save_file_version_mapping(checkpoint.snapshot.clone(), file_content_hashes)?;
+
         Ok(())
+    }
+
+    fn save_file_version_mapping(
+        &self,
+        checkpoint_snapshot: String,
+        file_content_hashes: &HashMap<String, String>,
+    ) -> Result<(), GitAiError> {
+        let mapping_file = self.dir.join("file_versions.jsonl");
+
+        // Serialize the mapping as JSONL
+        let mapping_line =
+            serde_json::to_string(&(checkpoint_snapshot.clone(), file_content_hashes))?;
+
+        // Open file in append mode and write the mapping line
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&mapping_file)?;
+
+        writeln!(file, "{}", mapping_line)?;
+
+        Ok(())
+    }
+
+    pub fn get_file_version_mapping(
+        &self,
+        checkpoint_snapshot: &str,
+    ) -> Result<HashMap<String, String>, GitAiError> {
+        let mapping_file = self.dir.join("file_versions.jsonl");
+
+        println!(
+            "[DEBUG] Looking up file version mapping for: {}",
+            checkpoint_snapshot
+        );
+        println!("[DEBUG] Mapping file path: {:?}", mapping_file);
+
+        if !mapping_file.exists() {
+            println!("[DEBUG] Mapping file does not exist");
+            return Ok(HashMap::new());
+        }
+
+        let content = std::fs::read_to_string(&mapping_file)?;
+        println!("[DEBUG] Mapping file content: {}", content);
+
+        // Parse JSONL file - each line is a (checkpoint_snapshot, file_content_hashes) tuple
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            println!("[DEBUG] Parsing line: {}", line);
+
+            let (snapshot, hashes): (String, HashMap<String, String>) = serde_json::from_str(line)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+            println!(
+                "[DEBUG] Found snapshot: {}, looking for: {}",
+                snapshot, checkpoint_snapshot
+            );
+
+            if snapshot == checkpoint_snapshot {
+                println!("[DEBUG] Match found! Returning {} hashes", hashes.len());
+                return Ok(hashes);
+            }
+        }
+
+        println!("[DEBUG] No match found, returning empty HashMap");
+        Ok(HashMap::new())
     }
 
     pub fn read_all_checkpoints(&self) -> Result<Vec<Checkpoint>, GitAiError> {
@@ -299,8 +386,9 @@ mod tests {
         );
 
         // Test appending checkpoint
+        let empty_hashes = HashMap::new();
         working_log
-            .append_checkpoint(&checkpoint)
+            .append_checkpoint(&checkpoint, &empty_hashes)
             .expect("Failed to append checkpoint");
 
         // Test reading all checkpoints
@@ -327,7 +415,7 @@ mod tests {
         );
 
         working_log
-            .append_checkpoint(&checkpoint2)
+            .append_checkpoint(&checkpoint2, &empty_hashes)
             .expect("Failed to append second checkpoint");
 
         let checkpoints = working_log
@@ -360,8 +448,9 @@ mod tests {
             "test-author".to_string(),
             vec![],
         );
+        let empty_hashes = HashMap::new();
         working_log
-            .append_checkpoint(&checkpoint)
+            .append_checkpoint(&checkpoint, &empty_hashes)
             .expect("Failed to append checkpoint");
 
         // Verify they exist

@@ -3,10 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/* Storage / Serialization */
-
-// impl WorkingLogStorage {}
-
 /* Types  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
