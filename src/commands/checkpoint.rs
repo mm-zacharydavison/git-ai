@@ -51,7 +51,7 @@ pub fn run(
             debug_log("Working Log Entries:");
             debug_log(&format!("{}", "=".repeat(80)));
             for (i, checkpoint) in checkpoints.iter().enumerate() {
-                debug_log(&format!("Checkpoint {}: {}", i + 1, checkpoint.snapshot));
+                debug_log(&format!("Checkpoint {}", i + 1));
                 debug_log(&format!("  Diff: {}", checkpoint.diff));
                 debug_log(&format!("  Author: {}", checkpoint.author));
                 debug_log(&format!(
@@ -95,12 +95,6 @@ pub fn run(
         return Ok((0, files.len(), checkpoints.len()));
     }
 
-    let previous_commit = if reset {
-        None
-    } else {
-        checkpoints.last().map(|c| c.snapshot.clone())
-    };
-
     // Save current file states and get content hashes
     let file_content_hashes = save_current_file_states(&working_log, &files)?;
 
@@ -118,26 +112,21 @@ pub fn run(
     // If this is not the first checkpoint, diff against the last saved state
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-        get_initial_checkpoint_entries(repo, &files, &base_commit)?
+        get_initial_checkpoint_entries(repo, &files, &base_commit, &file_content_hashes)?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
             &working_log,
             &files,
             &file_content_hashes,
-            previous_commit.as_deref(),
-            &base_commit,
+            checkpoints.last(),
         )?
     };
 
     // Skip adding checkpoint if there are no changes
     if !entries.is_empty() {
-        let mut checkpoint = Checkpoint::new(
-            base_commit.clone(),
-            combined_hash.clone(),
-            author.to_string(),
-            entries.clone(),
-        );
+        let mut checkpoint =
+            Checkpoint::new(combined_hash.clone(), author.to_string(), entries.clone());
 
         // Set transcript and agent_id if provided
         if let Some(agent_run) = &agent_run_result {
@@ -145,8 +134,8 @@ pub fn run(
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
 
-        // Append checkpoint to the working log with file content hashes
-        working_log.append_checkpoint(&checkpoint, &file_content_hashes)?;
+        // Append checkpoint to the working log
+        working_log.append_checkpoint(&checkpoint)?;
         checkpoints.push(checkpoint);
     }
 
@@ -280,6 +269,7 @@ fn get_initial_checkpoint_entries(
     repo: &Repository,
     files: &[String],
     _base_commit: &str,
+    file_content_hashes: &HashMap<String, String>,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
@@ -367,8 +357,15 @@ fn get_initial_checkpoint_entries(
         let deleted_lines = consolidate_lines(deleted_line_numbers);
 
         if !added_lines.is_empty() || !deleted_lines.is_empty() {
+            // Get the blob SHA for this file from the pre-computed hashes
+            let blob_sha = file_content_hashes
+                .get(file_path)
+                .cloned()
+                .unwrap_or_default();
+
             entries.push(WorkingLogEntry::new(
                 file_path.clone(),
+                blob_sha,
                 added_lines,
                 deleted_lines,
             ));
@@ -381,23 +378,27 @@ fn get_initial_checkpoint_entries(
 fn get_subsequent_checkpoint_entries(
     working_log: &PersistedWorkingLog,
     files: &[String],
-    _file_content_hashes: &HashMap<String, String>,
-    previous_commit: Option<&str>,
-    _base_commit: &str,
+    file_content_hashes: &HashMap<String, String>,
+    previous_checkpoint: Option<&Checkpoint>,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
-    // Get the file version mapping from the previous checkpoint
-    let previous_file_hashes = if let Some(prev_commit) = previous_commit {
-        working_log.get_file_version_mapping(prev_commit)?
-    } else {
-        HashMap::new()
-    };
+    // Build a map of file path -> blob_sha from the previous checkpoint's entries
+    let previous_file_hashes: HashMap<String, String> =
+        if let Some(prev_checkpoint) = previous_checkpoint {
+            prev_checkpoint
+                .entries
+                .iter()
+                .map(|entry| (entry.file.clone(), entry.blob_sha.clone()))
+                .collect()
+        } else {
+            HashMap::new()
+        };
 
     for file_path in files {
         let abs_path = working_log.repo_root.join(file_path);
 
-        // Read the previous content from the blob storage using the previous checkpoint's content hash
+        // Read the previous content from the blob storage using the previous checkpoint's blob_sha
         let previous_content = if let Some(prev_content_hash) = previous_file_hashes.get(file_path)
         {
             working_log
@@ -463,8 +464,15 @@ fn get_subsequent_checkpoint_entries(
         let deleted_lines = consolidate_lines(deleted_line_numbers);
 
         if !added_lines.is_empty() || !deleted_lines.is_empty() {
+            // Get the blob SHA for this file from the pre-computed hashes
+            let blob_sha = file_content_hashes
+                .get(file_path)
+                .cloned()
+                .unwrap_or_default();
+
             entries.push(WorkingLogEntry::new(
                 file_path.clone(),
+                blob_sha,
                 added_lines,
                 deleted_lines,
             ));

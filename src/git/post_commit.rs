@@ -102,7 +102,7 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
     ));
 
     // Delete the working log after successfully creating the authorship log
-    working_log.reset_working_log()?;
+    working_log.delete_working_log()?;
 
     debug_log(&format!(
         "Working log deleted for base commit: {}",

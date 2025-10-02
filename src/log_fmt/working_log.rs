@@ -50,6 +50,8 @@ impl fmt::Display for Line {
 pub struct WorkingLogEntry {
     /// The file path relative to the repository root
     pub file: String,
+    /// SHA256 hash of the file content at this checkpoint
+    pub blob_sha: String,
     /// List of lines or line ranges that were added
     pub added_lines: Vec<Line>,
     /// List of lines or line ranges that were deleted
@@ -58,9 +60,15 @@ pub struct WorkingLogEntry {
 
 impl WorkingLogEntry {
     /// Create a new working log entry
-    pub fn new(file: String, added_lines: Vec<Line>, deleted_lines: Vec<Line>) -> Self {
+    pub fn new(
+        file: String,
+        blob_sha: String,
+        added_lines: Vec<Line>,
+        deleted_lines: Vec<Line>,
+    ) -> Self {
         Self {
             file,
+            blob_sha,
             added_lines,
             deleted_lines,
         }
@@ -115,7 +123,6 @@ pub struct AgentId {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
-    pub snapshot: String,
     pub diff: String,
     pub author: String,
     pub entries: Vec<WorkingLogEntry>,
@@ -125,19 +132,13 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn new(
-        snapshot: String,
-        diff: String,
-        author: String,
-        entries: Vec<WorkingLogEntry>,
-    ) -> Self {
+    pub fn new(diff: String, author: String, entries: Vec<WorkingLogEntry>) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
         Self {
-            snapshot,
             diff,
             author,
             entries,
@@ -175,15 +176,11 @@ mod tests {
     fn test_checkpoint_serialization() {
         let entry = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
+            "abc123def456".to_string(),
             vec![Line::Single(1), Line::Range(2, 5), Line::Single(10)],
             vec![],
         );
-        let checkpoint = Checkpoint::new(
-            "abc123".to_string(),
-            "".to_string(),
-            "claude".to_string(),
-            vec![entry],
-        );
+        let checkpoint = Checkpoint::new("".to_string(), "claude".to_string(), vec![entry]);
 
         // Verify timestamp is set (should be recent)
         let current_time = SystemTime::now()
@@ -197,10 +194,10 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&checkpoint).unwrap();
         let deserialized: Checkpoint = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.snapshot, "abc123");
         assert_eq!(deserialized.diff, "");
         assert_eq!(deserialized.entries.len(), 1);
         assert_eq!(deserialized.entries[0].file, "src/xyz.rs");
+        assert_eq!(deserialized.entries[0].blob_sha, "abc123def456");
         assert_eq!(deserialized.timestamp, checkpoint.timestamp);
         assert!(deserialized.transcript.is_none());
         assert!(deserialized.agent_id.is_none());
@@ -210,23 +207,19 @@ mod tests {
     fn test_log_array_serialization() {
         let entry1 = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
+            "sha1".to_string(),
             vec![Line::Single(1), Line::Range(2, 5), Line::Single(10)],
             vec![],
         );
-        let checkpoint1 = Checkpoint::new(
-            "abc123".to_string(),
-            "".to_string(),
-            "claude".to_string(),
-            vec![entry1],
-        );
+        let checkpoint1 = Checkpoint::new("".to_string(), "claude".to_string(), vec![entry1]);
 
         let entry2 = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
+            "sha2".to_string(),
             vec![Line::Single(12), Line::Single(13)],
             vec![],
         );
         let checkpoint2 = Checkpoint::new(
-            "def456".to_string(),
             "/refs/ai/working/xyz.patch".to_string(),
             "user".to_string(),
             vec![entry2],
@@ -242,8 +235,8 @@ mod tests {
         // println!("Working log array JSON:\n{}", json);
         let deserialized: Vec<Checkpoint> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.len(), 2);
-        assert_eq!(deserialized[0].snapshot, "abc123");
-        assert_eq!(deserialized[1].snapshot, "def456");
+        assert_eq!(deserialized[0].diff, "");
+        assert_eq!(deserialized[1].diff, "/refs/ai/working/xyz.patch");
         assert_eq!(deserialized[1].author, "user");
     }
 
@@ -266,6 +259,7 @@ mod tests {
     fn test_working_log_entry_covers_line() {
         let entry = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
+            "test_sha".to_string(),
             vec![Line::Single(1), Line::Range(2, 5), Line::Single(10)],
             vec![],
         );
@@ -280,7 +274,12 @@ mod tests {
 
     #[test]
     fn test_checkpoint_with_transcript() {
-        let entry = WorkingLogEntry::new("src/xyz.rs".to_string(), vec![Line::Single(1)], vec![]);
+        let entry = WorkingLogEntry::new(
+            "src/xyz.rs".to_string(),
+            "test_sha".to_string(),
+            vec![Line::Single(1)],
+            vec![],
+        );
 
         let user_message = Message::user("Please add error handling to this function".to_string());
         let assistant_message =
@@ -296,12 +295,7 @@ mod tests {
             id: "session-abc123".to_string(),
         };
 
-        let mut checkpoint = Checkpoint::new(
-            "abc123".to_string(),
-            "".to_string(),
-            "claude".to_string(),
-            vec![entry],
-        );
+        let mut checkpoint = Checkpoint::new("".to_string(), "claude".to_string(), vec![entry]);
         checkpoint.transcript = Some(transcript);
         checkpoint.agent_id = Some(agent_id);
 

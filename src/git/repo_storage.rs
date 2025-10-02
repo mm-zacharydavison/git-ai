@@ -1,7 +1,6 @@
 use crate::error::GitAiError;
 use crate::log_fmt::working_log::Checkpoint;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -97,10 +96,14 @@ impl PersistedWorkingLog {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
         fs::write(&checkpoints_file, "")?;
 
-        // Clear file version mappings
-        let file_versions_file = self.dir.join("file_versions.jsonl");
-        fs::write(&file_versions_file, "")?;
+        Ok(())
+    }
 
+    pub fn delete_working_log(&self) -> Result<(), GitAiError> {
+        // Remove the entire working log directory
+        if self.dir.exists() {
+            fs::remove_dir_all(&self.dir)?;
+        }
         Ok(())
     }
 
@@ -128,11 +131,7 @@ impl PersistedWorkingLog {
     }
 
     /* append checkpoint */
-    pub fn append_checkpoint(
-        &self,
-        checkpoint: &Checkpoint,
-        file_content_hashes: &HashMap<String, String>,
-    ) -> Result<(), GitAiError> {
+    pub fn append_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), GitAiError> {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
 
         // Serialize checkpoint to JSON and append to JSONL file
@@ -149,64 +148,7 @@ impl PersistedWorkingLog {
 
         writeln!(file, "{}", json_line)?;
 
-        // Save the file content hashes for this checkpoint
-        self.save_file_version_mapping(checkpoint.snapshot.clone(), file_content_hashes)?;
-
         Ok(())
-    }
-
-    fn save_file_version_mapping(
-        &self,
-        checkpoint_snapshot: String,
-        file_content_hashes: &HashMap<String, String>,
-    ) -> Result<(), GitAiError> {
-        let mapping_file = self.dir.join("file_versions.jsonl");
-
-        // Serialize the mapping as JSONL
-        let mapping_line =
-            serde_json::to_string(&(checkpoint_snapshot.clone(), file_content_hashes))?;
-
-        // Open file in append mode and write the mapping line
-        use std::fs::OpenOptions;
-        use std::io::Write;
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&mapping_file)?;
-
-        writeln!(file, "{}", mapping_line)?;
-
-        Ok(())
-    }
-
-    pub fn get_file_version_mapping(
-        &self,
-        checkpoint_snapshot: &str,
-    ) -> Result<HashMap<String, String>, GitAiError> {
-        let mapping_file = self.dir.join("file_versions.jsonl");
-
-        if !mapping_file.exists() {
-            return Ok(HashMap::new());
-        }
-
-        let content = std::fs::read_to_string(&mapping_file)?;
-
-        // Parse JSONL file - each line is a (checkpoint_snapshot, file_content_hashes) tuple
-        for line in content.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let (snapshot, hashes): (String, HashMap<String, String>) = serde_json::from_str(line)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-            if snapshot == checkpoint_snapshot {
-                return Ok(hashes);
-            }
-        }
-
-        Ok(HashMap::new())
     }
 
     pub fn read_all_checkpoints(&self) -> Result<Vec<Checkpoint>, GitAiError> {
@@ -362,16 +304,14 @@ mod tests {
 
         // Create a test checkpoint
         let checkpoint = Checkpoint::new(
-            "test-snapshot".to_string(),
             "test-diff".to_string(),
             "test-author".to_string(),
             vec![], // empty entries for simplicity
         );
 
         // Test appending checkpoint
-        let empty_hashes = HashMap::new();
         working_log
-            .append_checkpoint(&checkpoint, &empty_hashes)
+            .append_checkpoint(&checkpoint)
             .expect("Failed to append checkpoint");
 
         // Test reading all checkpoints
@@ -382,7 +322,6 @@ mod tests {
         println!("checkpoints: {:?}", checkpoints);
 
         assert_eq!(checkpoints.len(), 1, "Should have one checkpoint");
-        assert_eq!(checkpoints[0].snapshot, "test-snapshot");
         assert_eq!(checkpoints[0].author, "test-author");
 
         // Verify the JSONL file exists
@@ -391,14 +330,13 @@ mod tests {
 
         // Test appending another checkpoint
         let checkpoint2 = Checkpoint::new(
-            "test-snapshot-2".to_string(),
             "test-diff-2".to_string(),
             "test-author-2".to_string(),
             vec![],
         );
 
         working_log
-            .append_checkpoint(&checkpoint2, &empty_hashes)
+            .append_checkpoint(&checkpoint2)
             .expect("Failed to append second checkpoint");
 
         let checkpoints = working_log
@@ -406,7 +344,7 @@ mod tests {
             .expect("Failed to read checkpoints after second append");
 
         assert_eq!(checkpoints.len(), 2, "Should have two checkpoints");
-        assert_eq!(checkpoints[1].snapshot, "test-snapshot-2");
+        assert_eq!(checkpoints[1].author, "test-author-2");
     }
 
     #[test]
@@ -425,15 +363,10 @@ mod tests {
             .expect("Failed to persist file version");
 
         // Add some checkpoints
-        let checkpoint = Checkpoint::new(
-            "test-snapshot".to_string(),
-            "test-diff".to_string(),
-            "test-author".to_string(),
-            vec![],
-        );
-        let empty_hashes = HashMap::new();
+        let checkpoint =
+            Checkpoint::new("test-diff".to_string(), "test-author".to_string(), vec![]);
         working_log
-            .append_checkpoint(&checkpoint, &empty_hashes)
+            .append_checkpoint(&checkpoint)
             .expect("Failed to append checkpoint");
 
         // Verify they exist
