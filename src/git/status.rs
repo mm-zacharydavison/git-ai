@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::GitAiError;
-use git2::Repository;
+use crate::git::repository::Repository;
 use std::process::Command;
 use std::str;
 
@@ -55,9 +55,12 @@ pub struct StatusEntry {
 }
 
 pub fn status_porcelainv2(repo: &Repository) -> Result<Vec<StatusEntry>, GitAiError> {
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| GitAiError::Generic("Repository has no working directory".into()))?;
+    let workdir = repo.workdir().or_else(|e| {
+        Err(GitAiError::Generic(format!(
+            "Repository has no working directory: {}",
+            e
+        )))
+    })?;
 
     let output = Command::new(Config::get().git_cmd())
         .arg("status")

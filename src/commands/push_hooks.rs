@@ -1,7 +1,7 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::find_repository;
 use crate::git::refs::AI_AUTHORSHIP_REFSPEC;
-use crate::git::repository::{exec_git, get_default_remote};
+use crate::git::repository::exec_git;
 use crate::utils::debug_log;
 
 pub fn push_post_command_hook(
@@ -19,11 +19,8 @@ pub fn push_post_command_hook(
         return;
     }
 
-    // TODO Take into account global args
-    // TODO Migrate off of libgit2
-
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository(parsed_args.command_args.clone()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -51,25 +48,10 @@ pub fn push_post_command_hook(
             .find(|a| remote_names.iter().any(|r| r == *a))
             .cloned()
     });
-    // If not specified, try to get upstream remote of current branch
-    fn upstream_remote(repo: &git2::Repository) -> Option<String> {
-        let head = repo.head().ok()?;
-        if !head.is_branch() {
-            return None;
-        }
-        let branch_name = head.shorthand()?;
-        let branch = repo
-            .find_branch(branch_name, git2::BranchType::Local)
-            .ok()?;
-        let upstream = branch.upstream().ok()?;
-        let upstream_name = upstream.name().ok()??; // e.g., "origin/main"
-        let remote = upstream_name.split('/').next()?.to_string();
-        Some(remote)
-    }
 
     let remote = specified_remote
-        .or_else(|| upstream_remote(&repo))
-        .or_else(|| get_default_remote(&repo));
+        .or_else(|| repo.upstream_remote().ok().flatten())
+        .or_else(|| repo.get_default_remote().ok().flatten());
 
     if let Some(remote) = remote {
         // Build the internal authorship push with explicit flags and disabled hooks

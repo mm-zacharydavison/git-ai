@@ -1,10 +1,10 @@
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
+use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode, status_porcelainv2};
 use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::utils::debug_log;
-use git2::Repository;
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -21,13 +21,10 @@ pub fn run(
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
-        Ok(head) => {
-            if let Some(oid) = head.target() {
-                oid.to_string()
-            } else {
-                "initial".to_string()
-            }
-        }
+        Ok(head) => match head.target() {
+            Ok(oid) => oid,
+            Err(_) => "initial".to_string(),
+        },
         Err(_) => "initial".to_string(),
     };
 
@@ -277,7 +274,7 @@ fn get_initial_checkpoint_entries(
     let head_commit = repo
         .head()
         .ok()
-        .and_then(|h| h.target())
+        .and_then(|h| h.target().ok())
         .and_then(|oid| repo.find_commit(oid).ok());
     let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
 
@@ -290,7 +287,8 @@ fn get_initial_checkpoint_entries(
             match tree.get_path(std::path::Path::new(file_path)) {
                 Ok(entry) => {
                     if let Ok(blob) = repo.find_blob(entry.id()) {
-                        String::from_utf8_lossy(blob.content()).to_string()
+                        let blob_content = blob.content()?;
+                        String::from_utf8_lossy(&blob_content).to_string()
                     } else {
                         String::new()
                     }
@@ -589,7 +587,7 @@ fn is_text_file_in_head(repo: &Repository, path: &str) -> bool {
     let head_commit = match repo
         .head()
         .ok()
-        .and_then(|h| h.target())
+        .and_then(|h| h.target().ok())
         .and_then(|oid| repo.find_commit(oid).ok())
     {
         Some(commit) => commit,
@@ -605,7 +603,11 @@ fn is_text_file_in_head(repo: &Repository, path: &str) -> bool {
         Ok(entry) => {
             if let Ok(blob) = repo.find_blob(entry.id()) {
                 // Consider a file text if it contains no null bytes
-                !blob.content().contains(&0)
+                let blob_content = match blob.content() {
+                    Ok(content) => content,
+                    Err(_) => return false,
+                };
+                !blob_content.contains(&0)
             } else {
                 false
             }
