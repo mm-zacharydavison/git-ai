@@ -60,6 +60,8 @@ fn resolve_git_path() -> String {
         return found.to_string_lossy().to_string();
     }
 
+    // TODO We should probably fatal error here if we can't find a real git.
+
     // 3) Fallback: rely on system PATH
     // TODO Deal with the fact that this might be a recursive call back to git-ai. Should we warn or even error out?
     "git".to_string()
