@@ -1,4 +1,0 @@
-file,test,rationale
-"t4201-shortlog.sh","1,2,3,4,5,6,7,8,9,13","Errors related to non-UTF-8 chars"
-"t4210-log-i18n.sh","3,4","Errors related to non-UTF-8 chars"
-"t8005-blame-i18n.sh","1,2,3,4,5","Errors related to non-UTF-8 chars"

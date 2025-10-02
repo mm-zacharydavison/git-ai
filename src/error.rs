@@ -4,11 +4,6 @@ use std::fmt;
 pub enum GitAiError {
     GitError(git2::Error),
     IoError(std::io::Error),
-    /// Errors from invoking the git CLI that exited with a non-zero status
-    GitCliError {
-        code: Option<i32>,
-        stderr: String,
-    },
     JsonError(serde_json::Error),
     Utf8Error(std::str::Utf8Error),
     FromUtf8Error(std::string::FromUtf8Error),
@@ -21,10 +16,6 @@ impl fmt::Display for GitAiError {
         match self {
             GitAiError::GitError(e) => write!(f, "Git error: {}", e),
             GitAiError::IoError(e) => write!(f, "IO error: {}", e),
-            GitAiError::GitCliError { code, stderr } => match code {
-                Some(c) => write!(f, "Git CLI failed with exit code {}: {}", c, stderr),
-                None => write!(f, "Git CLI failed: {}", stderr),
-            },
             GitAiError::JsonError(e) => write!(f, "JSON error: {}", e),
             GitAiError::Utf8Error(e) => write!(f, "UTF-8 error: {}", e),
             GitAiError::FromUtf8Error(e) => write!(f, "From UTF-8 error: {}", e),

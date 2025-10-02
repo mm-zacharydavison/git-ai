@@ -1,3 +1,2 @@
-re-run-failed.sh
-report.txt
-cached-standard-run-*.txt
+*
+!.gitignore

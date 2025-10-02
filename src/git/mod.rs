@@ -1,4 +1,3 @@
-pub mod cli_parser;
 pub mod post_commit;
 pub mod pre_commit;
 pub mod refs;
