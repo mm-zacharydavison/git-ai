@@ -186,19 +186,11 @@ impl PersistedWorkingLog {
     ) -> Result<HashMap<String, String>, GitAiError> {
         let mapping_file = self.dir.join("file_versions.jsonl");
 
-        println!(
-            "[DEBUG] Looking up file version mapping for: {}",
-            checkpoint_snapshot
-        );
-        println!("[DEBUG] Mapping file path: {:?}", mapping_file);
-
         if !mapping_file.exists() {
-            println!("[DEBUG] Mapping file does not exist");
             return Ok(HashMap::new());
         }
 
         let content = std::fs::read_to_string(&mapping_file)?;
-        println!("[DEBUG] Mapping file content: {}", content);
 
         // Parse JSONL file - each line is a (checkpoint_snapshot, file_content_hashes) tuple
         for line in content.lines() {
@@ -206,23 +198,14 @@ impl PersistedWorkingLog {
                 continue;
             }
 
-            println!("[DEBUG] Parsing line: {}", line);
-
             let (snapshot, hashes): (String, HashMap<String, String>) = serde_json::from_str(line)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-            println!(
-                "[DEBUG] Found snapshot: {}, looking for: {}",
-                snapshot, checkpoint_snapshot
-            );
-
             if snapshot == checkpoint_snapshot {
-                println!("[DEBUG] Match found! Returning {} hashes", hashes.len());
                 return Ok(hashes);
             }
         }
 
-        println!("[DEBUG] No match found, returning empty HashMap");
         Ok(HashMap::new())
     }
 

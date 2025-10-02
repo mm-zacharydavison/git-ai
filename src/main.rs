@@ -29,18 +29,21 @@ fn main() {
             if let Ok(metadata) = std::fs::metadata(path_obj) {
                 if metadata.file_type().is_symlink() {
                     // If it's a symlink, use the symlink name
-                    path_obj.file_name()
+                    path_obj
+                        .file_name()
                         .and_then(|name| name.to_str())
                         .map(|s| s.to_string())
                 } else {
                     // If it's not a symlink, use the file name as before
-                    path_obj.file_name()
+                    path_obj
+                        .file_name()
                         .and_then(|name| name.to_str())
                         .map(|s| s.to_string())
                 }
             } else {
                 // Fallback to original behavior
-                path_obj.file_name()
+                path_obj
+                    .file_name()
                     .and_then(|name| name.to_str())
                     .map(|s| s.to_string())
             }
@@ -50,10 +53,23 @@ fn main() {
     debug_log(&format!("calling {:?}", &binary_name));
 
     let cli = Cli::parse();
+
+    // If called as "git-ai" and first arg is a git-ai specific command, route to git-ai handlers
     if binary_name == "git-ai" {
-        commands::git_ai_handlers::handle_git_ai(&cli.args);
-        std::process::exit(0);
+        let git_ai_commands = [
+            "checkpoint",
+            "blame",
+            "install-hooks",
+            "squash-authorship",
+            "benchmark",
+            "stats-delta",
+        ];
+        if !cli.args.is_empty() && git_ai_commands.contains(&cli.args[0].as_str()) {
+            commands::git_ai_handlers::handle_git_ai(&cli.args);
+            std::process::exit(0);
+        }
     }
 
+    // Otherwise, route to git handlers (for both "git" binary name and "git-ai" with git commands)
     commands::git_handlers::handle_git(&cli.args);
 }
