@@ -4,7 +4,7 @@ set -x
 
 mkdir -p ./target/gitwrap/bin
 
-echo "Creating symlinks from target/debug to gitwrap"
+echo "Creating symlinks from in gitwrap folder to target/debug"
 ln -sf $(pwd)/target/debug/git-ai $(pwd)/target/gitwrap/bin/git
 ln -sf $(pwd)/target/debug/git-ai $(pwd)/target/gitwrap/bin/git-ai
 
