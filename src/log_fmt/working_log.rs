@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/* Storage / Serialization */
+
+// impl WorkingLogStorage {}
+
+/* Types  */
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Line {
@@ -19,8 +24,6 @@ impl Line {
         }
     }
 
-    /// Get the end line #C
-    /// CLAUDE SAYS HI
     pub fn end(&self) -> u32 {
         match self {
             Line::Single(line) => *line,
@@ -57,7 +60,6 @@ pub struct WorkingLogEntry {
     pub deleted_lines: Vec<Line>,
 }
 
-#[allow(dead_code)]
 impl WorkingLogEntry {
     /// Create a new working log entry
     pub fn new(file: String, added_lines: Vec<Line>, deleted_lines: Vec<Line>) -> Self {
