@@ -9,10 +9,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 // Simple Linear Congruential Generator for generating random temporary directory names
+#[allow(dead_code)]
 struct SimpleRng {
     state: u64,
 }
 
+#[allow(dead_code)]
 impl SimpleRng {
     fn new() -> Self {
         // Use current time as seed
@@ -40,12 +42,14 @@ impl SimpleRng {
     }
 }
 
+#[allow(dead_code)]
 pub struct TmpFile {
     repo: TmpRepo,
     filename: String,
     contents: String,
 }
 
+#[allow(dead_code)]
 impl TmpFile {
     /// Updates the entire contents of the file
     pub fn update(&mut self, new_contents: &str) -> Result<(), GitAiError> {
@@ -255,11 +259,13 @@ impl TmpFile {
     }
 }
 
+#[allow(dead_code)]
 pub struct TmpRepo {
     path: PathBuf,
     repo: Repository,
 }
 
+#[allow(dead_code)]
 impl TmpRepo {
     /// Creates a new temporary repository with a randomly generated directory
     pub fn new() -> Result<Self, GitAiError> {
@@ -658,6 +664,7 @@ impl TmpRepo {
     }
 }
 
+#[allow(dead_code)]
 const ALPHABET: &str = "A
 B
 C
@@ -685,6 +692,7 @@ X
 Y
 Z";
 
+#[allow(dead_code)]
 const LINES: &str = "1
 2
 3

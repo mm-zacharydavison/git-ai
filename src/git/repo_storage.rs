@@ -50,6 +50,7 @@ impl RepoStorage {
         PersistedWorkingLog::new(working_log_dir, sha, repo_root)
     }
 
+    #[allow(dead_code)]
     pub fn delete_working_log_for_base_commit(&self, sha: &str) -> Result<(), GitAiError> {
         let working_log_dir = self.working_logs.join(sha);
         if working_log_dir.exists() {
@@ -58,6 +59,7 @@ impl RepoStorage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn delete_all_working_logs(&self) -> Result<(), GitAiError> {
         if self.working_logs.exists() {
             fs::remove_dir_all(&self.working_logs)?;
@@ -72,6 +74,7 @@ impl RepoStorage {
 
 pub struct PersistedWorkingLog {
     pub dir: PathBuf,
+    #[allow(dead_code)]
     pub base_commit: String,
     pub repo_root: PathBuf,
 }
@@ -96,14 +99,6 @@ impl PersistedWorkingLog {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
         fs::write(&checkpoints_file, "")?;
 
-        Ok(())
-    }
-
-    pub fn delete_working_log(&self) -> Result<(), GitAiError> {
-        // Remove the entire working log directory
-        if self.dir.exists() {
-            fs::remove_dir_all(&self.dir)?;
-        }
         Ok(())
     }
 

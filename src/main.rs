@@ -9,7 +9,6 @@ use clap::Parser;
 use git::find_repository;
 use git::refs::AI_AUTHORSHIP_REFSPEC;
 use git::repository::run_git_and_forward;
-use git_ai::log_fmt::transcript::AiTranscript;
 use once_cell::sync::OnceCell;
 use std::io::IsTerminal;
 
