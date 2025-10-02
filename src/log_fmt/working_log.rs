@@ -51,6 +51,7 @@ pub struct WorkingLogEntry {
     /// The file path relative to the repository root
     pub file: String,
     /// SHA256 hash of the file content at this checkpoint
+    #[serde(default)]
     pub blob_sha: String,
     /// List of lines or line ranges that were added
     pub added_lines: Vec<Line>,

@@ -1,7 +1,7 @@
 use crate::error::GitAiError;
 use crate::git::refs::get_reference;
-use crate::git::refs::get_reference_as_working_log;
 use crate::git::refs::put_reference;
+use crate::git::repo_storage::RepoStorage;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::Repository;
 use std::collections::HashMap;
@@ -57,6 +57,8 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
     filtered_refs.retain(|commit_hash, _| parent_to_children.contains_key(commit_hash));
 
     if filtered_refs.is_empty() {
+        // No commits with children found - this is normal if the commits with working logs
+        // are the most recent commits or if the repository history has changed
         return Ok(());
     }
 
@@ -89,13 +91,16 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
     // Create authorship logs for direct children that don't already have one
     let mut authorship_logs: HashMap<String, AuthorshipLog> = HashMap::new();
 
+    // Initialize the storage system once
+    let repo_storage = RepoStorage::for_repo_path(repo.path());
+
     for commit_hash in &commit_hashes {
         // Get the working log for this commit
-        let working_log =
-            match get_reference_as_working_log(repo, &format!("ai-working-log/{}", commit_hash)) {
-                Ok(checkpoints) => checkpoints,
-                Err(_) => continue, // Skip if we can't get the working log
-            };
+        let working_log = repo_storage.working_log_for_base_commit(commit_hash);
+        let checkpoints = match working_log.read_all_checkpoints() {
+            Ok(checkpoints) => checkpoints,
+            Err(_) => continue, // Skip if we can't get the working log
+        };
 
         // Get direct children of this commit
         let empty_vec = Vec::new();
@@ -113,7 +118,7 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                 // No authorship log exists, create one
                 let authorship_log =
                     AuthorshipLog::from_working_log_with_base_commit_and_human_author(
-                        &working_log,
+                        &checkpoints,
                         commit_hash,
                         None,
                     );
@@ -158,8 +163,6 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 
     // Delete working logs after creating authorship logs
     for commit_hash in &commit_hashes {
-        let working_log_ref = format!("ai-working-log/{}", commit_hash);
-
         let empty_vec = Vec::new();
         let children = parent_to_children.get(commit_hash).unwrap_or(&empty_vec);
 
@@ -169,11 +172,8 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
         });
 
         if all_children_have_authorship && !children.is_empty() {
-            // Delete the working log reference
-            let full_ref_name = format!("refs/{}", working_log_ref);
-            if let Ok(mut reference) = repo.find_reference(&full_ref_name) {
-                reference.delete()?;
-            }
+            // Delete the working log using the new storage system
+            repo_storage.delete_working_log_for_base_commit(commit_hash)?;
         }
     }
 
@@ -183,22 +183,30 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 fn find_working_log_refs(repo: &Repository) -> Result<HashMap<String, usize>, GitAiError> {
     let mut working_log_refs = HashMap::new();
 
-    // Get all references in the repository
-    let refs = repo.references()?;
+    // Initialize the new storage system
+    let repo_storage = RepoStorage::for_repo_path(repo.path());
 
-    for reference in refs {
-        let reference = reference?;
-        let ref_name = reference.name().unwrap_or("");
+    // Check if the working logs directory exists
+    if !repo_storage.working_logs.exists() {
+        return Ok(working_log_refs);
+    }
 
-        if ref_name.starts_with("refs/ai-working-log/") {
-            let base_commit = ref_name.trim_start_matches("refs/ai-working-log/");
-            match get_reference_as_working_log(repo, &format!("ai-working-log/{}", base_commit)) {
+    // Read all subdirectories in the working logs directory
+    let entries = std::fs::read_dir(&repo_storage.working_logs)?;
+
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let base_commit = entry.file_name().to_string_lossy().to_string();
+            let working_log = repo_storage.working_log_for_base_commit(&base_commit);
+
+            match working_log.read_all_checkpoints() {
                 Ok(checkpoints) => {
-                    working_log_refs.insert(base_commit.to_string(), checkpoints.len());
+                    working_log_refs.insert(base_commit, checkpoints.len());
                 }
                 Err(_) => {
-                    // If we can't parse it as a working log, still include it but with 0 count
-                    working_log_refs.insert(base_commit.to_string(), 0);
+                    // If we can't read the checkpoints, still include it but with 0 count
+                    working_log_refs.insert(base_commit, 0);
                 }
             }
         }
