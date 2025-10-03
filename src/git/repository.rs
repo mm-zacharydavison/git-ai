@@ -265,7 +265,8 @@ impl<'a> Tree<'a> {
         let mut args = self.repo.global_args_for_exec();
         args.push("ls-tree".to_string());
         args.push("-z".to_string());
-        args.push("-d".to_string());
+        // Use recursive to locate files in nested paths and return blob entries
+        args.push("-r".to_string());
         args.push(self.oid.clone());
         args.push("--".to_string());
         let path_str = path.to_string_lossy().to_string();

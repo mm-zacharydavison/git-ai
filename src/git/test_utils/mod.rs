@@ -8,39 +8,35 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-// Simple Linear Congruential Generator for generating random temporary directory names
-#[allow(dead_code)]
-struct SimpleRng {
-    state: u64,
-}
+// Create a guaranteed-unique temporary directory under the OS temp dir.
+// Combines high-resolution time, process id, and an atomic counter, retrying on collisions.
+fn create_unique_tmp_dir(prefix: &str) -> Result<PathBuf, GitAiError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let base = std::env::temp_dir();
 
-#[allow(dead_code)]
-impl SimpleRng {
-    fn new() -> Self {
-        // Use current time as seed
-        let seed = std::time::SystemTime::now()
+    // Try a handful of times in the extremely unlikely case of collision
+    for _attempt in 0..100u32 {
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as u64;
-        Self { state: seed }
-    }
+            .as_nanos();
+        let pid = std::process::id();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir_name = format!("{}-{}-{}-{}", prefix, now, pid, seq);
+        let path = base.join(dir_name);
 
-    fn next(&mut self) -> u64 {
-        // LCG parameters: a = 1664525, c = 1013904223, m = 2^32
-        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
-        self.state
-    }
-
-    fn gen_random_string(&mut self, len: usize) -> String {
-        const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let mut result = String::with_capacity(len);
-        for _ in 0..len {
-            let idx = (self.next() % CHARS.len() as u64) as usize;
-            result.push(CHARS[idx] as char);
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(GitAiError::IoError(e)),
         }
-        result
     }
+
+    Err(GitAiError::Generic(
+        "Failed to create a unique temporary directory after multiple attempts".to_string(),
+    ))
 }
 
 #[allow(dead_code)]
@@ -271,13 +267,10 @@ pub struct TmpRepo {
 impl TmpRepo {
     /// Creates a new temporary repository with a randomly generated directory
     pub fn new() -> Result<Self, GitAiError> {
-        // Generate a random temporary directory path using our simple RNG
-        let mut rng = SimpleRng::new();
-        let random_suffix = rng.gen_random_string(8);
-        let tmp_dir = std::env::temp_dir().join(format!("git-ai-tmp-{}", random_suffix));
+        // Generate a robust, unique temporary directory path
+        let tmp_dir = create_unique_tmp_dir("git-ai-tmp")?;
 
-        // Create the directory if it doesn't exist
-        fs::create_dir_all(&tmp_dir)?;
+        println!("tmp_dir: {:?}", tmp_dir);
 
         // Initialize git repository
         let repo_git2 = Repository::init(&tmp_dir)?;
