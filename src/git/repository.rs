@@ -454,8 +454,8 @@ pub struct Repository {
 }
 
 impl Repository {
-    // Internal util for preparing global args for execution
-    fn global_args_for_exec(&self) -> Vec<String> {
+    // Util for preparing global args for execution
+    pub fn global_args_for_exec(&self) -> Vec<String> {
         let mut args = self.global_args.clone();
         if !args.iter().any(|arg| arg == "--no-pager") {
             args.push("--no-pager".to_string());

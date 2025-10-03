@@ -1,7 +1,5 @@
-use crate::config::Config;
 use crate::error::GitAiError;
-use crate::git::repository::Repository;
-use std::process::Command;
+use crate::git::repository::{Repository, exec_git};
 use std::str;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,29 +52,24 @@ pub struct StatusEntry {
     pub orig_path: Option<String>,
 }
 
-pub fn status_porcelainv2(repo: &Repository) -> Result<Vec<StatusEntry>, GitAiError> {
-    let workdir = repo.workdir().or_else(|e| {
-        Err(GitAiError::Generic(format!(
-            "Repository has no working directory: {}",
-            e
-        )))
-    })?;
+impl Repository {
+    // Run status porcelain v2 on the repository. Will fail for bare repositories.
+    pub fn status(&self) -> Result<Vec<StatusEntry>, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("status".to_string());
+        args.push("--porcelain=v2".to_string());
+        args.push("-z".to_string());
+        let output = exec_git(&args)?;
 
-    let output = Command::new(Config::get().git_cmd())
-        .arg("status")
-        .arg("--porcelain=v2")
-        .arg("-z")
-        .current_dir(workdir)
-        .output()?;
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git status exited with status {}",
+                output.status
+            )));
+        }
 
-    if !output.status.success() {
-        return Err(GitAiError::Generic(format!(
-            "git status exited with status {}",
-            output.status
-        )));
+        parse_porcelain_v2(&output.stdout)
     }
-
-    parse_porcelain_v2(&output.stdout)
 }
 
 fn parse_porcelain_v2(data: &[u8]) -> Result<Vec<StatusEntry>, GitAiError> {
