@@ -1,4 +1,5 @@
 pub mod cli_parser;
+pub mod diff_tree_to_tree;
 pub mod post_commit;
 pub mod pre_commit;
 pub mod refs;

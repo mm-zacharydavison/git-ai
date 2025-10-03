@@ -327,7 +327,7 @@ fn handle_ai_blame(args: &[String]) {
         std::process::exit(1);
     }
 
-    if let Err(e) = commands::blame::run(&repo, &file_path, &options) {
+    if let Err(e) = repo.blame(&file_path, &options) {
         eprintln!("Blame failed: {}", e);
         std::process::exit(1);
     }

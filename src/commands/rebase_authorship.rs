@@ -25,8 +25,6 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     new_sha: &str,
     dry_run: bool,
 ) -> Result<AuthorshipLog, GitAiError> {
-    let repo_git2 = git2::Repository::open(repo.workdir().unwrap())?;
-
     // Step 1: Find the common origin base
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
@@ -41,17 +39,13 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // sha. that's ok
     let origin_base_commit = repo.find_commit(origin_base.to_string())?;
     let origin_base_tree = origin_base_commit.tree()?;
-    let origin_base_tree_git2 =
-        repo_git2.find_tree(git2::Oid::from_str(&origin_base_tree.id())?)?;
     let new_commit_parent_tree = new_commit_parent.tree()?;
-    let new_commit_parent_tree_git2 =
-        repo_git2.find_tree(git2::Oid::from_str(&new_commit_parent_tree.id())?)?;
 
     // TODO Is this diff necessary? The result is unused
     // Create diff between the two trees
-    let _diff = repo_git2.diff_tree_to_tree(
-        Some(&origin_base_tree_git2),
-        Some(&new_commit_parent_tree_git2),
+    let _diff = repo.diff_tree_to_tree(
+        Some(&origin_base_tree),
+        Some(&new_commit_parent_tree),
         None,
     )?;
 
@@ -72,7 +66,6 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // Aggregate the results in a variable, then we'll dump a new authorship log.
     let new_authorship_log = reconstruct_authorship_from_diff(
         repo,
-        &repo_git2,
         &new_commit,
         &new_commit_parent,
         &hanging_commit_sha,
@@ -207,7 +200,6 @@ fn delete_hanging_commit(repo: &Repository, commit_sha: &str) -> Result<(), GitA
 /// A new AuthorshipLog with reconstructed authorship information
 fn reconstruct_authorship_from_diff(
     repo: &Repository,
-    repo_git2: &git2::Repository,
     new_commit: &Commit,
     new_commit_parent: &Commit,
     hanging_commit_sha: &str,
@@ -216,16 +208,14 @@ fn reconstruct_authorship_from_diff(
 
     // Get the trees for the diff
     let new_tree = new_commit.tree()?;
-    let new_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&new_tree.id())?)?;
     let parent_tree = new_commit_parent.tree()?;
-    let parent_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&parent_tree.id())?)?;
 
-    // Create diff between new_commit and new_commit_parent
-    let diff = repo_git2.diff_tree_to_tree(Some(&parent_tree_git2), Some(&new_tree_git2), None)?;
+    // Create diff between new_commit and new_commit_parent using Git CLI
+    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None)?;
     // Debug visibility for test runs
     #[cfg(test)]
     {
-        eprintln!("files changed: {}", diff.deltas().len());
+        eprintln!("files changed: {}", diff.len());
     }
 
     let mut authorship_entries = Vec::new();
@@ -327,7 +317,6 @@ fn reconstruct_authorship_from_diff(
 
                         let blame_result = run_blame_in_context(
                             repo,
-                            repo_git2,
                             &file_path_str,
                             blame_line_number,
                             hanging_commit_sha,
@@ -493,7 +482,6 @@ fn reconstruct_authorship_from_diff(
 /// The AI authorship information (author and prompt) for the line, or None if not found
 fn run_blame_in_context(
     repo: &Repository,
-    repo_git2: &git2::Repository,
     file_path: &str,
     line_number: u32,
     hanging_commit_sha: &str,
@@ -522,7 +510,7 @@ fn run_blame_in_context(
     blame_opts.newest_commit(git2::Oid::from_str(&hanging_commit.id())?); // Set the hanging commit as the newest commit for blame
 
     // Run blame on the file in the context of the hanging commit
-    let blame = repo_git2.blame_file(std::path::Path::new(file_path), Some(&mut blame_opts))?;
+    let blame = repo.blame_file(file_path, Some(&mut blame_opts))?;
 
     if blame.len() > 0 {
         let hunk = blame
