@@ -1,13 +1,12 @@
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
+use crate::git::repository::exec_git;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
-use git2::BlameOptions;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct BlameHunk {
@@ -44,6 +43,8 @@ pub struct BlameHunk {
 pub struct GitAiBlameOptions {
     // Line range options
     pub line_ranges: Vec<(u32, u32)>,
+
+    pub newest_commit: Option<String>,
 
     // Output format options
     pub porcelain: bool,
@@ -88,7 +89,6 @@ pub struct GitAiBlameOptions {
 
     // Revision options
     #[allow(dead_code)]
-    pub revision: Option<String>,
     pub reverse: Option<String>,
     pub first_parent: bool,
 
@@ -101,6 +101,7 @@ impl Default for GitAiBlameOptions {
         Self {
             line_ranges: Vec::new(),
             porcelain: false,
+            newest_commit: None,
             line_porcelain: false,
             incremental: false,
             show_name: false,
@@ -123,7 +124,6 @@ impl Default for GitAiBlameOptions {
             progress: false,
             date_format: None,
             contents_file: None,
-            revision: None,
             reverse: None,
             first_parent: false,
             encoding: None,
@@ -131,201 +131,351 @@ impl Default for GitAiBlameOptions {
     }
 }
 
-pub fn run(
-    repo: &Repository,
-    file_path: &str,
-    options: &GitAiBlameOptions,
-) -> Result<HashMap<u32, String>, GitAiError> {
-    // Use repo root for file system operations
-    let repo_root = repo.workdir().or_else(|e| {
-        Err(GitAiError::Generic(format!(
-            "Repository has no working directory: {}",
-            e
-        )))
-    })?;
-    let abs_file_path = repo_root.join(file_path);
+impl Repository {
+    pub fn blame(
+        &self,
+        file_path: &str,
+        options: &GitAiBlameOptions,
+    ) -> Result<HashMap<u32, String>, GitAiError> {
+        // Use repo root for file system operations
+        let repo_root = self.workdir().or_else(|e| {
+            Err(GitAiError::Generic(format!(
+                "Repository has no working directory: {}",
+                e
+            )))
+        })?;
+        let abs_file_path = repo_root.join(file_path);
 
-    // Validate that the file exists
-    if !abs_file_path.exists() {
-        return Err(GitAiError::Generic(format!(
-            "File not found: {}",
-            abs_file_path.display()
-        )));
-    }
-
-    // Read the current file content
-    let file_content = fs::read_to_string(&abs_file_path)?;
-    let lines: Vec<&str> = file_content.lines().collect();
-    let total_lines = lines.len() as u32;
-
-    // Determine the line ranges to process
-    let line_ranges = if options.line_ranges.is_empty() {
-        vec![(1, total_lines)]
-    } else {
-        options.line_ranges.clone()
-    };
-
-    // Validate line ranges
-    for (start, end) in &line_ranges {
-        if *start == 0 || *end == 0 || start > end || *end > total_lines {
+        // Validate that the file exists
+        if !abs_file_path.exists() {
             return Err(GitAiError::Generic(format!(
-                "Invalid line range: {}:{}. File has {} lines",
-                start, end, total_lines
+                "File not found: {}",
+                abs_file_path.display()
             )));
         }
-    }
 
-    // Step 1: Get Git's native blame for all ranges
-    let mut all_blame_hunks = Vec::new();
-    for (start_line, end_line) in &line_ranges {
-        let hunks = get_git_blame_hunks(repo, file_path, *start_line, *end_line, options)?;
-        all_blame_hunks.extend(hunks);
-    }
+        // Read the current file content
+        let file_content = fs::read_to_string(&abs_file_path)?;
+        let lines: Vec<&str> = file_content.lines().collect();
+        let total_lines = lines.len() as u32;
 
-    // Step 2: Overlay AI authorship information
-    let line_authors = overlay_ai_authorship(repo, &all_blame_hunks, file_path)?;
+        // Determine the line ranges to process
+        let line_ranges = if options.line_ranges.is_empty() {
+            vec![(1, total_lines)]
+        } else {
+            options.line_ranges.clone()
+        };
 
-    // Output based on format
-    if options.porcelain || options.line_porcelain {
-        output_porcelain_format(
-            repo,
-            &line_authors,
-            file_path,
-            &lines,
-            &line_ranges,
-            options,
-        )?;
-    } else if options.incremental {
-        output_incremental_format(
-            repo,
-            &line_authors,
-            file_path,
-            &lines,
-            &line_ranges,
-            options,
-        )?;
-    } else {
-        output_default_format(
-            repo,
-            &line_authors,
-            file_path,
-            &lines,
-            &line_ranges,
-            options,
-        )?;
-    }
-
-    Ok(line_authors)
-}
-
-pub fn get_git_blame_hunks(
-    repo: &Repository,
-    file_path: &str,
-    start_line: u32,
-    end_line: u32,
-    options: &GitAiBlameOptions,
-) -> Result<Vec<BlameHunk>, GitAiError> {
-    let mut blame_opts = BlameOptions::new();
-    blame_opts.min_line(start_line.try_into().unwrap());
-    blame_opts.max_line(end_line.try_into().unwrap());
-    blame_opts.ignore_whitespace(true);
-
-    // Apply boundary options
-    if options.blank_boundary {
-        // Note: git2 doesn't have a direct equivalent to git blame's -b flag
-        // We'll handle boundary detection in the output formatting
-    }
-    if options.show_root {
-        // Note: git2 doesn't have a direct equivalent to git blame's --root flag
-        // We'll handle root commit detection in the output formatting
-    }
-
-    let repo_git2 = git2::Repository::open(repo.workdir().unwrap())?;
-
-    let blame = repo_git2.blame_file(Path::new(file_path), Some(&mut blame_opts))?;
-    let mut hunks = Vec::new();
-
-    let num_hunks = blame.len();
-    for i in 0..num_hunks {
-        let hunk = blame
-            .get_index(i)
-            .ok_or_else(|| GitAiError::Generic("Failed to get blame hunk".to_string()))?;
-
-        let start = hunk.final_start_line(); // Already 1-indexed
-        let end = start + hunk.lines_in_hunk() - 1;
-
-        // Get original line numbers in the commit
-        let orig_start = hunk.orig_start_line(); // Already 1-indexed
-        let orig_end = orig_start + hunk.lines_in_hunk() - 1;
-
-        let commit_id = hunk.final_commit_id();
-        let commit = match repo.find_commit(commit_id.to_string()) {
-            Ok(commit) => commit,
-            Err(_) => {
-                continue; // Skip this hunk if we can't find the commit
+        // Validate line ranges
+        for (start, end) in &line_ranges {
+            if *start == 0 || *end == 0 || start > end || *end > total_lines {
+                return Err(GitAiError::Generic(format!(
+                    "Invalid line range: {}:{}. File has {} lines",
+                    start, end, total_lines
+                )));
             }
-        };
+        }
 
-        let author = commit.author()?;
-        let committer = commit.committer()?;
-        let commit_sha = commit_id.to_string();
+        // Step 1: Get Git's native blame for all ranges
+        let mut all_blame_hunks = Vec::new();
+        for (start_line, end_line) in &line_ranges {
+            let hunks = self.blame_hunks(file_path, *start_line, *end_line, options)?;
+            all_blame_hunks.extend(hunks);
+        }
 
-        // Determine hash length based on options
-        let hash_len = if options.long_rev {
-            40 // Full hash for long revision
-        } else if let Some(abbrev) = options.abbrev {
-            abbrev as usize
+        // Step 2: Overlay AI authorship information
+        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, file_path)?;
+
+        // Output based on format
+        if options.porcelain || options.line_porcelain {
+            output_porcelain_format(
+                self,
+                &line_authors,
+                file_path,
+                &lines,
+                &line_ranges,
+                options,
+            )?;
+        } else if options.incremental {
+            output_incremental_format(
+                self,
+                &line_authors,
+                file_path,
+                &lines,
+                &line_ranges,
+                options,
+            )?;
         } else {
-            7 // Default 7 chars
-        };
+            output_default_format(
+                self,
+                &line_authors,
+                file_path,
+                &lines,
+                &line_ranges,
+                options,
+            )?;
+        }
 
-        let abbrev_sha = if hash_len < commit_sha.len() {
-            commit_sha[..hash_len].to_string()
-        } else {
-            commit_sha.clone()
-        };
-
-        let original_author = author.name().unwrap_or("unknown").to_string();
-        let author_email = author.email().unwrap_or("").to_string();
-        let author_time = author.when().seconds();
-        let author_tz = format!(
-            "{:+03}{:02}",
-            author.when().offset_minutes() / 60,
-            (author.when().offset_minutes().abs() % 60)
-        );
-        let committer_name = committer.name().unwrap_or("").to_string();
-        let committer_email = committer.email().unwrap_or("").to_string();
-        let committer_time = committer.when().seconds();
-        let committer_tz = format!(
-            "{:+03}{:02}",
-            committer.when().offset_minutes() / 60,
-            (committer.when().offset_minutes().abs() % 60)
-        );
-
-        // Check if this is a boundary commit (has no parent)
-        let is_boundary = commit.parent_count()? == 0;
-
-        hunks.push(BlameHunk {
-            range: (start.try_into().unwrap(), end.try_into().unwrap()),
-            orig_range: (orig_start.try_into().unwrap(), orig_end.try_into().unwrap()),
-            commit_sha,
-            abbrev_sha,
-            original_author,
-            author_email,
-            author_time,
-            author_tz,
-            committer: committer_name,
-            committer_email,
-            committer_time,
-            committer_tz,
-            is_boundary,
-        });
+        Ok(line_authors)
     }
 
-    Ok(hunks)
+    pub fn blame_hunks(
+        &self,
+        file_path: &str,
+        start_line: u32,
+        end_line: u32,
+        options: &GitAiBlameOptions,
+    ) -> Result<Vec<BlameHunk>, GitAiError> {
+        // Build git blame --line-porcelain command
+        let mut args = self.global_args_for_exec();
+        args.push("blame".to_string());
+        args.push("--line-porcelain".to_string());
+
+        // Match previous behavior: ignore whitespace
+        args.push("-w".to_string());
+
+        // Respect ignore options in use
+        for rev in &options.ignore_revs {
+            args.push("--ignore-rev".to_string());
+            args.push(rev.clone());
+        }
+        if let Some(file) = &options.ignore_revs_file {
+            args.push("--ignore-revs-file".to_string());
+            args.push(file.clone());
+        }
+
+        // Limit to specified range
+        args.push("-L".to_string());
+        args.push(format!("{},{}", start_line, end_line));
+
+        // Support newest_commit option (equivalent to libgit2's newest_commit)
+        // This limits blame to only consider commits up to and including the specified commit
+        if let Some(ref commit) = options.newest_commit {
+            args.push(commit.clone());
+        }
+
+        // Separator then file path
+        args.push("--".to_string());
+        args.push(file_path.to_string());
+
+        let output = exec_git(&args)?;
+        let stdout = String::from_utf8(output.stdout)?;
+
+        // Parser state for current hunk
+        #[derive(Default)]
+        struct CurMeta {
+            author: String,
+            author_mail: String,
+            author_time: i64,
+            author_tz: String,
+            committer: String,
+            committer_mail: String,
+            committer_time: i64,
+            committer_tz: String,
+            boundary: bool,
+        }
+
+        let mut hunks: Vec<BlameHunk> = Vec::new();
+        let mut cur_commit: Option<String> = None;
+        let mut cur_final_start: u32 = 0;
+        let mut cur_orig_start: u32 = 0;
+        let mut cur_group_size: u32 = 0;
+        let mut cur_meta = CurMeta::default();
+
+        for line in stdout.lines() {
+            if line.is_empty() {
+                continue;
+            }
+
+            if line.starts_with('\t') {
+                // Content line; nothing to do, boundaries are driven by headers
+                continue;
+            }
+
+            // Metadata lines
+            if let Some(rest) = line.strip_prefix("author ") {
+                cur_meta.author = rest.to_string();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("author-mail ") {
+                // Usually in form: <mail>
+                cur_meta.author_mail = rest
+                    .trim()
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_string();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("author-time ") {
+                if let Ok(t) = rest.trim().parse::<i64>() {
+                    cur_meta.author_time = t;
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("author-tz ") {
+                cur_meta.author_tz = rest.trim().to_string();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("committer ") {
+                cur_meta.committer = rest.to_string();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("committer-mail ") {
+                cur_meta.committer_mail = rest
+                    .trim()
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_string();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("committer-time ") {
+                if let Ok(t) = rest.trim().parse::<i64>() {
+                    cur_meta.committer_time = t;
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("committer-tz ") {
+                cur_meta.committer_tz = rest.trim().to_string();
+                continue;
+            }
+            if line == "boundary" {
+                cur_meta.boundary = true;
+                continue;
+            }
+
+            // Header line: either 4 fields (new hunk) or 3 fields (continuation)
+            let mut parts = line.split_whitespace();
+            let sha = parts.next().unwrap_or("");
+            let p2 = parts.next().unwrap_or("");
+            let p3 = parts.next().unwrap_or("");
+            let p4 = parts.next();
+
+            let is_header = !sha.is_empty()
+                && sha.chars().all(|c| c.is_ascii_hexdigit())
+                && !p2.is_empty()
+                && !p3.is_empty();
+            if !is_header {
+                continue;
+            }
+
+            // If we encounter a new hunk header (4 fields), flush previous hunk first
+            if p4.is_some() {
+                if let Some(prev_sha) = cur_commit.take() {
+                    // Push the previous hunk
+                    let start = cur_final_start;
+                    let end = if cur_group_size > 0 {
+                        start + cur_group_size - 1
+                    } else {
+                        start
+                    };
+                    let orig_start = cur_orig_start;
+                    let orig_end = if cur_group_size > 0 {
+                        orig_start + cur_group_size - 1
+                    } else {
+                        orig_start
+                    };
+
+                    let abbrev_len = if options.long_rev {
+                        40
+                    } else {
+                        options.abbrev.unwrap_or(7) as usize
+                    };
+                    let abbrev = if abbrev_len < prev_sha.len() {
+                        prev_sha[..abbrev_len].to_string()
+                    } else {
+                        prev_sha.clone()
+                    };
+
+                    hunks.push(BlameHunk {
+                        range: (start, end),
+                        orig_range: (orig_start, orig_end),
+                        commit_sha: prev_sha,
+                        abbrev_sha: abbrev,
+                        original_author: cur_meta.author.clone(),
+                        author_email: cur_meta.author_mail.clone(),
+                        author_time: cur_meta.author_time,
+                        author_tz: cur_meta.author_tz.clone(),
+                        committer: cur_meta.committer.clone(),
+                        committer_email: cur_meta.committer_mail.clone(),
+                        committer_time: cur_meta.committer_time,
+                        committer_tz: cur_meta.committer_tz.clone(),
+                        is_boundary: cur_meta.boundary,
+                    });
+                }
+
+                // Start new hunk
+                cur_commit = Some(sha.to_string());
+                // According to docs: fields are orig_lineno, final_lineno, group_size
+                let orig_start = p2.parse::<u32>().unwrap_or(0);
+                let final_start = p3.parse::<u32>().unwrap_or(0);
+                let group = p4.unwrap_or("1").parse::<u32>().unwrap_or(1);
+                cur_orig_start = orig_start;
+                cur_final_start = final_start;
+                cur_group_size = group;
+                // Reset metadata for the new hunk
+                cur_meta = CurMeta::default();
+            } else {
+                // 3-field header: continuation line within current hunk
+                // Nothing to do for grouping since we use recorded group_size
+                // Metadata remains from the first line of the hunk
+                if cur_commit.is_none() {
+                    // Defensive: if no current hunk, start one with size 1
+                    cur_commit = Some(sha.to_string());
+                    cur_orig_start = p2.parse::<u32>().unwrap_or(0);
+                    cur_final_start = p3.parse::<u32>().unwrap_or(0);
+                    cur_group_size = 1;
+                }
+            }
+        }
+
+        // Flush the final hunk if present
+        if let Some(prev_sha) = cur_commit.take() {
+            let start = cur_final_start;
+            let end = if cur_group_size > 0 {
+                start + cur_group_size - 1
+            } else {
+                start
+            };
+            let orig_start = cur_orig_start;
+            let orig_end = if cur_group_size > 0 {
+                orig_start + cur_group_size - 1
+            } else {
+                orig_start
+            };
+
+            let abbrev_len = if options.long_rev {
+                40
+            } else {
+                options.abbrev.unwrap_or(7) as usize
+            };
+            let abbrev = if abbrev_len < prev_sha.len() {
+                prev_sha[..abbrev_len].to_string()
+            } else {
+                prev_sha.clone()
+            };
+
+            hunks.push(BlameHunk {
+                range: (start, end),
+                orig_range: (orig_start, orig_end),
+                commit_sha: prev_sha,
+                abbrev_sha: abbrev,
+                original_author: cur_meta.author.clone(),
+                author_email: cur_meta.author_mail.clone(),
+                author_time: cur_meta.author_time,
+                author_tz: cur_meta.author_tz.clone(),
+                committer: cur_meta.committer.clone(),
+                committer_email: cur_meta.committer_mail.clone(),
+                committer_time: cur_meta.committer_time,
+                committer_tz: cur_meta.committer_tz.clone(),
+                is_boundary: cur_meta.boundary,
+            });
+        }
+
+        Ok(hunks)
+    }
 }
 
-pub fn overlay_ai_authorship(
+fn overlay_ai_authorship(
     repo: &Repository,
     blame_hunks: &[BlameHunk],
     file_path: &str,
@@ -435,7 +585,7 @@ fn output_porcelain_format(
     // Build a map from line number to BlameHunk for fast lookup
     let mut line_to_hunk: HashMap<u32, BlameHunk> = HashMap::new();
     for (start_line, end_line) in line_ranges {
-        let h = get_git_blame_hunks(repo, file_path, *start_line, *end_line, options)?;
+        let h = repo.blame_hunks(file_path, *start_line, *end_line, options)?;
         for hunk in h {
             for line_num in hunk.range.0..=hunk.range.1 {
                 line_to_hunk.insert(line_num, hunk.clone());
@@ -548,7 +698,7 @@ fn output_incremental_format(
     // Build a map from line number to BlameHunk for fast lookup
     let mut line_to_hunk: HashMap<u32, BlameHunk> = HashMap::new();
     for (start_line, end_line) in line_ranges {
-        let h = get_git_blame_hunks(repo, file_path, *start_line, *end_line, options)?;
+        let h = repo.blame_hunks(file_path, *start_line, *end_line, options)?;
         for hunk in h {
             for line_num in hunk.range.0..=hunk.range.1 {
                 line_to_hunk.insert(line_num, hunk.clone());
@@ -633,7 +783,7 @@ fn output_default_format(
     // Build a map from line number to BlameHunk for fast lookup
     let mut line_to_hunk: HashMap<u32, BlameHunk> = HashMap::new();
     for (start_line, end_line) in line_ranges {
-        let h = get_git_blame_hunks(repo, file_path, *start_line, *end_line, options)?;
+        let h = repo.blame_hunks(file_path, *start_line, *end_line, options)?;
         for hunk in h {
             for line_num in hunk.range.0..=hunk.range.1 {
                 line_to_hunk.insert(line_num, hunk.clone());

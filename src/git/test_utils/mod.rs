@@ -646,7 +646,7 @@ impl TmpRepo {
             std::env::set_var("PAGER", "cat");
         }
 
-        let blame_map = blame::run(&self.repo_gitai, &tmp_file.filename, &options)?;
+        let blame_map = self.repo_gitai.blame(&tmp_file.filename, &options)?;
         println!("blame_map: {:?}", blame_map);
         Ok(blame_map.into_iter().collect())
     }

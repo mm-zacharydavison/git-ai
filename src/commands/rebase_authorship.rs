@@ -1,3 +1,4 @@
+use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
 use crate::git::find_repository_in_path;
 use crate::git::repository::{Commit, Repository};
@@ -25,8 +26,6 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     new_sha: &str,
     dry_run: bool,
 ) -> Result<AuthorshipLog, GitAiError> {
-    let repo_git2 = git2::Repository::open(repo.workdir().unwrap())?;
-
     // Step 1: Find the common origin base
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
@@ -41,19 +40,12 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // sha. that's ok
     let origin_base_commit = repo.find_commit(origin_base.to_string())?;
     let origin_base_tree = origin_base_commit.tree()?;
-    let origin_base_tree_git2 =
-        repo_git2.find_tree(git2::Oid::from_str(&origin_base_tree.id())?)?;
     let new_commit_parent_tree = new_commit_parent.tree()?;
-    let new_commit_parent_tree_git2 =
-        repo_git2.find_tree(git2::Oid::from_str(&new_commit_parent_tree.id())?)?;
 
     // TODO Is this diff necessary? The result is unused
     // Create diff between the two trees
-    let _diff = repo_git2.diff_tree_to_tree(
-        Some(&origin_base_tree_git2),
-        Some(&new_commit_parent_tree_git2),
-        None,
-    )?;
+    let _diff =
+        repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -72,7 +64,6 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // Aggregate the results in a variable, then we'll dump a new authorship log.
     let new_authorship_log = reconstruct_authorship_from_diff(
         repo,
-        &repo_git2,
         &new_commit,
         &new_commit_parent,
         &hanging_commit_sha,
@@ -207,7 +198,6 @@ fn delete_hanging_commit(repo: &Repository, commit_sha: &str) -> Result<(), GitA
 /// A new AuthorshipLog with reconstructed authorship information
 fn reconstruct_authorship_from_diff(
     repo: &Repository,
-    repo_git2: &git2::Repository,
     new_commit: &Commit,
     new_commit_parent: &Commit,
     hanging_commit_sha: &str,
@@ -216,16 +206,14 @@ fn reconstruct_authorship_from_diff(
 
     // Get the trees for the diff
     let new_tree = new_commit.tree()?;
-    let new_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&new_tree.id())?)?;
     let parent_tree = new_commit_parent.tree()?;
-    let parent_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&parent_tree.id())?)?;
 
-    // Create diff between new_commit and new_commit_parent
-    let diff = repo_git2.diff_tree_to_tree(Some(&parent_tree_git2), Some(&new_tree_git2), None)?;
+    // Create diff between new_commit and new_commit_parent using Git CLI
+    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None)?;
     // Debug visibility for test runs
     #[cfg(test)]
     {
-        eprintln!("files changed: {}", diff.deltas().len());
+        eprintln!("files changed: {}", diff.len());
     }
 
     let mut authorship_entries = Vec::new();
@@ -327,7 +315,6 @@ fn reconstruct_authorship_from_diff(
 
                         let blame_result = run_blame_in_context(
                             repo,
-                            repo_git2,
                             &file_path_str,
                             blame_line_number,
                             hanging_commit_sha,
@@ -493,7 +480,6 @@ fn reconstruct_authorship_from_diff(
 /// The AI authorship information (author and prompt) for the line, or None if not found
 fn run_blame_in_context(
     repo: &Repository,
-    repo_git2: &git2::Repository,
     file_path: &str,
     line_number: u32,
     hanging_commit_sha: &str,
@@ -505,7 +491,6 @@ fn run_blame_in_context(
     GitAiError,
 > {
     use crate::git::refs::get_reference_as_authorship_log_v3;
-    use git2::BlameOptions;
 
     // println!(
     //     "Running blame in context for line {} in file {}",
@@ -516,21 +501,18 @@ fn run_blame_in_context(
     let hanging_commit = repo.find_commit(hanging_commit_sha.to_string())?;
 
     // Create blame options for the specific line
-    let mut blame_opts = BlameOptions::new();
-    blame_opts.min_line(line_number as usize);
-    blame_opts.max_line(line_number as usize);
-    blame_opts.newest_commit(git2::Oid::from_str(&hanging_commit.id())?); // Set the hanging commit as the newest commit for blame
+    let mut blame_opts = GitAiBlameOptions::default();
+    blame_opts.newest_commit = Some(hanging_commit.id().to_string()); // Set the hanging commit as the newest commit for blame
 
     // Run blame on the file in the context of the hanging commit
-    let blame = repo_git2.blame_file(std::path::Path::new(file_path), Some(&mut blame_opts))?;
+    let blame = repo.blame_hunks(file_path, line_number, line_number, &blame_opts)?;
 
     if blame.len() > 0 {
         let hunk = blame
-            .get_index(0)
+            .get(0)
             .ok_or_else(|| GitAiError::Generic("Failed to get blame hunk".to_string()))?;
 
-        let commit_id = hunk.final_commit_id();
-        let commit_sha = commit_id.to_string();
+        let commit_sha = &hunk.commit_sha;
 
         // Look up the AI authorship log for this commit
         let ref_name = format!("ai/authorship/{}", commit_sha);
@@ -538,7 +520,7 @@ fn run_blame_in_context(
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author
-                let commit = repo.find_commit(commit_id.to_string())?;
+                let commit = repo.find_commit(commit_sha.to_string())?;
                 let author = commit.author()?;
                 let author_name = author.name().unwrap_or("unknown");
                 let author_email = author.email().unwrap_or("");
@@ -558,7 +540,7 @@ fn run_blame_in_context(
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
-            let commit = repo.find_commit(commit_id.to_string())?;
+            let commit = repo.find_commit(commit_sha.to_string())?;
             let author = commit.author()?;
             let author_name = author.name().unwrap_or("unknown");
             let author_email = author.email().unwrap_or("");

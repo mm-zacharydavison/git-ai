@@ -1,4 +1,4 @@
-use git2::Diff;
+use crate::git::diff_tree_to_tree::Diff;
 
 /// Debug logging utility function
 ///
