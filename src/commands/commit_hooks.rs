@@ -9,7 +9,6 @@ pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
         return;
     }
 
-    // TODO Take global args into account
     // Find the git repository
     let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,

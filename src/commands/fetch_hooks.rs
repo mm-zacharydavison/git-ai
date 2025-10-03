@@ -12,8 +12,6 @@ pub fn fetch_post_command_hook(
         return;
     }
 
-    // TODO Take into account global args
-
     // Find the git repository
     let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,
