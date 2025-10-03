@@ -898,7 +898,7 @@ impl Repository {
 pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiError> {
     let mut args = global_args.clone();
     args.push("rev-parse".to_string());
-    args.push("--git-dir".to_string());
+    args.push("--absolute-git-dir".to_string());
 
     let output = exec_git(&args)?;
     let git_dir_str = String::from_utf8(output.stdout)?;
