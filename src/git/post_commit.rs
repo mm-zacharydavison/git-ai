@@ -2,39 +2,22 @@ use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
 use crate::git::refs::put_reference;
 use crate::git::repo_storage::RepoStorage;
+use crate::git::repository::Repository;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
-use git2::Repository;
 
-pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, AuthorshipLog), GitAiError> {
+pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiError> {
     // Get the current commit SHA (the commit that was just made)
     let head = repo.head()?;
     let commit_sha = match head.target() {
-        Some(oid) => oid.to_string(),
-        None => {
+        Ok(oid) => oid.to_string(),
+        Err(_) => {
             return Err(GitAiError::Generic(
                 "No HEAD commit found. Cannot run post-commit hook.".to_string(),
             ));
         }
     };
-
-    // Verify the working directory is clean (commit was successful)
-    let mut status_opts = git2::StatusOptions::new();
-    status_opts.include_untracked(false);
-    status_opts.include_ignored(false);
-    status_opts.include_unmodified(false);
-
-    let statuses = repo.statuses(Some(&mut status_opts))?;
-    if !statuses.is_empty() {
-        if force {
-            println!("Warning: Working directory is not clean, but proceeding due to --force flag");
-        } else {
-            return Err(GitAiError::Generic(
-                "Working directory is not clean after commit. Something went wrong. Use --force to bypass this check.".to_string(),
-            ));
-        }
-    }
 
     let current_commit = repo.find_commit(head.target().unwrap())?;
 
@@ -63,17 +46,27 @@ pub fn post_commit(repo: &Repository, force: bool) -> Result<(String, Authorship
     CursorPreset::update_cursor_conversations_to_latest(&mut filtered_working_log)?;
 
     // Get git user information for human_author field
-    let human_author = match repo.config() {
-        Ok(config) => {
-            let name = config
-                .get_string("user.name")
-                .unwrap_or_else(|_| "unknown".to_string());
-            let email = config
-                .get_string("user.email")
-                .unwrap_or_else(|_| "".to_string());
-            Some(format!("{} <{}>", name, email))
-        }
-        Err(_) => None,
+    let human_author = {
+        let name = repo
+            .config_get_str("user.name")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let email = repo
+            .config_get_str("user.email")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let display_name = if name.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            name
+        };
+        Some(if email.trim().is_empty() {
+            display_name
+        } else {
+            format!("{} <{}>", display_name, email)
+        })
     };
 
     // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---

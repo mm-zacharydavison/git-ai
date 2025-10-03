@@ -40,14 +40,6 @@ pub fn handle_git_ai(args: &[String]) {
         "squash-authorship" => {
             commands::rebase_authorship::handle_squash_authorship(&args[1..]);
         }
-        "benchmark" => {
-            let working_dir = std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-
-            commands::benchmark::profile_key_operations(&working_dir);
-        }
         _ => {
             println!("Unknown git-ai command: {}", args[0]);
             std::process::exit(1);
@@ -241,16 +233,10 @@ fn handle_checkpoint(args: &[String]) {
     };
 
     // Get the current user name from git config
-    let default_user_name = match repo.config() {
-        Ok(config) => match config.get_string("user.name") {
-            Ok(name) => name,
-            Err(_) => {
-                eprintln!("Warning: git user.name not configured. Using 'unknown' as author.");
-                "unknown".to_string()
-            }
-        },
-        Err(_) => {
-            eprintln!("Warning: Failed to get git config. Using 'unknown' as author.");
+    let default_user_name = match repo.config_get_str("user.name") {
+        Ok(Some(name)) if !name.trim().is_empty() => name,
+        _ => {
+            eprintln!("Warning: git user.name not configured. Using 'unknown' as author.");
             "unknown".to_string()
         }
     };
@@ -290,8 +276,9 @@ fn handle_stats_delta(args: &[String]) {
         }
     }
 
+    // TODO: Do we have any 'global' args for the stats-delta?
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository(Vec::<String>::new()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -311,8 +298,9 @@ fn handle_ai_blame(args: &[String]) {
         std::process::exit(1);
     }
 
+    // TODO: Do we have any 'global' args for the ai-blame?
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository(Vec::<String>::new()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);

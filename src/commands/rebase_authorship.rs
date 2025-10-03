@@ -1,7 +1,7 @@
 use crate::error::GitAiError;
-use crate::git::find_repository;
+use crate::git::find_repository_in_path;
+use crate::git::repository::{Commit, Repository};
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
-use git2::{MergeOptions, Oid, Repository};
 use similar::{ChangeTag, TextDiff};
 
 /// Rewrite authorship log after a squash merge or rebase
@@ -25,6 +25,8 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     new_sha: &str,
     dry_run: bool,
 ) -> Result<AuthorshipLog, GitAiError> {
+    let repo_git2 = git2::Repository::open(repo.workdir().unwrap())?;
+
     // Step 1: Find the common origin base
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
@@ -32,18 +34,26 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     let _old_shas = build_commit_path_to_base(repo, head_sha, &origin_base)?;
 
     // Step 3: Get the parent of the new commit
-    let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
+    let new_commit = repo.find_commit(new_sha.to_string())?;
     let new_commit_parent = new_commit.parent(0)?;
 
     // Step 4: Compute a diff between origin_base and new_commit_parent. Sometimes it's the same
     // sha. that's ok
-    let origin_base_commit = repo.find_commit(Oid::from_str(&origin_base)?)?;
+    let origin_base_commit = repo.find_commit(origin_base.to_string())?;
     let origin_base_tree = origin_base_commit.tree()?;
+    let origin_base_tree_git2 =
+        repo_git2.find_tree(git2::Oid::from_str(&origin_base_tree.id())?)?;
     let new_commit_parent_tree = new_commit_parent.tree()?;
+    let new_commit_parent_tree_git2 =
+        repo_git2.find_tree(git2::Oid::from_str(&new_commit_parent_tree.id())?)?;
 
+    // TODO Is this diff necessary? The result is unused
     // Create diff between the two trees
-    let _diff =
-        repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
+    let _diff = repo_git2.diff_tree_to_tree(
+        Some(&origin_base_tree_git2),
+        Some(&new_commit_parent_tree_git2),
+        None,
+    )?;
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -62,6 +72,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // Aggregate the results in a variable, then we'll dump a new authorship log.
     let new_authorship_log = reconstruct_authorship_from_diff(
         repo,
+        &repo_git2,
         &new_commit,
         &new_commit_parent,
         &hanging_commit_sha,
@@ -120,30 +131,31 @@ fn apply_diff_as_merge_commit(
     // Resolve the merge as a real three-way merge of trees
     // base: origin_base, ours: old_head_sha, theirs: new_commit_parent
     // Favor OURS (old_head) on conflicts per comment "OLD Head wins when there's conflicts"
-    let base_commit = repo.find_commit(Oid::from_str(origin_base)?)?;
-    let ours_commit = repo.find_commit(Oid::from_str(old_head_sha)?)?;
-    let theirs_commit = repo.find_commit(Oid::from_str(new_commit_parent)?)?;
+    let base_commit = repo.find_commit(origin_base.to_string())?;
+    let ours_commit = repo.find_commit(old_head_sha.to_string())?;
+    let theirs_commit = repo.find_commit(new_commit_parent.to_string())?;
 
     let base_tree = base_commit.tree()?;
     let ours_tree = ours_commit.tree()?;
     let theirs_tree = theirs_commit.tree()?;
 
-    let mut merge_opts = MergeOptions::new();
-    // Prefer the content from OURS when conflicts occur
-    merge_opts.file_favor(git2::FileFavor::Ours);
-
+    // NOTE: Below is the libgit2 version of the logic (merge, write, find)
     // Perform the merge of trees to an index
-    let mut index = repo.merge_trees(&base_tree, &ours_tree, &theirs_tree, Some(&merge_opts))?;
+    // let mut index = repo.merge_trees_favor_ours(&base_tree, &ours_tree, &theirs_tree)?;
 
     // Write the index to a tree object
-    let tree_oid = index.write_tree_to(repo)?;
+    // let tree_oid = index.write_tree_to(repo)?;
+    // let merged_tree = repo.find_tree(tree_oid)?;
+
+    // TODO Verify new version is correct (we should be getting a tree oid straight back from merge_trees_favor_ours)
+    let tree_oid = repo.merge_trees_favor_ours(&base_tree, &ours_tree, &theirs_tree)?;
     let merged_tree = repo.find_tree(tree_oid)?;
 
     // Create the hanging merge commit with parents [ours, theirs]
     let merge_commit = repo.commit(
         None,
-        &ours_commit.author(),
-        &ours_commit.committer(),
+        &ours_commit.author()?,
+        &ours_commit.committer()?,
         &format!(
             "Merge diff from {} to {} onto {}",
             origin_base, new_commit_parent, old_head_sha
@@ -166,7 +178,7 @@ fn apply_diff_as_merge_commit(
 /// * `commit_sha` - SHA of the commit to delete
 fn delete_hanging_commit(repo: &Repository, commit_sha: &str) -> Result<(), GitAiError> {
     // Find the commit to verify it exists
-    let _commit = repo.find_commit(Oid::from_str(commit_sha)?)?;
+    let _commit = repo.find_commit(commit_sha.to_string())?;
 
     // Delete the commit using git command
     let _output = std::process::Command::new(crate::config::Config::get().git_cmd())
@@ -195,19 +207,21 @@ fn delete_hanging_commit(repo: &Repository, commit_sha: &str) -> Result<(), GitA
 /// A new AuthorshipLog with reconstructed authorship information
 fn reconstruct_authorship_from_diff(
     repo: &Repository,
-    new_commit: &git2::Commit,
-    new_commit_parent: &git2::Commit,
+    repo_git2: &git2::Repository,
+    new_commit: &Commit,
+    new_commit_parent: &Commit,
     hanging_commit_sha: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
-    use git2::Oid;
     use std::collections::{HashMap, HashSet};
 
     // Get the trees for the diff
     let new_tree = new_commit.tree()?;
+    let new_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&new_tree.id())?)?;
     let parent_tree = new_commit_parent.tree()?;
+    let parent_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&parent_tree.id())?)?;
 
     // Create diff between new_commit and new_commit_parent
-    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None)?;
+    let diff = repo_git2.diff_tree_to_tree(Some(&parent_tree_git2), Some(&new_tree_git2), None)?;
     // Debug visibility for test runs
     #[cfg(test)]
     {
@@ -232,7 +246,8 @@ fn reconstruct_authorship_from_diff(
         let old_content =
             if let Ok(entry) = parent_tree.get_path(std::path::Path::new(&file_path_str)) {
                 if let Ok(blob) = repo.find_blob(entry.id()) {
-                    String::from_utf8_lossy(blob.content()).to_string()
+                    let content = blob.content()?;
+                    String::from_utf8_lossy(&content).to_string()
                 } else {
                     String::new()
                 }
@@ -243,7 +258,8 @@ fn reconstruct_authorship_from_diff(
         let new_content = if let Ok(entry) = new_tree.get_path(std::path::Path::new(&file_path_str))
         {
             if let Ok(blob) = repo.find_blob(entry.id()) {
-                String::from_utf8_lossy(blob.content()).to_string()
+                let content = blob.content()?;
+                String::from_utf8_lossy(&content).to_string()
             } else {
                 String::new()
             }
@@ -252,12 +268,13 @@ fn reconstruct_authorship_from_diff(
         };
 
         // Pull the file content from the hanging commit to map inserted text to historical lines
-        let hanging_commit = repo.find_commit(Oid::from_str(hanging_commit_sha)?)?;
+        let hanging_commit = repo.find_commit(hanging_commit_sha.to_string())?;
         let hanging_tree = hanging_commit.tree()?;
         let hanging_content =
             if let Ok(entry) = hanging_tree.get_path(std::path::Path::new(&file_path_str)) {
                 if let Ok(blob) = repo.find_blob(entry.id()) {
-                    String::from_utf8_lossy(blob.content()).to_string()
+                    let content = blob.content()?;
+                    String::from_utf8_lossy(&content).to_string()
                 } else {
                     String::new()
                 }
@@ -310,6 +327,7 @@ fn reconstruct_authorship_from_diff(
 
                         let blame_result = run_blame_in_context(
                             repo,
+                            repo_git2,
                             &file_path_str,
                             blame_line_number,
                             hanging_commit_sha,
@@ -475,6 +493,7 @@ fn reconstruct_authorship_from_diff(
 /// The AI authorship information (author and prompt) for the line, or None if not found
 fn run_blame_in_context(
     repo: &Repository,
+    repo_git2: &git2::Repository,
     file_path: &str,
     line_number: u32,
     hanging_commit_sha: &str,
@@ -486,7 +505,7 @@ fn run_blame_in_context(
     GitAiError,
 > {
     use crate::git::refs::get_reference_as_authorship_log_v3;
-    use git2::{BlameOptions, Oid};
+    use git2::BlameOptions;
 
     // println!(
     //     "Running blame in context for line {} in file {}",
@@ -494,16 +513,16 @@ fn run_blame_in_context(
     // );
 
     // Find the hanging commit
-    let hanging_commit = repo.find_commit(Oid::from_str(hanging_commit_sha)?)?;
+    let hanging_commit = repo.find_commit(hanging_commit_sha.to_string())?;
 
     // Create blame options for the specific line
     let mut blame_opts = BlameOptions::new();
     blame_opts.min_line(line_number as usize);
     blame_opts.max_line(line_number as usize);
-    blame_opts.newest_commit(hanging_commit.id()); // Set the hanging commit as the newest commit for blame
+    blame_opts.newest_commit(git2::Oid::from_str(&hanging_commit.id())?); // Set the hanging commit as the newest commit for blame
 
     // Run blame on the file in the context of the hanging commit
-    let blame = repo.blame_file(std::path::Path::new(file_path), Some(&mut blame_opts))?;
+    let blame = repo_git2.blame_file(std::path::Path::new(file_path), Some(&mut blame_opts))?;
 
     if blame.len() > 0 {
         let hunk = blame
@@ -519,8 +538,8 @@ fn run_blame_in_context(
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author
-                let commit = repo.find_commit(commit_id)?;
-                let author = commit.author();
+                let commit = repo.find_commit(commit_id.to_string())?;
+                let author = commit.author()?;
                 let author_name = author.name().unwrap_or("unknown");
                 let author_email = author.email().unwrap_or("");
 
@@ -539,8 +558,8 @@ fn run_blame_in_context(
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
-            let commit = repo.find_commit(commit_id)?;
-            let author = commit.author();
+            let commit = repo.find_commit(commit_id.to_string())?;
+            let author = commit.author()?;
             let author_name = author.name().unwrap_or("unknown");
             let author_email = author.email().unwrap_or("");
 
@@ -562,8 +581,8 @@ fn find_common_origin_base_from_head(
     head_sha: &str,
     new_sha: &str,
 ) -> Result<String, GitAiError> {
-    let new_commit = repo.find_commit(Oid::from_str(new_sha)?)?;
-    let head_commit = repo.find_commit(Oid::from_str(head_sha)?)?;
+    let new_commit = repo.find_commit(new_sha.to_string())?;
+    let head_commit = repo.find_commit(head_sha.to_string())?;
 
     // Find the merge base between the head commit and the new commit
     let merge_base = repo.merge_base(head_commit.id(), new_commit.id())?;
@@ -590,8 +609,7 @@ fn build_commit_path_to_base(
     head_sha: &str,
     origin_base: &str,
 ) -> Result<Vec<String>, GitAiError> {
-    let head_commit = repo.find_commit(Oid::from_str(head_sha)?)?;
-    let origin_base_oid = Oid::from_str(origin_base)?;
+    let head_commit = repo.find_commit(head_sha.to_string())?;
 
     let mut commits = Vec::new();
     let mut current_commit = head_commit;
@@ -599,7 +617,7 @@ fn build_commit_path_to_base(
     // Walk backwards from head to origin_base
     loop {
         // If we've reached the origin base, we're done
-        if current_commit.id() == origin_base_oid {
+        if current_commit.id() == origin_base.to_string() {
             break;
         }
 
@@ -698,8 +716,10 @@ pub fn handle_squash_authorship(args: &[String]) {
         }
     };
 
+    // TODO Think about whether or not path should be an optional argument
+
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository_in_path(".") {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -718,12 +738,11 @@ pub fn handle_squash_authorship(args: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use git2::Repository;
     use insta::assert_debug_snapshot;
 
     #[test]
     fn test_in_order() {
-        let repo = Repository::discover("tests/gitflow-repo").unwrap();
+        let repo = find_repository_in_path("tests/gitflow-repo").unwrap();
 
         let new_sha = "22ab8a64bee45d9292f680f07a8f79234c2cb9d5";
         let destination_branch = "origin/main";
@@ -745,7 +764,7 @@ mod tests {
 
     #[test]
     fn test_with_out_of_band_commits() {
-        let repo = Repository::discover("tests/gitflow-repo").unwrap();
+        let repo = find_repository_in_path("tests/gitflow-repo").unwrap();
 
         let new_sha = "13b1a9736d8caaec665b29b2c6792b2eba1fb169";
         let destination_branch = "origin/main";

@@ -2,16 +2,15 @@ use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::find_repository;
 use crate::git::post_commit;
 use crate::git::pre_commit;
+use crate::git::repository::Repository;
 
 pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
     if is_dry_run(&parsed_args.command_args) {
         return;
     }
 
-    // TODO Take global args into account
-    // TODO Remove this once we migrate off of libgit2
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -19,10 +18,10 @@ pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
         }
     };
 
-    let default_user_name = get_commit_default_user_name(&repo, &parsed_args.command_args);
+    let default_author = get_commit_default_author(&repo, &parsed_args.command_args);
 
     // Run pre-commit logic
-    if let Err(e) = pre_commit::pre_commit(&repo, default_user_name.clone()) {
+    if let Err(e) = pre_commit::pre_commit(&repo, default_author.clone()) {
         eprintln!("Pre-commit failed: {}", e);
         std::process::exit(1);
     }
@@ -40,10 +39,8 @@ pub fn commit_post_command_hook(
         return;
     }
 
-    // TODO Take global args into account
-    // TODO Remove this once we migrate off of libgit2
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -51,15 +48,19 @@ pub fn commit_post_command_hook(
         }
     };
 
-    if let Err(e) = post_commit::post_commit(&repo, false) {
+    if let Err(e) = post_commit::post_commit(&repo) {
         eprintln!("Post-commit failed: {}", e);
     }
 }
 
-fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> String {
+fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
     // According to git commit manual, --author flag overrides all other author information
     if let Some(author_spec) = extract_author_from_args(args) {
-        return resolve_author_spec(repo, &author_spec);
+        if let Ok(Some(resolved_author)) = repo.resolve_author_spec(&author_spec) {
+            if !resolved_author.trim().is_empty() {
+                return resolved_author.trim().to_string();
+            }
+        }
     }
 
     // Normal precedence when --author is not specified:
@@ -76,11 +77,9 @@ fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> Str
     }
 
     // Fall back to git config user.name
-    if let Ok(config) = repo.config() {
-        if let Ok(name) = config.get_string("user.name") {
-            if !name.trim().is_empty() {
-                return name.trim().to_string();
-            }
+    if let Ok(Some(name)) = repo.config_get_str("user.name") {
+        if !name.trim().is_empty() {
+            return name.trim().to_string();
         }
     }
 
@@ -121,44 +120,4 @@ fn extract_author_from_args(args: &[String]) -> Option<String> {
         i += 1;
     }
     None
-}
-
-fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
-    // According to git commit docs, --author can be:
-    // 1. "A U Thor <author@example.com>" format - use as explicit author
-    // 2. A pattern to search for existing commits via git rev-list --all -i --author=<pattern>
-
-    // If it looks like "Name <email>" format, extract the name part
-    if let Some(email_start) = author_spec.rfind('<') {
-        let name_part = author_spec[..email_start].trim();
-        if !name_part.is_empty() {
-            return name_part.to_string();
-        }
-    }
-
-    // If it doesn't look like an explicit format, treat it as a search pattern
-    // Try to find an existing commit by that author
-    if let Ok(mut revwalk) = repo.revwalk() {
-        if revwalk.push_glob("refs/*").is_ok() {
-            for oid_result in revwalk {
-                if let Ok(oid) = oid_result {
-                    if let Ok(commit) = repo.find_commit(oid) {
-                        let author = commit.author();
-                        if let Some(author_name) = author.name() {
-                            // Case-insensitive search (like git rev-list -i --author)
-                            if author_name
-                                .to_lowercase()
-                                .contains(&author_spec.to_lowercase())
-                            {
-                                return author_name.to_string();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no matching commit found, use the pattern as-is
-    author_spec.trim().to_string()
 }

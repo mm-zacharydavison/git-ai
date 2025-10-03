@@ -1,7 +1,7 @@
 use crate::error::GitAiError;
+use crate::git::repository::Repository;
 use crate::log_fmt::authorship_log_serialization::{AUTHORSHIP_LOG_VERSION, AuthorshipLog};
 use crate::log_fmt::working_log::Checkpoint;
-use git2::Repository;
 use serde_json;
 use std::fs;
 
@@ -40,8 +40,11 @@ pub fn get_reference(repo: &Repository, ref_name: &str) -> Result<String, GitAiE
     // Get the object that the reference points to
     let object = reference.peel_to_blob()?;
 
+    // Get the content of the blob
+    let content = object.content()?;
+
     // Convert the blob content to a string, handling invalid UTF-8 gracefully
-    let content = String::from_utf8_lossy(object.content());
+    let content = String::from_utf8_lossy(&content);
 
     Ok(content.to_string())
 }
@@ -83,19 +86,20 @@ pub fn get_reference_as_authorship_log_v3(
     Ok(authorship_log)
 }
 
-#[allow(dead_code)]
-pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
-    let full_ref_name = format!("refs/{}", ref_name);
+// TODO Implement later if needed (requires a new reference.delete() method in repository.rs)
+// #[allow(dead_code)]
+// pub fn delete_reference(repo: &Repository, ref_name: &str) -> Result<(), GitAiError> {
+//     let full_ref_name = format!("refs/{}", ref_name);
 
-    // Try to find and delete the reference
-    match repo.find_reference(&full_ref_name) {
-        Ok(mut reference) => {
-            reference.delete()?;
-            Ok(())
-        }
-        Err(_) => {
-            // Reference doesn't exist, which is fine for deletion
-            Ok(())
-        }
-    }
-}
+//     // Try to find and delete the reference
+//     match repo.find_reference(&full_ref_name) {
+//         Ok(mut reference) => {
+//             reference.delete()?;
+//             Ok(())
+//         }
+//         Err(_) => {
+//             // Reference doesn't exist, which is fine for deletion
+//             Ok(())
+//         }
+//     }
+// }

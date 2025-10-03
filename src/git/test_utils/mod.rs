@@ -1,45 +1,42 @@
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::post_commit::post_commit;
+use crate::git::repository::Repository as GitAiRepository;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-// Simple Linear Congruential Generator for generating random temporary directory names
-#[allow(dead_code)]
-struct SimpleRng {
-    state: u64,
-}
+// Create a guaranteed-unique temporary directory under the OS temp dir.
+// Combines high-resolution time, process id, and an atomic counter, retrying on collisions.
+fn create_unique_tmp_dir(prefix: &str) -> Result<PathBuf, GitAiError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let base = std::env::temp_dir();
 
-#[allow(dead_code)]
-impl SimpleRng {
-    fn new() -> Self {
-        // Use current time as seed
-        let seed = std::time::SystemTime::now()
+    // Try a handful of times in the extremely unlikely case of collision
+    for _attempt in 0..100u32 {
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as u64;
-        Self { state: seed }
-    }
+            .as_nanos();
+        let pid = std::process::id();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir_name = format!("{}-{}-{}-{}", prefix, now, pid, seq);
+        let path = base.join(dir_name);
 
-    fn next(&mut self) -> u64 {
-        // LCG parameters: a = 1664525, c = 1013904223, m = 2^32
-        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
-        self.state
-    }
-
-    fn gen_random_string(&mut self, len: usize) -> String {
-        const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let mut result = String::with_capacity(len);
-        for _ in 0..len {
-            let idx = (self.next() % CHARS.len() as u64) as usize;
-            result.push(CHARS[idx] as char);
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(GitAiError::IoError(e)),
         }
-        result
     }
+
+    Err(GitAiError::Generic(
+        "Failed to create a unique temporary directory after multiple attempts".to_string(),
+    ))
 }
 
 #[allow(dead_code)]
@@ -240,7 +237,7 @@ impl TmpFile {
         fs::write(&file_path, &self.contents)?;
 
         // Add to git index using the filename directly
-        let mut index = self.repo.repo.index()?;
+        let mut index = self.repo.repo_git2.index()?;
         index.add_path(&std::path::Path::new(&self.filename))?;
         index.write()?;
 
@@ -262,33 +259,36 @@ impl TmpFile {
 #[allow(dead_code)]
 pub struct TmpRepo {
     path: PathBuf,
-    repo: Repository,
+    repo_git2: Repository,
+    repo_gitai: GitAiRepository,
 }
 
 #[allow(dead_code)]
 impl TmpRepo {
     /// Creates a new temporary repository with a randomly generated directory
     pub fn new() -> Result<Self, GitAiError> {
-        // Generate a random temporary directory path using our simple RNG
-        let mut rng = SimpleRng::new();
-        let random_suffix = rng.gen_random_string(8);
-        let tmp_dir = std::env::temp_dir().join(format!("git-ai-tmp-{}", random_suffix));
+        // Generate a robust, unique temporary directory path
+        let tmp_dir = create_unique_tmp_dir("git-ai-tmp")?;
 
-        // Create the directory if it doesn't exist
-        fs::create_dir_all(&tmp_dir)?;
+        println!("tmp_dir: {:?}", tmp_dir);
 
         // Initialize git repository
-        let repo = Repository::init(&tmp_dir)?;
+        let repo_git2 = Repository::init(&tmp_dir)?;
+
+        // Initialize gitai repository
+        let repo_gitai =
+            crate::git::repository::find_repository_in_path(tmp_dir.to_str().unwrap())?;
 
         // Configure git user for commits
-        let mut config = repo.config()?;
+        let mut config = repo_git2.config()?;
         config.set_str("user.name", "Test User")?;
         config.set_str("user.email", "test@example.com")?;
 
         // (No initial empty commit)
         Ok(TmpRepo {
             path: tmp_dir,
-            repo,
+            repo_git2: repo_git2,
+            repo_gitai: repo_gitai,
         })
     }
 
@@ -319,7 +319,7 @@ impl TmpRepo {
         fs::write(&file_path, contents)?;
 
         if add_to_git {
-            let mut index = self.repo.index()?;
+            let mut index = self.repo_git2.index()?;
             index.add_path(&file_path.strip_prefix(&self.path).unwrap())?;
             index.write()?;
         }
@@ -327,7 +327,10 @@ impl TmpRepo {
         Ok(TmpFile {
             repo: TmpRepo {
                 path: self.path.clone(),
-                repo: Repository::open(&self.path)?,
+                repo_git2: Repository::open(&self.path)?,
+                repo_gitai: crate::git::repository::find_repository_in_path(
+                    self.path.to_str().unwrap(),
+                )?,
             },
             filename: filename.to_string(),
             contents: contents.to_string(),
@@ -340,9 +343,12 @@ impl TmpRepo {
         author: &str,
     ) -> Result<(usize, usize, usize), GitAiError> {
         checkpoint(
-            &self.repo, author, false, // show_working_log
+            &self.repo_gitai,
+            author,
+            false, // show_working_log
             false, // reset
-            true, None, // model
+            true,
+            None, // model
             None, // human_author
             None, // agent_run_result
         )
@@ -383,7 +389,7 @@ impl TmpRepo {
         };
 
         checkpoint(
-            &self.repo,
+            &self.repo_gitai,
             agent_name,
             false, // show_working_log
             false, // reset
@@ -397,13 +403,13 @@ impl TmpRepo {
     /// Commits all changes with the given message and runs post-commit hook
     pub fn commit_with_message(&self, message: &str) -> Result<AuthorshipLog, GitAiError> {
         // Add all files to the index
-        let mut index = self.repo.index()?;
+        let mut index = self.repo_git2.index()?;
         index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
         index.write()?;
 
         // Create the commit
         let tree_id = index.write_tree()?;
-        let tree = self.repo.find_tree(tree_id)?;
+        let tree = self.repo_git2.find_tree(tree_id)?;
 
         // Use a fixed timestamp for stable test results
         // Unix timestamp for 2023-01-01 12:00:00 UTC
@@ -411,9 +417,9 @@ impl TmpRepo {
         let signature = Signature::new("Test User", "test@example.com", &fixed_time)?;
 
         // Check if there's a parent commit before we use it
-        let _has_parent = if let Ok(head) = self.repo.head() {
+        let _has_parent = if let Ok(head) = self.repo_git2.head() {
             if let Some(target) = head.target() {
-                self.repo.find_commit(target).is_ok()
+                self.repo_git2.find_commit(target).is_ok()
             } else {
                 false
             }
@@ -422,9 +428,9 @@ impl TmpRepo {
         };
 
         // Get the current HEAD for the parent commit
-        let parent_commit = if let Ok(head) = self.repo.head() {
+        let parent_commit = if let Ok(head) = self.repo_git2.head() {
             if let Some(target) = head.target() {
-                Some(self.repo.find_commit(target)?)
+                Some(self.repo_git2.find_commit(target)?)
             } else {
                 None
             }
@@ -433,7 +439,7 @@ impl TmpRepo {
         };
 
         let _commit_id = if let Some(parent) = parent_commit {
-            self.repo.commit(
+            self.repo_git2.commit(
                 Some(&"HEAD"),
                 &signature,
                 &signature,
@@ -442,34 +448,34 @@ impl TmpRepo {
                 &[&parent],
             )?
         } else {
-            self.repo
+            self.repo_git2
                 .commit(Some(&"HEAD"), &signature, &signature, message, &tree, &[])?
         };
 
         println!("Commit ID: {}", _commit_id);
 
         // Run the post-commit hook for all commits (including initial commit)
-        let post_commit_result = post_commit(&self.repo, false)?; // false = not force
+        let post_commit_result = post_commit(&self.repo_gitai)?;
 
         Ok(post_commit_result.1)
     }
 
     /// Creates a new branch and switches to it
     pub fn create_branch(&self, branch_name: &str) -> Result<(), GitAiError> {
-        let head = self.repo.head()?;
-        let commit = self.repo.find_commit(head.target().unwrap())?;
-        let _branch = self.repo.branch(branch_name, &commit, false)?;
+        let head = self.repo_git2.head()?;
+        let commit = self.repo_git2.find_commit(head.target().unwrap())?;
+        let _branch = self.repo_git2.branch(branch_name, &commit, false)?;
 
         // Switch to the new branch
         let branch_ref = self
-            .repo
+            .repo_git2
             .find_reference(&format!("refs/heads/{}", branch_name))?;
-        self.repo.set_head(branch_ref.name().unwrap())?;
+        self.repo_git2.set_head(branch_ref.name().unwrap())?;
 
         // Update the working directory
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
         checkout_opts.force();
-        self.repo.checkout_head(Some(&mut checkout_opts))?;
+        self.repo_git2.checkout_head(Some(&mut checkout_opts))?;
 
         Ok(())
     }
@@ -477,13 +483,13 @@ impl TmpRepo {
     /// Switches to an existing branch
     pub fn switch_branch(&self, branch_name: &str) -> Result<(), GitAiError> {
         let branch_ref = self
-            .repo
+            .repo_git2
             .find_reference(&format!("refs/heads/{}", branch_name))?;
-        self.repo.set_head(branch_ref.name().unwrap())?;
+        self.repo_git2.set_head(branch_ref.name().unwrap())?;
 
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
         checkout_opts.force();
-        self.repo.checkout_head(Some(&mut checkout_opts))?;
+        self.repo_git2.checkout_head(Some(&mut checkout_opts))?;
 
         Ok(())
     }
@@ -504,7 +510,7 @@ impl TmpRepo {
         }
 
         // Run post-commit hook
-        post_commit(&self.repo, false)?;
+        post_commit(&self.repo_gitai)?;
 
         Ok(())
     }
@@ -564,14 +570,14 @@ impl TmpRepo {
         // )?;
 
         // Run post-commit hook
-        post_commit(&self.repo, false)?;
+        post_commit(&self.repo_gitai)?;
 
         Ok(())
     }
 
     /// Gets the current branch name
     pub fn current_branch(&self) -> Result<String, GitAiError> {
-        let head = self.repo.head()?;
+        let head = self.repo_git2.head()?;
         let branch_name = head
             .shorthand()
             .ok_or_else(|| GitAiError::Generic("Could not get branch name".to_string()))?;
@@ -580,7 +586,7 @@ impl TmpRepo {
 
     /// Gets the commit SHA of the current HEAD
     pub fn head_commit_sha(&self) -> Result<String, GitAiError> {
-        let head = self.repo.head()?;
+        let head = self.repo_git2.head()?;
         let commit_sha = head
             .target()
             .ok_or_else(|| GitAiError::Generic("No HEAD commit found".to_string()))?
@@ -594,7 +600,7 @@ impl TmpRepo {
         let current = self.current_branch()?;
 
         // List all references and find the first branch
-        let refs = self.repo.references()?;
+        let refs = self.repo_git2.references()?;
         for reference in refs {
             let reference = reference?;
             if let Some(name) = reference.name() {
@@ -618,7 +624,7 @@ impl TmpRepo {
 
     /// Gets a reference to the underlying git2 Repository
     pub fn repo(&self) -> &Repository {
-        &self.repo
+        &self.repo_git2
     }
 
     /// Runs blame on a file in the repository
@@ -640,7 +646,7 @@ impl TmpRepo {
             std::env::set_var("PAGER", "cat");
         }
 
-        let blame_map = blame::run(&self.repo, &tmp_file.filename, &options)?;
+        let blame_map = blame::run(&self.repo_gitai, &tmp_file.filename, &options)?;
         println!("blame_map: {:?}", blame_map);
         Ok(blame_map.into_iter().collect())
     }
@@ -649,11 +655,11 @@ impl TmpRepo {
     pub fn get_authorship_log(
         &self,
     ) -> Result<crate::log_fmt::authorship_log_serialization::AuthorshipLog, GitAiError> {
-        let head = self.repo.head()?;
+        let head = self.repo_git2.head()?;
         let commit_id = head.target().unwrap().to_string();
         let ref_name = format!("ai/authorship/{}", commit_id);
 
-        match crate::git::refs::get_reference(&self.repo, &ref_name) {
+        match crate::git::refs::get_reference(&self.repo_gitai, &ref_name) {
             Ok(content) => {
                 // Parse the authorship log from the reference content
                 crate::log_fmt::authorship_log_serialization::AuthorshipLog::deserialize_from_string(&content)

@@ -1,7 +1,7 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::find_repository;
 use crate::git::refs::AI_AUTHORSHIP_REFSPEC;
-use crate::git::repository::{exec_git, get_default_remote};
+use crate::git::repository::exec_git;
 use crate::utils::debug_log;
 
 pub fn fetch_post_command_hook(
@@ -12,11 +12,8 @@ pub fn fetch_post_command_hook(
         return;
     }
 
-    // TODO Take into account global args
-    // TODO Migrate off of libgit2
-
     // Find the git repository
-    let repo = match find_repository() {
+    let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -45,52 +42,35 @@ pub fn fetch_post_command_hook(
             .cloned()
     });
 
-    // If not specified, try to get upstream remote of current branch
-    fn upstream_remote(repo: &git2::Repository) -> Option<String> {
-        let head = repo.head().ok()?;
-        if !head.is_branch() {
-            return None;
-        }
-        let branch_name = head.shorthand()?;
-        let branch = repo
-            .find_branch(branch_name, git2::BranchType::Local)
-            .ok()?;
-        let upstream = branch.upstream().ok()?;
-        let upstream_name = upstream.name().ok()??; // e.g., "origin/main"
-        let remote = upstream_name.split('/').next()?.to_string();
-        Some(remote)
-    }
-
     let remote = specified_remote
-        .or_else(|| upstream_remote(&repo))
-        .or_else(|| get_default_remote(&repo));
+        .or_else(|| repo.upstream_remote().ok().flatten())
+        .or_else(|| repo.get_default_remote().ok().flatten());
 
     if let Some(remote) = remote {
         // Build the internal authorship fetch with explicit flags and disabled hooks
-        let fetch_authorship = vec![
-            "-c".to_string(),
-            "core.hooksPath=/dev/null".to_string(),
-            "fetch".to_string(),
-            "--no-tags".to_string(),
-            "--recurse-submodules=no".to_string(),
-            "--no-write-fetch-head".to_string(),
-            "--no-write-commit-graph".to_string(),
-            "--no-auto-maintenance".to_string(),
-            remote,
-            AI_AUTHORSHIP_REFSPEC.to_string(),
-        ];
+        // IMPORTANT: run in the same repo context by prefixing original global args (e.g., -C <path>)
+        let mut fetch_authorship: Vec<String> = parsed_args.global_args.clone();
+        fetch_authorship.push("-c".to_string());
+        fetch_authorship.push("core.hooksPath=/dev/null".to_string());
+        fetch_authorship.push("fetch".to_string());
+        fetch_authorship.push("--no-tags".to_string());
+        fetch_authorship.push("--recurse-submodules=no".to_string());
+        fetch_authorship.push("--no-write-fetch-head".to_string());
+        fetch_authorship.push("--no-write-commit-graph".to_string());
+        fetch_authorship.push("--no-auto-maintenance".to_string());
+        fetch_authorship.push(remote);
+        fetch_authorship.push(AI_AUTHORSHIP_REFSPEC.to_string());
         debug_log(&format!(
             "fetching authorship refs: {:?}",
             &fetch_authorship
         ));
-        let fetch_res = exec_git(&fetch_authorship);
-        if let Err(e) = fetch_res {
-            eprintln!("Failed to fetch authorship refs: {}", e);
-            std::process::exit(1);
+        if let Err(e) = exec_git(&fetch_authorship) {
+            // Treat as best-effort; do not fail the user command if authorship sync fails
+            debug_log(&format!("authorship fetch skipped due to error: {}", e));
         }
     } else {
-        eprintln!("Failed to fetch authorship refs: No git remotes found.");
-        std::process::exit(1);
+        // No remotes to sync from; silently skip
+        debug_log("no remotes found for authorship fetch; skipping");
     }
 }
 

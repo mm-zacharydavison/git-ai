@@ -1,8 +1,9 @@
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
+use crate::git::repository::Repository;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
-use git2::{BlameOptions, Repository};
+use git2::BlameOptions;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
@@ -136,9 +137,12 @@ pub fn run(
     options: &GitAiBlameOptions,
 ) -> Result<HashMap<u32, String>, GitAiError> {
     // Use repo root for file system operations
-    let repo_root = repo
-        .workdir()
-        .ok_or_else(|| GitAiError::Generic("Repository has no working directory".to_string()))?;
+    let repo_root = repo.workdir().or_else(|e| {
+        Err(GitAiError::Generic(format!(
+            "Repository has no working directory: {}",
+            e
+        )))
+    })?;
     let abs_file_path = repo_root.join(file_path);
 
     // Validate that the file exists
@@ -236,7 +240,9 @@ pub fn get_git_blame_hunks(
         // We'll handle root commit detection in the output formatting
     }
 
-    let blame = repo.blame_file(Path::new(file_path), Some(&mut blame_opts))?;
+    let repo_git2 = git2::Repository::open(repo.workdir().unwrap())?;
+
+    let blame = repo_git2.blame_file(Path::new(file_path), Some(&mut blame_opts))?;
     let mut hunks = Vec::new();
 
     let num_hunks = blame.len();
@@ -253,15 +259,15 @@ pub fn get_git_blame_hunks(
         let orig_end = orig_start + hunk.lines_in_hunk() - 1;
 
         let commit_id = hunk.final_commit_id();
-        let commit = match repo.find_commit(commit_id) {
+        let commit = match repo.find_commit(commit_id.to_string()) {
             Ok(commit) => commit,
             Err(_) => {
                 continue; // Skip this hunk if we can't find the commit
             }
         };
 
-        let author = commit.author();
-        let committer = commit.committer();
+        let author = commit.author()?;
+        let committer = commit.committer()?;
         let commit_sha = commit_id.to_string();
 
         // Determine hash length based on options
@@ -297,7 +303,7 @@ pub fn get_git_blame_hunks(
         );
 
         // Check if this is a boundary commit (has no parent)
-        let is_boundary = commit.parent_count() == 0;
+        let is_boundary = commit.parent_count()? == 0;
 
         hunks.push(BlameHunk {
             range: (start.try_into().unwrap(), end.try_into().unwrap()),
@@ -461,8 +467,8 @@ fn output_porcelain_format(
                 let filename = file_path;
 
                 // Retrieve the commit summary directly from the commit object
-                let commit = repo.find_commit(git2::Oid::from_str(commit_sha).unwrap())?;
-                let summary = commit.summary().unwrap_or("unknown");
+                let commit = repo.find_commit(commit_sha.clone())?;
+                let summary = commit.summary()?;
 
                 let hunk_id = (commit_sha.clone(), hunk.range.0);
                 if options.line_porcelain {

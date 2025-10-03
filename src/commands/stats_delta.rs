@@ -2,8 +2,8 @@ use crate::error::GitAiError;
 use crate::git::refs::get_reference;
 use crate::git::refs::put_reference;
 use crate::git::repo_storage::RepoStorage;
+use crate::git::repository::Repository;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
-use git2::Repository;
 use std::collections::HashMap;
 
 pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
@@ -65,11 +65,12 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
     // Sort by commit date (most recent first)
     let mut sorted_refs: Vec<(String, usize, i64)> = Vec::new();
     for (commit_hash, checkpoint_count) in filtered_refs {
+        // TODO This should probably be optimized to be done in a single call to git
         // Get commit date
         let commit_time = match repo.revparse_single(&commit_hash) {
             Ok(obj) => {
                 if let Ok(commit) = obj.peel_to_commit() {
-                    commit.time().seconds()
+                    commit.time()?.seconds()
                 } else {
                     0 // fallback
                 }
