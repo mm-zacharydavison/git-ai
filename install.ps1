@@ -187,12 +187,8 @@ $gitShim = Join-Path $installDir 'git.exe'
 Copy-Item -Force -Path $finalExe -Destination $gitShim
 try { Unblock-File -Path $gitShim -ErrorAction SilentlyContinue } catch { }
 
-# Detect standard Git path to avoid recursion and set env var
+# Detect standard Git path to avoid recursion (used to seed JSON config)
 $stdGitPath = Get-StdGitPath
-if ($stdGitPath) {
-    [Environment]::SetEnvironmentVariable('GIT_AI_GIT_PATH', $stdGitPath, 'User')
-    $env:GIT_AI_GIT_PATH = $stdGitPath
-}
 
 # Install hooks
 Write-Host 'Setting up IDE/agent hooks...'
@@ -213,3 +209,19 @@ if ($scope -eq 'Machine') {
 
 Write-Success "Successfully installed git-ai into $installDir"
 Write-Success "You can now run 'git-ai' from your terminal"
+
+# Write JSON config at %USERPROFILE%\.git-ai\config.json
+try {
+    $configDir = Join-Path $HOME '.git-ai'
+    $configJsonPath = Join-Path $configDir 'config.json'
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+
+    if (-not $stdGitPath) {
+        Write-Host "Warning: Could not detect a standard git binary on PATH.`nYou can manually set it in: $configJsonPath" -ForegroundColor Yellow
+    }
+
+    $cfg = @{ git_path = $stdGitPath; ignore_prompts = $false } | ConvertTo-Json -Compress
+    $cfg | Out-File -FilePath $configJsonPath -Encoding UTF8 -Force
+} catch {
+    Write-Host "Warning: Failed to write config.json: $($_.Exception.Message)" -ForegroundColor Yellow
+}

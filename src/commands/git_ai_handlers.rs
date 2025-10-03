@@ -1,4 +1,5 @@
 use crate::commands;
+use crate::config;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
 };
@@ -24,6 +25,11 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "ai-blame" => {
             handle_ai_blame(&args[1..]);
+        },
+        "git-path" => {
+            let config = config::Config::get();
+            println!("{}", config.git_cmd());
+            std::process::exit(0);
         }
         "install-hooks" => {
             // This command is not ready for production - only allow in debug builds
