@@ -18,9 +18,9 @@ impl<'a> Object<'a> {
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("--verify".to_string());
-        args.push(format!("{}^{}", self.oid, "commit"));
+        args.push(format!("{}^{}", self.oid, "{commit}"));
         let output = exec_git(&args)?;
         Ok(Commit {
             repo: self.repo,
@@ -100,9 +100,9 @@ impl<'a> Commit<'a> {
     pub fn tree(&self) -> Result<Tree<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("--verify".to_string());
-        args.push(format!("{}^{}", self.oid, "tree"));
+        args.push(format!("{}^{}", self.oid, "{tree}"));
         let output = exec_git(&args)?;
         Ok(Tree {
             repo: self.repo,
@@ -113,7 +113,7 @@ impl<'a> Commit<'a> {
     pub fn parent(&self, i: usize) -> Result<Commit<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("--verify".to_string());
         // libgit2 uses 0-based indexing; Git's rev syntax uses 1-based parent selectors.
         args.push(format!("{}^{}", self.oid, i + 1));
@@ -246,6 +246,11 @@ pub struct Tree<'a> {
 }
 
 impl<'a> Tree<'a> {
+    // Get the id of the tree
+    pub fn id(&self) -> String {
+        self.oid.clone()
+    }
+
     pub fn clone(&self) -> Tree<'a> {
         Tree {
             repo: self.repo,
@@ -371,9 +376,9 @@ impl<'a> Reference<'a> {
     pub fn peel_to_blob(&self) -> Result<Blob<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("--verify".to_string());
-        args.push(format!("{}^{}", self.ref_name, "blob"));
+        args.push(format!("{}^{}", self.ref_name, "{blob}"));
         let output = exec_git(&args)?;
         Ok(Blob {
             repo: self.repo,
@@ -385,9 +390,9 @@ impl<'a> Reference<'a> {
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("--verify".to_string());
-        args.push(format!("{}^{}", self.ref_name, "commit"));
+        args.push(format!("{}^{}", self.ref_name, "{commit}"));
         let output = exec_git(&args)?;
         Ok(Commit {
             repo: self.repo,
@@ -471,7 +476,7 @@ impl Repository {
     pub fn head<'a>(&'a self) -> Result<Reference<'a>, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("symbolic-ref".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("HEAD".to_string());
 
         let output = exec_git(&args);
@@ -703,7 +708,7 @@ impl Repository {
             // Capture current tip if any: rev-parse -q --verify <target_ref>
             let mut rp_args = self.global_args_for_exec();
             rp_args.push("rev-parse".to_string());
-            rp_args.push("-q".to_string());
+            // rp_args.push("-q".to_string()); // For gitai, we want to see the error message if the ref doesn't exist
             rp_args.push("--verify".to_string());
             rp_args.push(target_ref.clone());
 
@@ -753,7 +758,7 @@ impl Repository {
     pub fn revparse_single(&self, spec: &str) -> Result<Object<'_>, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("rev-parse".to_string());
-        args.push("-q".to_string());
+        // args.push("-q".to_string());
         args.push("--verify".to_string());
         args.push(spec.to_string());
         let output = exec_git(&args)?;
@@ -929,7 +934,7 @@ pub fn exec_git(args: &[String]) -> Result<Output, GitAiError> {
     if !output.status.success() {
         let code = output.status.code();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(GitAiError::GitCliError { code, stderr });
+        return Err(GitAiError::GitCliError { code, stderr, args: args.to_vec() });
     }
 
     Ok(output)
@@ -958,7 +963,7 @@ pub fn exec_git_stdin(args: &[String], stdin_data: &[u8]) -> Result<Output, GitA
     if !output.status.success() {
         let code = output.status.code();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(GitAiError::GitCliError { code, stderr });
+        return Err(GitAiError::GitCliError { code, stderr, args: args.to_vec() });
     }
 
     Ok(output)
@@ -996,7 +1001,7 @@ pub fn exec_git_stdin_with_env(
     if !output.status.success() {
         let code = output.status.code();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(GitAiError::GitCliError { code, stderr });
+        return Err(GitAiError::GitCliError { code, stderr, args: args.to_vec() });
     }
 
     Ok(output)

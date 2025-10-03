@@ -240,7 +240,9 @@ pub fn get_git_blame_hunks(
         // We'll handle root commit detection in the output formatting
     }
 
-    let blame = repo.blame_file(Path::new(file_path), Some(&mut blame_opts))?;
+    let repo_git2 = git2::Repository::open(repo.workdir().unwrap())?;
+
+    let blame = repo_git2.blame_file(Path::new(file_path), Some(&mut blame_opts))?;
     let mut hunks = Vec::new();
 
     let num_hunks = blame.len();
@@ -257,7 +259,7 @@ pub fn get_git_blame_hunks(
         let orig_end = orig_start + hunk.lines_in_hunk() - 1;
 
         let commit_id = hunk.final_commit_id();
-        let commit = match repo.find_commit(commit_id) {
+        let commit = match repo.find_commit(commit_id.to_string()) {
             Ok(commit) => commit,
             Err(_) => {
                 continue; // Skip this hunk if we can't find the commit

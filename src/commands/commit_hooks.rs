@@ -11,7 +11,7 @@ pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
 
     // TODO Take global args into account
     // Find the git repository
-    let repo = match find_repository(parsed_args.command_args.clone()) {
+    let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -42,7 +42,7 @@ pub fn commit_post_command_hook(
 
     // TODO Take global args into account
     // Find the git repository
-    let repo = match find_repository(parsed_args.command_args.clone()) {
+    let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
