@@ -328,11 +328,14 @@ pub struct Blob<'a> {
 }
 
 impl<'a> Blob<'a> {
+    pub fn id(&self) -> String {
+        self.oid.clone()
+    }
+
     // Get the content of this blob.
     pub fn content(&self) -> Result<Vec<u8>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("cat-file".to_string());
-        args.push("-p".to_string());
         args.push("blob".to_string());
         args.push(self.oid.clone());
         let output = exec_git(&args)?;
