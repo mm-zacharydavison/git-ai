@@ -1,3 +1,4 @@
+use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
 use crate::git::find_repository_in_path;
 use crate::git::repository::{Commit, Repository};
@@ -43,11 +44,8 @@ pub fn rewrite_authorship_after_squash_or_rebase(
 
     // TODO Is this diff necessary? The result is unused
     // Create diff between the two trees
-    let _diff = repo.diff_tree_to_tree(
-        Some(&origin_base_tree),
-        Some(&new_commit_parent_tree),
-        None,
-    )?;
+    let _diff =
+        repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -493,7 +491,6 @@ fn run_blame_in_context(
     GitAiError,
 > {
     use crate::git::refs::get_reference_as_authorship_log_v3;
-    use git2::BlameOptions;
 
     // println!(
     //     "Running blame in context for line {} in file {}",
@@ -504,21 +501,18 @@ fn run_blame_in_context(
     let hanging_commit = repo.find_commit(hanging_commit_sha.to_string())?;
 
     // Create blame options for the specific line
-    let mut blame_opts = BlameOptions::new();
-    blame_opts.min_line(line_number as usize);
-    blame_opts.max_line(line_number as usize);
-    blame_opts.newest_commit(git2::Oid::from_str(&hanging_commit.id())?); // Set the hanging commit as the newest commit for blame
+    let mut blame_opts = GitAiBlameOptions::default();
+    blame_opts.newest_commit = Some(hanging_commit.id().to_string()); // Set the hanging commit as the newest commit for blame
 
     // Run blame on the file in the context of the hanging commit
-    let blame = repo.blame_file(file_path, Some(&mut blame_opts))?;
+    let blame = repo.blame_hunks(file_path, line_number, line_number, &blame_opts)?;
 
     if blame.len() > 0 {
         let hunk = blame
-            .get_index(0)
+            .get(0)
             .ok_or_else(|| GitAiError::Generic("Failed to get blame hunk".to_string()))?;
 
-        let commit_id = hunk.final_commit_id();
-        let commit_sha = commit_id.to_string();
+        let commit_sha = &hunk.commit_sha;
 
         // Look up the AI authorship log for this commit
         let ref_name = format!("ai/authorship/{}", commit_sha);
@@ -526,7 +520,7 @@ fn run_blame_in_context(
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author
-                let commit = repo.find_commit(commit_id.to_string())?;
+                let commit = repo.find_commit(commit_sha.to_string())?;
                 let author = commit.author()?;
                 let author_name = author.name().unwrap_or("unknown");
                 let author_email = author.email().unwrap_or("");
@@ -546,7 +540,7 @@ fn run_blame_in_context(
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
-            let commit = repo.find_commit(commit_id.to_string())?;
+            let commit = repo.find_commit(commit_sha.to_string())?;
             let author = commit.author()?;
             let author_name = author.name().unwrap_or("unknown");
             let author_email = author.email().unwrap_or("");

@@ -1,5 +1,5 @@
 use crate::error::GitAiError;
-use crate::git::repository::{exec_git, Repository, Tree};
+use crate::git::repository::{Repository, Tree, exec_git};
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -216,7 +216,7 @@ fn parse_diff_raw(data: &[u8]) -> Result<Vec<DiffDelta>, GitAiError> {
         // Parse status (may include similarity score for R/C)
         let status_char = status_str.chars().next().unwrap_or('M');
         let status = DiffStatus::from_char(status_char);
-        
+
         // Extract similarity score if present (e.g., "R95" -> 95)
         let similarity = if status_str.len() > 1 {
             status_str[1..].parse::<u32>().unwrap_or(0)
@@ -237,14 +237,16 @@ fn parse_diff_raw(data: &[u8]) -> Result<Vec<DiffDelta>, GitAiError> {
 
         // Construct the old_file and new_file
         let old_file = DiffFile {
-            path: old_path.or_else(|| {
-                // For deletions, the old file path is the path
-                if matches!(status, DiffStatus::Deleted) {
-                    Some(new_path.clone())
-                } else {
-                    Some(new_path.clone())
-                }
-            }).map(PathBuf::from),
+            path: old_path
+                .or_else(|| {
+                    // For deletions, the old file path is the path
+                    if matches!(status, DiffStatus::Deleted) {
+                        Some(new_path.clone())
+                    } else {
+                        Some(new_path.clone())
+                    }
+                })
+                .map(PathBuf::from),
             mode: old_mode.to_string(),
             oid: old_hash.to_string(),
         };
@@ -274,39 +276,45 @@ mod tests {
     fn test_parse_diff_raw() {
         // Sample output from git diff --raw -z (NUL-separated)
         let mut raw = Vec::new();
-        
+
         // Modified file
         raw.extend_from_slice(b":100644 100644 5716ca5987cbf97d6bb54920bea6adde242d87e6 8f94139338f9404f26296befa88755fc2598c289 M\0src/lib.rs\0");
-        
+
         // Added file
         raw.extend_from_slice(b":000000 100644 0000000000000000000000000000000000000000 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 A\0src/new.rs\0");
-        
+
         // Deleted file
         raw.extend_from_slice(b":100644 000000 1234567890abcdef1234567890abcdef12345678 0000000000000000000000000000000000000000 D\0src/old.rs\0");
-        
+
         // Renamed file with 95% similarity
         raw.extend_from_slice(b":100644 100644 abcdef1234567890abcdef1234567890abcdef12 abcdef1234567890abcdef1234567890abcdef12 R95\0src/renamed.rs\0src/original.rs\0");
 
         let deltas = parse_diff_raw(&raw).expect("parse should succeed");
-        
+
         assert_eq!(deltas.len(), 4);
-        
+
         // Check modified file
         assert_eq!(deltas[0].status, DiffStatus::Modified);
         assert_eq!(deltas[0].new_file.path().unwrap(), Path::new("src/lib.rs"));
-        
+
         // Check added file
         assert_eq!(deltas[1].status, DiffStatus::Added);
         assert_eq!(deltas[1].new_file.path().unwrap(), Path::new("src/new.rs"));
-        
+
         // Check deleted file
         assert_eq!(deltas[2].status, DiffStatus::Deleted);
         assert_eq!(deltas[2].old_file.path().unwrap(), Path::new("src/old.rs"));
-        
+
         // Check renamed file
         assert_eq!(deltas[3].status, DiffStatus::Renamed);
         assert_eq!(deltas[3].similarity, 95);
-        assert_eq!(deltas[3].new_file.path().unwrap(), Path::new("src/renamed.rs"));
-        assert_eq!(deltas[3].old_file.path().unwrap(), Path::new("src/original.rs"));
+        assert_eq!(
+            deltas[3].new_file.path().unwrap(),
+            Path::new("src/renamed.rs")
+        );
+        assert_eq!(
+            deltas[3].old_file.path().unwrap(),
+            Path::new("src/original.rs")
+        );
     }
 }

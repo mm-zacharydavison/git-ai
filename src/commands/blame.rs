@@ -44,6 +44,8 @@ pub struct GitAiBlameOptions {
     // Line range options
     pub line_ranges: Vec<(u32, u32)>,
 
+    pub newest_commit: Option<String>,
+
     // Output format options
     pub porcelain: bool,
     pub line_porcelain: bool,
@@ -87,7 +89,6 @@ pub struct GitAiBlameOptions {
 
     // Revision options
     #[allow(dead_code)]
-    pub revision: Option<String>,
     pub reverse: Option<String>,
     pub first_parent: bool,
 
@@ -100,6 +101,7 @@ impl Default for GitAiBlameOptions {
         Self {
             line_ranges: Vec::new(),
             porcelain: false,
+            newest_commit: None,
             line_porcelain: false,
             incremental: false,
             show_name: false,
@@ -122,7 +124,6 @@ impl Default for GitAiBlameOptions {
             progress: false,
             date_format: None,
             contents_file: None,
-            revision: None,
             reverse: None,
             first_parent: false,
             encoding: None,
@@ -246,6 +247,12 @@ impl Repository {
         // Limit to specified range
         args.push("-L".to_string());
         args.push(format!("{},{}", start_line, end_line));
+
+        // Support newest_commit option (equivalent to libgit2's newest_commit)
+        // This limits blame to only consider commits up to and including the specified commit
+        if let Some(ref commit) = options.newest_commit {
+            args.push(commit.clone());
+        }
 
         // Separator then file path
         args.push("--".to_string());
