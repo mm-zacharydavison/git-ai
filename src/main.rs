@@ -31,6 +31,15 @@ fn main() {
         .unwrap_or("git-ai".to_string());
 
     let cli = Cli::parse();
+
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("GIT_AI").as_deref() == Ok("git") {
+            commands::git_handlers::handle_git(&cli.args);
+            return;
+        }
+    }
+
     if binary_name == "git-ai" {
         commands::git_ai_handlers::handle_git_ai(&cli.args);
         std::process::exit(0);
