@@ -2,7 +2,7 @@ use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
-use crate::git::status::{EntryKind, StatusCode, status_porcelainv2};
+use crate::git::status::{EntryKind, StatusCode};
 use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::utils::debug_log;
 use sha2::{Digest, Sha256};
@@ -27,6 +27,14 @@ pub fn run(
         },
         Err(_) => "initial".to_string(),
     };
+
+    // Cannot run checkpoint on bare repositories
+    if repo.workdir().is_err() {
+        eprintln!("Cannot run checkpoint on bare repositories");
+        return Err(GitAiError::Generic(
+            "Cannot run checkpoint on bare repositories".to_string(),
+        ));
+    }
 
     // Initialize the new storage system
     let repo_storage = RepoStorage::for_repo_path(repo.path());
@@ -177,7 +185,7 @@ fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
 
     // Use porcelain v2 format to get status
-    let statuses = status_porcelainv2(repo)?;
+    let statuses = repo.status()?;
 
     for entry in statuses {
         // Skip ignored files

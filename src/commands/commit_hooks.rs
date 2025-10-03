@@ -4,9 +4,9 @@ use crate::git::post_commit;
 use crate::git::pre_commit;
 use crate::git::repository::Repository;
 
-pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
+pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) -> bool {
     if is_dry_run(&parsed_args.command_args) {
-        return;
+        return false;
     }
 
     // Find the git repository
@@ -22,9 +22,18 @@ pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
 
     // Run pre-commit logic
     if let Err(e) = pre_commit::pre_commit(&repo, default_author.clone()) {
+        if e.to_string()
+            .contains("Cannot run checkpoint on bare repositories")
+        {
+            eprintln!(
+                "Cannot run checkpoint on bare repositories (skipping git-ai pre-commit hook)"
+            );
+            return false;
+        }
         eprintln!("Pre-commit failed: {}", e);
         std::process::exit(1);
     }
+    return true;
 }
 
 pub fn commit_post_command_hook(
