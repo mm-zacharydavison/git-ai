@@ -41,14 +41,19 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // sha. that's ok
     let origin_base_commit = repo.find_commit(origin_base.to_string())?;
     let origin_base_tree = origin_base_commit.tree()?;
-    let origin_base_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&origin_base_tree.id())?)?;
+    let origin_base_tree_git2 =
+        repo_git2.find_tree(git2::Oid::from_str(&origin_base_tree.id())?)?;
     let new_commit_parent_tree = new_commit_parent.tree()?;
-    let new_commit_parent_tree_git2 = repo_git2.find_tree(git2::Oid::from_str(&new_commit_parent_tree.id())?)?;
+    let new_commit_parent_tree_git2 =
+        repo_git2.find_tree(git2::Oid::from_str(&new_commit_parent_tree.id())?)?;
 
     // TODO Is this diff necessary? The result is unused
     // Create diff between the two trees
-    let _diff =
-        repo_git2.diff_tree_to_tree(Some(&origin_base_tree_git2), Some(&new_commit_parent_tree_git2), None)?;
+    let _diff = repo_git2.diff_tree_to_tree(
+        Some(&origin_base_tree_git2),
+        Some(&new_commit_parent_tree_git2),
+        None,
+    )?;
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -737,8 +742,7 @@ mod tests {
 
     #[test]
     fn test_in_order() {
-        let repo =
-            find_repository_in_path("tests/gitflow-repo").unwrap();
+        let repo = find_repository_in_path("tests/gitflow-repo").unwrap();
 
         let new_sha = "22ab8a64bee45d9292f680f07a8f79234c2cb9d5";
         let destination_branch = "origin/main";
@@ -760,8 +764,7 @@ mod tests {
 
     #[test]
     fn test_with_out_of_band_commits() {
-        let repo =
-            find_repository_in_path("tests/gitflow-repo").unwrap();
+        let repo = find_repository_in_path("tests/gitflow-repo").unwrap();
 
         let new_sha = "13b1a9736d8caaec665b29b2c6792b2eba1fb169";
         let destination_branch = "origin/main";

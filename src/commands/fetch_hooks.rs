@@ -50,30 +50,29 @@ pub fn fetch_post_command_hook(
 
     if let Some(remote) = remote {
         // Build the internal authorship fetch with explicit flags and disabled hooks
-        let fetch_authorship = vec![
-            "-c".to_string(),
-            "core.hooksPath=/dev/null".to_string(),
-            "fetch".to_string(),
-            "--no-tags".to_string(),
-            "--recurse-submodules=no".to_string(),
-            "--no-write-fetch-head".to_string(),
-            "--no-write-commit-graph".to_string(),
-            "--no-auto-maintenance".to_string(),
-            remote,
-            AI_AUTHORSHIP_REFSPEC.to_string(),
-        ];
+        // IMPORTANT: run in the same repo context by prefixing original global args (e.g., -C <path>)
+        let mut fetch_authorship: Vec<String> = parsed_args.global_args.clone();
+        fetch_authorship.push("-c".to_string());
+        fetch_authorship.push("core.hooksPath=/dev/null".to_string());
+        fetch_authorship.push("fetch".to_string());
+        fetch_authorship.push("--no-tags".to_string());
+        fetch_authorship.push("--recurse-submodules=no".to_string());
+        fetch_authorship.push("--no-write-fetch-head".to_string());
+        fetch_authorship.push("--no-write-commit-graph".to_string());
+        fetch_authorship.push("--no-auto-maintenance".to_string());
+        fetch_authorship.push(remote);
+        fetch_authorship.push(AI_AUTHORSHIP_REFSPEC.to_string());
         debug_log(&format!(
             "fetching authorship refs: {:?}",
             &fetch_authorship
         ));
-        let fetch_res = exec_git(&fetch_authorship);
-        if let Err(e) = fetch_res {
-            eprintln!("Failed to fetch authorship refs: {}", e);
-            std::process::exit(1);
+        if let Err(e) = exec_git(&fetch_authorship) {
+            // Treat as best-effort; do not fail the user command if authorship sync fails
+            debug_log(&format!("authorship fetch skipped due to error: {}", e));
         }
     } else {
-        eprintln!("Failed to fetch authorship refs: No git remotes found.");
-        std::process::exit(1);
+        // No remotes to sync from; silently skip
+        debug_log("no remotes found for authorship fetch; skipping");
     }
 }
 

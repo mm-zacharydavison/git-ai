@@ -40,7 +40,6 @@ pub fn commit_post_command_hook(
         return;
     }
 
-    // TODO Take global args into account
     // Find the git repository
     let repo = match find_repository(parsed_args.global_args.clone()) {
         Ok(repo) => repo,

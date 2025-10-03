@@ -54,26 +54,24 @@ pub fn push_post_command_hook(
         .or_else(|| repo.get_default_remote().ok().flatten());
 
     if let Some(remote) = remote {
-        // Build the internal authorship push with explicit flags and disabled hooks
-        let push_authorship = vec![
-            "-c".to_string(),
-            "core.hooksPath=/dev/null".to_string(),
-            "push".to_string(),
-            "--quiet".to_string(),
-            "--no-recurse-submodules".to_string(),
-            "--no-verify".to_string(),
-            remote,
-            AI_AUTHORSHIP_REFSPEC.to_string(),
-        ];
+        // Run in same repo context; prepend original global args (e.g., -C <path>)
+        let mut push_authorship: Vec<String> = parsed_args.global_args.clone();
+        push_authorship.push("-c".to_string());
+        push_authorship.push("core.hooksPath=/dev/null".to_string());
+        push_authorship.push("push".to_string());
+        push_authorship.push("--quiet".to_string());
+        push_authorship.push("--no-recurse-submodules".to_string());
+        push_authorship.push("--no-verify".to_string());
+        push_authorship.push(remote);
+        push_authorship.push(AI_AUTHORSHIP_REFSPEC.to_string());
         debug_log(&format!("pushing authorship refs: {:?}", &push_authorship));
-        let push_res = exec_git(&push_authorship);
-        if let Err(e) = push_res {
-            eprintln!("Failed to push authorship refs: {}", e);
-            std::process::exit(1);
+        if let Err(e) = exec_git(&push_authorship) {
+            // Best-effort; don't fail user operation due to authorship sync issues
+            debug_log(&format!("authorship push skipped due to error: {}", e));
         }
     } else {
-        eprintln!("No git remotes found.");
-        std::process::exit(1);
+        // No remotes configured; skip silently
+        debug_log("no remotes found for authorship push; skipping");
     }
 }
 

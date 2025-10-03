@@ -23,7 +23,13 @@ impl fmt::Display for GitAiError {
             GitAiError::GitError(e) => write!(f, "Git error: {}", e),
             GitAiError::IoError(e) => write!(f, "IO error: {}", e),
             GitAiError::GitCliError { code, stderr, args } => match code {
-                Some(c) => write!(f, "Git CLI ({}) failed with exit code {}: {}", args.join(" "), c, stderr),
+                Some(c) => write!(
+                    f,
+                    "Git CLI ({}) failed with exit code {}: {}",
+                    args.join(" "),
+                    c,
+                    stderr
+                ),
                 None => write!(f, "Git CLI ({}) failed: {}", args.join(" "), stderr),
             },
             GitAiError::JsonError(e) => write!(f, "JSON error: {}", e),

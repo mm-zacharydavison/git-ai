@@ -3,7 +3,6 @@ use crate::error::GitAiError;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-
 pub struct Object<'a> {
     repo: &'a Repository,
     oid: String,
@@ -938,7 +937,11 @@ pub fn exec_git(args: &[String]) -> Result<Output, GitAiError> {
     if !output.status.success() {
         let code = output.status.code();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(GitAiError::GitCliError { code, stderr, args: args.to_vec() });
+        return Err(GitAiError::GitCliError {
+            code,
+            stderr,
+            args: args.to_vec(),
+        });
     }
 
     Ok(output)
@@ -967,7 +970,11 @@ pub fn exec_git_stdin(args: &[String], stdin_data: &[u8]) -> Result<Output, GitA
     if !output.status.success() {
         let code = output.status.code();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(GitAiError::GitCliError { code, stderr, args: args.to_vec() });
+        return Err(GitAiError::GitCliError {
+            code,
+            stderr,
+            args: args.to_vec(),
+        });
     }
 
     Ok(output)
@@ -1005,7 +1012,11 @@ pub fn exec_git_stdin_with_env(
     if !output.status.success() {
         let code = output.status.code();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(GitAiError::GitCliError { code, stderr, args: args.to_vec() });
+        return Err(GitAiError::GitCliError {
+            code,
+            stderr,
+            args: args.to_vec(),
+        });
     }
 
     Ok(output)

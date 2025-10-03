@@ -1,9 +1,9 @@
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::post_commit::post_commit;
+use crate::git::repository::Repository as GitAiRepository;
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use git2::{Repository, Signature};
-use crate::git::repository::Repository as GitAiRepository;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -276,7 +276,8 @@ impl TmpRepo {
         let repo_git2 = Repository::init(&tmp_dir)?;
 
         // Initialize gitai repository
-        let repo_gitai = crate::git::repository::find_repository_in_path(tmp_dir.to_str().unwrap())?;
+        let repo_gitai =
+            crate::git::repository::find_repository_in_path(tmp_dir.to_str().unwrap())?;
 
         // Configure git user for commits
         let mut config = repo_git2.config()?;
@@ -327,7 +328,9 @@ impl TmpRepo {
             repo: TmpRepo {
                 path: self.path.clone(),
                 repo_git2: Repository::open(&self.path)?,
-                repo_gitai: crate::git::repository::find_repository_in_path(self.path.to_str().unwrap())?,
+                repo_gitai: crate::git::repository::find_repository_in_path(
+                    self.path.to_str().unwrap(),
+                )?,
             },
             filename: filename.to_string(),
             contents: contents.to_string(),
@@ -340,9 +343,12 @@ impl TmpRepo {
         author: &str,
     ) -> Result<(usize, usize, usize), GitAiError> {
         checkpoint(
-            &self.repo_gitai, author, false, // show_working_log
+            &self.repo_gitai,
+            author,
+            false, // show_working_log
             false, // reset
-            true, None, // model
+            true,
+            None, // model
             None, // human_author
             None, // agent_run_result
         )
