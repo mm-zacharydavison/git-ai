@@ -38,6 +38,9 @@ pub enum RewriteLogEvent {
     Stash {
         stash: StashEvent,
     },
+    AuthorshipLogsSynced {
+        authorship_logs_synced: AuthorshipLogsSyncedEvent,
+    },
 }
 
 impl RewriteLogEvent {
@@ -107,6 +110,12 @@ impl RewriteLogEvent {
 
     pub fn stash(event: StashEvent) -> Self {
         Self::Stash { stash: event }
+    }
+
+    pub fn authorship_logs_synced(event: AuthorshipLogsSyncedEvent) -> Self {
+        Self::AuthorshipLogsSynced {
+            authorship_logs_synced: event,
+        }
     }
 }
 
@@ -352,6 +361,26 @@ impl StashEvent {
             stash_ref,
             success,
             affected_files,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuthorshipLogsSyncedEvent {
+    pub synced: Vec<String>,
+    pub origin: Vec<String>,
+    pub timestamp: u64,
+}
+
+impl AuthorshipLogsSyncedEvent {
+    pub fn new(synced: Vec<String>, origin: Vec<String>) -> Self {
+        Self {
+            synced,
+            origin,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
         }
     }
 }

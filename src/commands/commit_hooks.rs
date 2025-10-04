@@ -54,10 +54,11 @@ pub fn commit_post_command_hook(
     } else {
         repository.handle_rewrite_log_event(RewriteLogEvent::commit(
             repository.pre_command_base_commit.clone().unwrap(),
-            repository.pre_command_refname.clone().unwrap(),
+            repository.head().unwrap().target().unwrap(),
         ));
     }
 
+    // @todo @acunniffe -> this should be trigged by handle_rewrite
     if let Err(e) = post_commit::post_commit(&repository) {
         eprintln!("git-ai authorship log generation failed: {}", e);
     }
