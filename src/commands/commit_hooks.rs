@@ -66,11 +66,6 @@ pub fn commit_post_command_hook(
             true,
         );
     }
-
-    // // @todo @acunniffe -> this should be trigged by handle_rewrite
-    // if let Err(e) = post_commit::post_commit(&repository) {
-    //     eprintln!("git-ai authorship log generation failed: {}", e);
-    // }
 }
 
 pub fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
