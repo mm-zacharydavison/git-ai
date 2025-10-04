@@ -3,6 +3,8 @@ use crate::commands::fetch_hooks;
 use crate::commands::push_hooks;
 use crate::config;
 use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
+use crate::git::find_repository;
+use crate::git::find_repository_in_path;
 use crate::utils::debug_log;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -65,15 +67,21 @@ pub fn handle_git(args: &[String]) {
     };
 
     let parsed_args = parse_git_cli_args(args);
+
+    let mut repository_option = find_repository(&parsed_args.global_args).ok();
+
     // println!("command: {:?}", parsed_args.command);
     // println!("global_args: {:?}", parsed_args.global_args);
     // println!("command_args: {:?}", parsed_args.command_args);
     // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
-    if !parsed_args.is_help {
+
+    // Do not run pre-command in --help or if no repo
+    if !parsed_args.is_help && repository_option.is_some() {
         run_pre_command_hooks(&mut command_hooks_context, &parsed_args);
     }
     let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
-    if !parsed_args.is_help {
+
+    if !parsed_args.is_help && repository_option.is_some() {
         run_post_command_hooks(&mut command_hooks_context, &parsed_args, exit_status);
     }
     exit_with_status(exit_status);

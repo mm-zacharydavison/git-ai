@@ -916,7 +916,7 @@ impl Repository {
     }
 }
 
-pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiError> {
+pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiError> {
     let mut args = global_args.clone();
     args.push("rev-parse".to_string());
     args.push("--absolute-git-dir".to_string());
@@ -934,7 +934,7 @@ pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiErro
     }
 
     Ok(Repository {
-        global_args,
+        global_args: global_args.clone(),
         storage: RepoStorage::for_repo_path(&path),
         git_dir: path,
         pre_command_base_commit: None,
@@ -944,7 +944,7 @@ pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiErro
 
 pub fn find_repository_in_path(path: &str) -> Result<Repository, GitAiError> {
     let global_args = vec!["-C".to_string(), path.to_string()];
-    return find_repository(global_args);
+    return find_repository(&global_args);
 }
 
 /// Helper to execute a git command
