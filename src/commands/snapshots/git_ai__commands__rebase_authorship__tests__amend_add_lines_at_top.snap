@@ -8,7 +8,7 @@ AuthorshipLogV3 {
             file_path: "test.txt",
             entries: [
                 AttestationEntry {
-                    hash: "1cee1d9",
+                    hash: "976aa32",
                     line_ranges: [
                         Range(
                             1,
@@ -23,10 +23,10 @@ AuthorshipLogV3 {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "",
         prompts: {
-            "1cee1d9": PromptRecord {
+            "976aa32": PromptRecord {
                 agent_id: AgentId {
                     tool: "cursor",
-                    id: "test_session_fixed",
+                    id: "ai_agent",
                     model: "gpt-4",
                 },
                 human_author: Some(

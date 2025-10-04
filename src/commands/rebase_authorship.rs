@@ -210,26 +210,27 @@ pub fn prepare_working_log_after_squash(
     args.push("write-tree".to_string());
     let output = crate::git::repository::exec_git(&args)?;
     let working_tree_oid = String::from_utf8(output.stdout)?.trim().to_string();
-    let working_tree = repo.find_tree(working_tree_oid)?;
+    let working_tree = repo.find_tree(working_tree_oid.clone())?;
 
     // Step 6: Create a temporary commit for the working directory state
-    // This allows us to use the same diff logic as the regular squash case
+    // Use origin_base as parent so the diff shows ALL changes from the feature branch
+    let origin_base_commit = repo.find_commit(origin_base.clone())?;
     let temp_commit = repo.commit(
         None, // Don't update any refs
         &target_commit.author()?,
         &target_commit.committer()?,
         "Temporary commit for squash authorship reconstruction",
         &working_tree,
-        &[&target_commit], // Parent is the target branch head
+        &[&origin_base_commit], // Parent is the common base, not target!
     )?;
 
-    // Step 7: Reconstruct authorship from the diff between temp_commit and target_commit
-    // This tells us what changed in the squash
+    // Step 7: Reconstruct authorship from the diff between temp_commit and origin_base
+    // This shows ALL changes that came from the feature branch
     let temp_commit_obj = repo.find_commit(temp_commit.to_string())?;
     let new_authorship_log = reconstruct_authorship_from_diff(
         repo,
         &temp_commit_obj,
-        &target_commit,
+        &origin_base_commit,
         &hanging_commit_sha,
     )?;
 
@@ -370,7 +371,10 @@ fn apply_diff_as_merge_commit(
     let tree_oid = repo.merge_trees_favor_ours(&base_tree, &ours_tree, &theirs_tree)?;
     let merged_tree = repo.find_tree(tree_oid)?;
 
-    // Create the hanging merge commit with parents [ours, theirs]
+    // Create the hanging commit with ONLY the feature branch (ours) as parent
+    // This is critical: by having only one parent, git blame will trace through
+    // the feature branch history where AI authorship logs exist, rather than
+    // potentially tracing through the target branch lineage
     let merge_commit = repo.commit(
         None,
         &ours_commit.author()?,
@@ -380,7 +384,7 @@ fn apply_diff_as_merge_commit(
             origin_base, new_commit_parent, old_head_sha
         ),
         &merged_tree,
-        &[&ours_commit, &theirs_commit],
+        &[&ours_commit], // Only feature branch as parent!
     )?;
 
     Ok(merge_commit.to_string())
@@ -438,11 +442,6 @@ fn reconstruct_authorship_from_diff(
 
     // Create diff between new_commit and new_commit_parent using Git CLI
     let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None)?;
-    // Debug visibility for test runs
-    #[cfg(test)]
-    {
-        eprintln!("files changed: {}", diff.len());
-    }
 
     let mut authorship_entries = Vec::new();
 
@@ -549,15 +548,6 @@ fn reconstruct_authorship_from_diff(
                         )?;
 
                         if let Some((author, prompt)) = blame_result {
-                            #[cfg(test)]
-                            {
-                                eprintln!(
-                                    "ins line {} {} -> ai? {}",
-                                    blame_line_number,
-                                    author.username,
-                                    prompt.is_some()
-                                );
-                            }
                             authorship_entries.push((
                                 file_path_str.clone(),
                                 blame_line_number,
@@ -763,7 +753,11 @@ fn run_blame_in_context(
         };
 
         // Get the line attribution from the AI authorship log
-        if let Some((author, prompt)) = authorship_log.get_line_attribution(file_path, line_number)
+        // Use the ORIGINAL line number from the blamed commit, not the current line number
+        let orig_line_to_lookup = hunk.orig_range.0;
+
+        if let Some((author, prompt)) =
+            authorship_log.get_line_attribution(file_path, orig_line_to_lookup)
         {
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
@@ -1186,5 +1180,233 @@ mod tests {
         // Clear commit SHA for stable snapshots
         authorship_log.metadata.base_commit_sha = "".to_string();
         assert_debug_snapshot!(authorship_log);
+    }
+
+    /// Test merge --squash with a simple feature branch containing AI and human edits
+    #[test]
+    fn test_prepare_working_log_simple_squash() {
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Create master branch with initial content
+        let initial_content = "line 1\nline 2\nline 3\n";
+        tmp_repo
+            .write_file("main.txt", initial_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo
+            .commit_with_message("Initial commit on master")
+            .unwrap();
+        let master_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Create feature branch
+        tmp_repo.create_branch("feature").unwrap();
+
+        // Add AI changes on feature branch
+        let feature_content = "line 1\nline 2\nline 3\n// AI added feature\n";
+        tmp_repo
+            .write_file("main.txt", feature_content, true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+        tmp_repo.commit_with_message("Add AI feature").unwrap();
+
+        // Add human changes on feature branch
+        let feature_content_v2 =
+            "line 1\nline 2\nline 3\n// AI added feature\n// Human refinement\n";
+        tmp_repo
+            .write_file("main.txt", feature_content_v2, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Human refinement").unwrap();
+        let feature_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Go back to master and squash merge
+        tmp_repo.checkout_branch("master").unwrap();
+        tmp_repo.merge_squash("feature").unwrap();
+
+        // Test prepare_working_log_after_squash
+        let checkpoints = prepare_working_log_after_squash(
+            &tmp_repo.gitai_repo(),
+            &feature_head,
+            &master_head,
+            "Test User <test@example.com>",
+        )
+        .unwrap();
+
+        // Should have 2 checkpoints: 1 human + 1 AI
+        assert_eq!(checkpoints.len(), 2);
+
+        // First checkpoint should be human
+        assert_eq!(checkpoints[0].author, "Test User <test@example.com>");
+        assert!(checkpoints[0].agent_id.is_none());
+        assert!(checkpoints[0].transcript.is_none());
+
+        // Second checkpoint should be AI
+        assert_eq!(checkpoints[1].author, "ai");
+        assert!(checkpoints[1].agent_id.is_some());
+        assert!(checkpoints[1].transcript.is_some());
+
+        // Verify checkpoint entries
+        assert!(!checkpoints[0].entries.is_empty() || !checkpoints[1].entries.is_empty());
+    }
+
+    /// Test merge --squash with out-of-band changes on master (handles 3-way merge)
+    /// This tests the scenario where commits are made on master AFTER the feature branch diverges
+    #[test]
+    fn test_prepare_working_log_squash_with_main_changes() {
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Create master branch with initial content (common base)
+        let initial_content = "section 1\nsection 2\nsection 3\n";
+        tmp_repo
+            .write_file("document.txt", initial_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Initial commit").unwrap();
+        let _common_base = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Create feature branch and add AI changes
+        tmp_repo.create_branch("feature").unwrap();
+
+        // AI adds content at the END (non-conflicting with master changes)
+        let feature_content = "section 1\nsection 2\nsection 3\n// AI feature addition at end\n";
+        tmp_repo
+            .write_file("document.txt", feature_content, true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+        tmp_repo.commit_with_message("AI adds feature").unwrap();
+        let feature_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Switch back to master and make out-of-band changes
+        // These happen AFTER feature branch diverged but BEFORE we decide to merge
+        tmp_repo.checkout_branch("master").unwrap();
+        let master_content = "// Master update at top\nsection 1\nsection 2\nsection 3\n";
+        tmp_repo
+            .write_file("document.txt", master_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo
+            .commit_with_message("Out-of-band update on master")
+            .unwrap();
+        let master_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Now squash merge feature into master
+        // The squashed result should have BOTH changes:
+        // - Master's line at top
+        // - Feature's AI line at bottom
+        tmp_repo.merge_squash("feature").unwrap();
+
+        // Test prepare_working_log_after_squash
+        let checkpoints = prepare_working_log_after_squash(
+            &tmp_repo.gitai_repo(),
+            &feature_head,
+            &master_head,
+            "Test User <test@example.com>",
+        )
+        .unwrap();
+
+        // The key thing we're testing is that it doesn't crash with out-of-band changes
+        // and properly handles the 3-way merge scenario
+        println!("Checkpoints generated: {}", checkpoints.len());
+        for (i, checkpoint) in checkpoints.iter().enumerate() {
+            println!(
+                "Checkpoint {}: author={}, has_agent={}, entries={}",
+                i,
+                checkpoint.author,
+                checkpoint.agent_id.is_some(),
+                checkpoint.entries.len()
+            );
+        }
+
+        // Should have at least some checkpoints
+        assert!(
+            !checkpoints.is_empty(),
+            "Should generate at least one checkpoint from squash merge"
+        );
+
+        // Verify at least one checkpoint has content
+        let has_content = checkpoints.iter().any(|c| !c.entries.is_empty());
+        assert!(has_content, "At least one checkpoint should have entries");
+    }
+
+    /// Test merge --squash with multiple AI sessions and human edits
+    #[test]
+    fn test_prepare_working_log_squash_multiple_sessions() {
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Create master branch
+        let initial_content = "header\nbody\nfooter\n";
+        tmp_repo
+            .write_file("file.txt", initial_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Initial").unwrap();
+        let master_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Create feature branch
+        tmp_repo.create_branch("feature").unwrap();
+
+        // First AI session
+        let content_v2 = "header\n// AI session 1\nbody\nfooter\n";
+        tmp_repo.write_file("file.txt", content_v2, true).unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_session_1", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+        tmp_repo.commit_with_message("AI session 1").unwrap();
+
+        // Human edit
+        let content_v3 = "header\n// AI session 1\nbody\n// Human addition\nfooter\n";
+        tmp_repo.write_file("file.txt", content_v3, true).unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Human edit").unwrap();
+
+        // Second AI session
+        let content_v4 =
+            "header\n// AI session 1\nbody\n// Human addition\nfooter\n// AI session 2\n";
+        tmp_repo.write_file("file.txt", content_v4, true).unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_session_2", Some("claude"), Some("cursor"))
+            .unwrap();
+        tmp_repo.commit_with_message("AI session 2").unwrap();
+        let feature_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Squash merge into master
+        tmp_repo.checkout_branch("master").unwrap();
+        tmp_repo.merge_squash("feature").unwrap();
+
+        // Test prepare_working_log_after_squash
+        let checkpoints = prepare_working_log_after_squash(
+            &tmp_repo.gitai_repo(),
+            &feature_head,
+            &master_head,
+            "Test User <test@example.com>",
+        )
+        .unwrap();
+
+        // Should have 3 checkpoints: 1 human + 2 AI sessions
+        assert_eq!(checkpoints.len(), 3);
+
+        // Count AI checkpoints
+        let ai_checkpoints: Vec<_> = checkpoints
+            .iter()
+            .filter(|c| c.agent_id.is_some())
+            .collect();
+        assert_eq!(ai_checkpoints.len(), 2);
+
+        // Count human checkpoints
+        let human_checkpoints: Vec<_> = checkpoints
+            .iter()
+            .filter(|c| c.agent_id.is_none())
+            .collect();
+        assert_eq!(human_checkpoints.len(), 1);
+
+        // Verify AI checkpoints have distinct session IDs
+        assert_ne!(
+            ai_checkpoints[0].agent_id.as_ref().unwrap().id,
+            ai_checkpoints[1].agent_id.as_ref().unwrap().id
+        );
     }
 }

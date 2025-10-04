@@ -365,8 +365,14 @@ impl TmpRepo {
         use crate::log_fmt::transcript::AiTranscript;
         use crate::log_fmt::working_log::AgentId;
 
-        // Use a fixed session ID for deterministic tests
-        let session_id = "test_session_fixed".to_string();
+        // Use a deterministic but unique session ID based on agent_name
+        // For common agent names (Claude, GPT-4), use fixed ID for backwards compat
+        // For unique names like "ai_session_1", use the name itself to allow distinct sessions
+        let session_id = if agent_name == "Claude" || agent_name == "GPT-4" || agent_name == "GPT-4o" {
+            "test_session_fixed".to_string()
+        } else {
+            agent_name.to_string()
+        };
 
         // Create agent ID
         let agent_id = AgentId {
@@ -711,6 +717,29 @@ impl TmpRepo {
         let new_commit_sha = new_head.target().unwrap().to_string();
 
         Ok(new_commit_sha)
+    }
+
+    /// Alias for switch_branch - checks out an existing branch
+    pub fn checkout_branch(&self, branch_name: &str) -> Result<(), GitAiError> {
+        self.switch_branch(branch_name)
+    }
+
+    /// Performs a squash merge of a branch into the current branch (stages changes without committing)
+    pub fn merge_squash(&self, branch_name: &str) -> Result<(), GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["merge", "--squash", branch_name])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git merge --squash: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git merge --squash failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
     }
 }
 

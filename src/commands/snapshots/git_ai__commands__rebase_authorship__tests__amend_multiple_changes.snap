@@ -8,11 +8,36 @@ AuthorshipLogV3 {
             file_path: "code.js",
             entries: [
                 AttestationEntry {
-                    hash: "1cee1d9",
+                    hash: "5de9ea1",
+                    line_ranges: [
+                        Single(
+                            1,
+                        ),
+                    ],
+                },
+                AttestationEntry {
+                    hash: "9d9ddf6",
                     line_ranges: [
                         Range(
-                            1,
+                            2,
+                            5,
+                        ),
+                    ],
+                },
+                AttestationEntry {
+                    hash: "b8613a4",
+                    line_ranges: [
+                        Range(
+                            6,
                             7,
+                        ),
+                    ],
+                },
+                AttestationEntry {
+                    hash: "e5efa95",
+                    line_ranges: [
+                        Single(
+                            3,
                         ),
                     ],
                 },
@@ -23,19 +48,61 @@ AuthorshipLogV3 {
         schema_version: "authorship/3.0.0",
         base_commit_sha: "",
         prompts: {
-            "1cee1d9": PromptRecord {
+            "5de9ea1": PromptRecord {
                 agent_id: AgentId {
                     tool: "cursor",
-                    id: "test_session_fixed",
+                    id: "ai_agent_2",
                     model: "gpt-4",
                 },
                 human_author: Some(
                     "Test User <test@example.com>",
                 ),
                 messages: [],
-                total_additions: 4,
+                total_additions: 1,
                 total_deletions: 0,
-                accepted_lines: 7,
+                accepted_lines: 1,
+            },
+            "9d9ddf6": PromptRecord {
+                agent_id: AgentId {
+                    tool: "cursor",
+                    id: "ai_agent_1",
+                    model: "gpt-4",
+                },
+                human_author: Some(
+                    "Test User <test@example.com>",
+                ),
+                messages: [],
+                total_additions: 0,
+                total_deletions: 0,
+                accepted_lines: 4,
+            },
+            "b8613a4": PromptRecord {
+                agent_id: AgentId {
+                    tool: "cursor",
+                    id: "ai_agent_4",
+                    model: "gpt-4",
+                },
+                human_author: Some(
+                    "Test User <test@example.com>",
+                ),
+                messages: [],
+                total_additions: 2,
+                total_deletions: 0,
+                accepted_lines: 2,
+            },
+            "e5efa95": PromptRecord {
+                agent_id: AgentId {
+                    tool: "cursor",
+                    id: "ai_agent_3",
+                    model: "gpt-4",
+                },
+                human_author: Some(
+                    "Test User <test@example.com>",
+                ),
+                messages: [],
+                total_additions: 1,
+                total_deletions: 0,
+                accepted_lines: 1,
             },
         },
     },
