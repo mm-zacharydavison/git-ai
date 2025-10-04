@@ -138,6 +138,20 @@ fn run_post_command_hooks(
         }
         Some("fetch") => fetch_hooks::fetch_post_command_hook(parsed_args, exit_status),
         Some("push") => push_hooks::push_post_command_hook(parsed_args, exit_status),
+        Some("reset") => {
+            if parsed_args.has_command_flag("--hard") {
+                let base_head = repository.head().unwrap().target().unwrap().to_string();
+                let _ = repository
+                    .storage
+                    .delete_working_log_for_base_commit(&base_head);
+
+                debug_log(&format!(
+                    "Reset --hard: deleted working log for {}",
+                    base_head
+                ));
+            }
+            // soft and mixed coming soon
+        }
         Some("merge") => {
             if parsed_args.has_command_flag("--squash")
                 && exit_status.success()
