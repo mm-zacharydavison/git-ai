@@ -32,6 +32,9 @@ pub enum RewriteLogEvent {
     CommitAmend {
         commit_amend: CommitAmendEvent,
     },
+    Commit {
+        commit: CommitEvent,
+    },
     Stash {
         stash: StashEvent,
     },
@@ -93,6 +96,12 @@ impl RewriteLogEvent {
     pub fn commit_amend(original_commit: String, amended_commit_sha: String) -> Self {
         Self::CommitAmend {
             commit_amend: CommitAmendEvent::new(original_commit, amended_commit_sha),
+        }
+    }
+
+    pub fn commit(base_commit: String, commit_sha: String) -> Self {
+        Self::Commit {
+            commit: CommitEvent::new(base_commit, commit_sha),
         }
     }
 
@@ -303,6 +312,22 @@ impl CommitAmendEvent {
         Self {
             original_commit,
             amended_commit_sha,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommitEvent {
+    pub base_commit: String,
+    pub commit_sha: String,
+}
+
+impl CommitEvent {
+    /// Create a new CommitEvent with the given parameters
+    pub fn new(base_commit: String, commit_sha: String) -> Self {
+        Self {
+            base_commit,
+            commit_sha,
         }
     }
 }

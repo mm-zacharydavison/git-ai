@@ -1,27 +1,24 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
-use crate::git::find_repository;
 use crate::git::post_commit;
 use crate::git::pre_commit;
 use crate::git::repository::Repository;
+use crate::git::rewrite_log::RewriteLogEvent;
 
-pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) -> bool {
+pub fn commit_pre_command_hook(
+    parsed_args: &ParsedGitInvocation,
+    repository: &mut Repository,
+) -> bool {
     if is_dry_run(&parsed_args.command_args) {
         return false;
     }
 
-    // Find the git repository
-    let repo = match find_repository(&parsed_args.global_args) {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
+    // store HEAD context for post-command hook
+    repository.require_pre_command_head();
 
-    let default_author = get_commit_default_author(&repo, &parsed_args.command_args);
+    let default_author = get_commit_default_author(&repository, &parsed_args.command_args);
 
     // Run pre-commit logic
-    if let Err(e) = pre_commit::pre_commit(&repo, default_author.clone()) {
+    if let Err(e) = pre_commit::pre_commit(&repository, default_author.clone()) {
         if e.to_string()
             .contains("Cannot run checkpoint on bare repositories")
         {
@@ -39,6 +36,7 @@ pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) -> bool {
 pub fn commit_post_command_hook(
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
+    repository: &mut Repository,
 ) {
     if is_dry_run(&parsed_args.command_args) {
         return;
@@ -48,17 +46,20 @@ pub fn commit_post_command_hook(
         return;
     }
 
-    // Find the git repository
-    let repo = match find_repository(&parsed_args.global_args) {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
+    if parsed_args.has_command_flag("--amend") {
+        repository.handle_rewrite_log_event(RewriteLogEvent::commit_amend(
+            repository.pre_command_base_commit.clone().unwrap(),
+            repository.head().unwrap().target().unwrap(),
+        ));
+    } else {
+        repository.handle_rewrite_log_event(RewriteLogEvent::commit(
+            repository.pre_command_base_commit.clone().unwrap(),
+            repository.pre_command_refname.clone().unwrap(),
+        ));
+    }
 
-    if let Err(e) = post_commit::post_commit(&repo) {
-        eprintln!("Post-commit failed: {}", e);
+    if let Err(e) = post_commit::post_commit(&repository) {
+        eprintln!("git-ai authorship log generation failed: {}", e);
     }
 }
 

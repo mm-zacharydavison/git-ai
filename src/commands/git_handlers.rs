@@ -5,6 +5,7 @@ use crate::config;
 use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
+use crate::git::repository::Repository;
 use crate::utils::debug_log;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -70,32 +71,44 @@ pub fn handle_git(args: &[String]) {
 
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
 
+    let has_repo = repository_option.is_some();
+
     // println!("command: {:?}", parsed_args.command);
     // println!("global_args: {:?}", parsed_args.global_args);
     // println!("command_args: {:?}", parsed_args.command_args);
     // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
 
-    // Do not run pre-command in --help or if no repo
-    if !parsed_args.is_help && repository_option.is_some() {
-        run_pre_command_hooks(&mut command_hooks_context, &parsed_args);
-    }
-    let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
+    // run with hooks
+    let exit_status = if !parsed_args.is_help && has_repo {
+        let repository = repository_option.as_mut().unwrap();
+        run_pre_command_hooks(&mut command_hooks_context, &parsed_args, repository);
+        let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
 
-    if !parsed_args.is_help && repository_option.is_some() {
-        run_post_command_hooks(&mut command_hooks_context, &parsed_args, exit_status);
-    }
+        run_post_command_hooks(
+            &mut command_hooks_context,
+            &parsed_args,
+            exit_status,
+            repository,
+        );
+        exit_status
+    } else {
+        // run without hooks
+        proxy_to_git(&parsed_args.to_invocation_vec(), false)
+    };
     exit_with_status(exit_status);
 }
 
 fn run_pre_command_hooks(
     command_hooks_context: &mut CommandHooksContext,
     parsed_args: &ParsedGitInvocation,
+    repository: &mut Repository,
 ) {
     // Pre-command hooks
     match parsed_args.command.as_deref() {
         Some("commit") => {
-            command_hooks_context.pre_commit_hook_result =
-                Some(commit_hooks::commit_pre_command_hook(parsed_args));
+            command_hooks_context.pre_commit_hook_result = Some(
+                commit_hooks::commit_pre_command_hook(parsed_args, repository),
+            );
         }
         _ => {}
     }
@@ -105,6 +118,7 @@ fn run_post_command_hooks(
     command_hooks_context: &mut CommandHooksContext,
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
+    repository: &mut Repository,
 ) {
     // Post-command hooks
     match parsed_args.command.as_deref() {
@@ -115,7 +129,7 @@ fn run_post_command_hooks(
                     return;
                 }
             }
-            commit_hooks::commit_post_command_hook(parsed_args, exit_status);
+            commit_hooks::commit_post_command_hook(parsed_args, exit_status, repository);
         }
         Some("fetch") => fetch_hooks::fetch_post_command_hook(parsed_args, exit_status),
         Some("push") => push_hooks::push_post_command_hook(parsed_args, exit_status),
