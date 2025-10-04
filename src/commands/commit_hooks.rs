@@ -1,34 +1,46 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
+use crate::git::find_repository;
+use crate::git::post_commit;
+use crate::git::pre_commit;
 use crate::git::repository::Repository;
-use crate::git::rewrite_log::RewriteLogEvent;
 
-pub fn commit_pre_command_hook(
-    parsed_args: &ParsedGitInvocation,
-    repository_option: &mut Option<Repository>,
-) {
-    if is_dry_run(&parsed_args.command_args) || repository_option.is_none() {
-        return;
+pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) -> bool {
+    if is_dry_run(&parsed_args.command_args) {
+        return false;
     }
 
-    let repo: &mut Repository = repository_option.as_mut().unwrap();
-    // store this so it's availible after
-    repo.require_pre_command_head();
+    // Find the git repository
+    let repo = match find_repository(parsed_args.global_args.clone()) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    // @todo add back this logic
-    // // repo.resolve_author_spec(author_spec)
-    // // Run pre-commit logic
-    // if let Err(e) = pre_commit::pre_commit(&repo, "Aidan".to_string()) {
-    //     eprintln!("Pre-commit failed: {}", e);
-    //     std::process::exit(1);
-    // }
+    let default_author = get_commit_default_author(&repo, &parsed_args.command_args);
+
+    // Run pre-commit logic
+    if let Err(e) = pre_commit::pre_commit(&repo, default_author.clone()) {
+        if e.to_string()
+            .contains("Cannot run checkpoint on bare repositories")
+        {
+            eprintln!(
+                "Cannot run checkpoint on bare repositories (skipping git-ai pre-commit hook)"
+            );
+            return false;
+        }
+        eprintln!("Pre-commit failed: {}", e);
+        std::process::exit(1);
+    }
+    return true;
 }
 
 pub fn commit_post_command_hook(
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
-    repository_option: &mut Option<Repository>,
 ) {
-    if is_dry_run(&parsed_args.command_args) || repository_option.is_none() {
+    if is_dry_run(&parsed_args.command_args) {
         return;
     }
 
@@ -36,59 +48,28 @@ pub fn commit_post_command_hook(
         return;
     }
 
-    let repo: &mut Repository = repository_option.as_mut().unwrap();
+    // Find the git repository
+    let repo = match find_repository(parsed_args.global_args.clone()) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    if parsed_args.has_command_flag("--amend") {
-        repo.handle_rewrite_log_event(RewriteLogEvent::commit_amend(
-            repo.pre_command_base_commit.as_ref().unwrap().clone(),
-            repo.head().unwrap().target().unwrap().to_string(),
-        ))
+    if let Err(e) = post_commit::post_commit(&repo) {
+        eprintln!("Post-commit failed: {}", e);
     }
-
-    // repo.storage
-    //     .append_rewrite_event(RewriteLogEvent::CommitAmend {
-    //         commit_amend: CommitAmendEvent {
-    //             // original_commit: parsed_args.command_args[0].clone(),
-    //             // amended_commit_sha: repo.head().unwrap().target().unwrap().to_string(),
-    //             // success: exit_status.success(),
-    //             // changed_files: vec![],
-    //         },
-    //     })
-
-    // TODO Take global args into account
-    // TODO Remove this once we migrate off of libgit2
-    // // Find the git repository
-    // let repo = match find_repository() {
-    //     Ok(repo) => repo,
-    //     Err(e) => {
-    //         eprintln!("Failed to find repository: {}", e);
-    //         std::process::exit(1);
-    //     }
-    // };
-
-    // if let Err(e) = post_commit::post_commit(&repo, false) {
-    //     eprintln!("Post-commit failed: {}", e);
-    // }
-
-    // let amended_commit_sha = repo.head().unwrap().target().unwrap().to_string();
-
-    // let repo_storage = RepoStorage::for_repo_path(repo.path());
-    // repo_storage
-    //     .append_rewrite_event(RewriteLogEvent::CommitAmend {
-    //         commit_amend: CommitAmendEvent {
-    //             original_commit: parsed_args.command_args[0].clone(),
-    //             amended_commit_sha,
-    //             success: true,         // success - assuming it will succeed
-    //             changed_files: vec![], // changed_files - could be populated from git diff
-    //         },
-    //     })
-    //     .unwrap();
 }
 
-fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> String {
+fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
     // According to git commit manual, --author flag overrides all other author information
     if let Some(author_spec) = extract_author_from_args(args) {
-        return resolve_author_spec(repo, &author_spec);
+        if let Ok(Some(resolved_author)) = repo.resolve_author_spec(&author_spec) {
+            if !resolved_author.trim().is_empty() {
+                return resolved_author.trim().to_string();
+            }
+        }
     }
 
     // Normal precedence when --author is not specified:
@@ -105,11 +86,9 @@ fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> Str
     }
 
     // Fall back to git config user.name
-    if let Ok(config) = repo.config() {
-        if let Ok(name) = config.get_string("user.name") {
-            if !name.trim().is_empty() {
-                return name.trim().to_string();
-            }
+    if let Ok(Some(name)) = repo.config_get_str("user.name") {
+        if !name.trim().is_empty() {
+            return name.trim().to_string();
         }
     }
 
@@ -150,44 +129,4 @@ fn extract_author_from_args(args: &[String]) -> Option<String> {
         i += 1;
     }
     None
-}
-
-fn resolve_author_spec(repo: &git2::Repository, author_spec: &str) -> String {
-    // According to git commit docs, --author can be:
-    // 1. "A U Thor <author@example.com>" format - use as explicit author
-    // 2. A pattern to search for existing commits via git rev-list --all -i --author=<pattern>
-
-    // If it looks like "Name <email>" format, extract the name part
-    if let Some(email_start) = author_spec.rfind('<') {
-        let name_part = author_spec[..email_start].trim();
-        if !name_part.is_empty() {
-            return name_part.to_string();
-        }
-    }
-
-    // If it doesn't look like an explicit format, treat it as a search pattern
-    // Try to find an existing commit by that author
-    if let Ok(mut revwalk) = repo.revwalk() {
-        if revwalk.push_glob("refs/*").is_ok() {
-            for oid_result in revwalk {
-                if let Ok(oid) = oid_result {
-                    if let Ok(commit) = repo.find_commit(oid) {
-                        let author = commit.author();
-                        if let Some(author_name) = author.name() {
-                            // Case-insensitive search (like git rev-list -i --author)
-                            if author_name
-                                .to_lowercase()
-                                .contains(&author_spec.to_lowercase())
-                            {
-                                return author_name.to_string();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // If no matching commit found, use the pattern as-is
-    author_spec.trim().to_string()
 }

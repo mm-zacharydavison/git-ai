@@ -449,13 +449,13 @@ mod tests {
 
     #[test]
     fn test_merge_event_serialization() {
-        let event = RewriteLogEvent::merge(MergeEvent::new(
+        let event = RewriteLogEvent::merge(
             "feature-branch".to_string(),
             "main".to_string(),
             Some("abc123def456".to_string()),
             true,
             vec![],
-        ));
+        );
 
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: RewriteLogEvent = serde_json::from_str(&json).unwrap();
@@ -474,13 +474,13 @@ mod tests {
 
     #[test]
     fn test_events_jsonl_serialization() {
-        let event1 = RewriteLogEvent::merge(MergeEvent::new(
+        let event1 = RewriteLogEvent::merge(
             "feature".to_string(),
             "main".to_string(),
             Some("abc123".to_string()),
             true,
             vec![],
-        ));
+        );
 
         let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
             "def456".to_string(),
@@ -539,13 +539,13 @@ mod tests {
 
     #[test]
     fn test_append_event_to_jsonl() {
-        let event1 = RewriteLogEvent::merge(MergeEvent::new(
+        let event1 = RewriteLogEvent::merge(
             "feature".to_string(),
             "main".to_string(),
             Some("abc123".to_string()),
             true,
             vec![],
-        ));
+        );
 
         let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
             "def456".to_string(),

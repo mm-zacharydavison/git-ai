@@ -1,13 +1,12 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::find_repository;
 use crate::git::refs::AI_AUTHORSHIP_REFSPEC;
-use crate::git::repository::{Repository, exec_git};
+use crate::git::repository::exec_git;
 use crate::utils::debug_log;
 
 pub fn fetch_post_command_hook(
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
-    repository_option: &Option<Repository>,
 ) {
     if is_dry_run(&parsed_args.command_args) || !exit_status.success() {
         return;

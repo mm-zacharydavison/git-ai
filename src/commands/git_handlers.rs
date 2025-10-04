@@ -3,8 +3,7 @@ use crate::commands::fetch_hooks;
 use crate::commands::push_hooks;
 use crate::config;
 use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
-use crate::git::find_repository;
-use crate::git::repository::Repository;
+use crate::utils::debug_log;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
@@ -48,6 +47,10 @@ fn uninstall_forwarding_handlers() {
     }
 }
 
+struct CommandHooksContext {
+    pre_commit_hook_result: Option<bool>,
+}
+
 pub fn handle_git(args: &[String]) {
     // If we're being invoked from a shell completion context, bypass git-ai logic
     // and delegate directly to the real git so existing completion scripts work.
@@ -57,51 +60,57 @@ pub fn handle_git(args: &[String]) {
         return;
     }
 
+    let mut command_hooks_context = CommandHooksContext {
+        pre_commit_hook_result: None,
+    };
+
     let parsed_args = parse_git_cli_args(args);
-
-    let mut repository_option = find_repository(parsed_args.clone().global_args).ok();
-
     // println!("command: {:?}", parsed_args.command);
     // println!("global_args: {:?}", parsed_args.global_args);
     // println!("command_args: {:?}", parsed_args.command_args);
     // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
     if !parsed_args.is_help {
-        run_pre_command_hooks(&parsed_args, &mut repository_option);
+        run_pre_command_hooks(&mut command_hooks_context, &parsed_args);
     }
     let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
     if !parsed_args.is_help {
-        run_post_command_hooks(&parsed_args, exit_status, &mut repository_option);
+        run_post_command_hooks(&mut command_hooks_context, &parsed_args, exit_status);
     }
     exit_with_status(exit_status);
 }
 
 fn run_pre_command_hooks(
+    command_hooks_context: &mut CommandHooksContext,
     parsed_args: &ParsedGitInvocation,
-    repository_option: &mut Option<Repository>,
 ) {
     // Pre-command hooks
     match parsed_args.command.as_deref() {
-        Some("commit") => commit_hooks::commit_pre_command_hook(parsed_args, repository_option),
+        Some("commit") => {
+            command_hooks_context.pre_commit_hook_result =
+                Some(commit_hooks::commit_pre_command_hook(parsed_args));
+        }
         _ => {}
     }
 }
 
 fn run_post_command_hooks(
+    command_hooks_context: &mut CommandHooksContext,
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
-    repository_option: &mut Option<Repository>,
 ) {
     // Post-command hooks
     match parsed_args.command.as_deref() {
         Some("commit") => {
-            commit_hooks::commit_post_command_hook(parsed_args, exit_status, repository_option)
+            if let Some(pre_commit_hook_result) = command_hooks_context.pre_commit_hook_result {
+                if !pre_commit_hook_result {
+                    debug_log("Skipping git-ai post-commit hook because pre-commit hook failed");
+                    return;
+                }
+            }
+            commit_hooks::commit_post_command_hook(parsed_args, exit_status);
         }
-        Some("fetch") => {
-            fetch_hooks::fetch_post_command_hook(parsed_args, exit_status, repository_option)
-        }
-        Some("push") => {
-            push_hooks::push_post_command_hook(parsed_args, exit_status, repository_option)
-        }
+        Some("fetch") => fetch_hooks::fetch_post_command_hook(parsed_args, exit_status),
+        Some("push") => push_hooks::push_post_command_hook(parsed_args, exit_status),
         _ => {}
     }
 }
