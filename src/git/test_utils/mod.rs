@@ -668,6 +668,50 @@ impl TmpRepo {
             Err(_) => Err(GitAiError::Generic("No authorship log found".to_string())),
         }
     }
+
+    /// Gets the HEAD commit SHA (alias for head_commit_sha for convenience)
+    pub fn get_head_commit_sha(&self) -> Result<String, GitAiError> {
+        self.head_commit_sha()
+    }
+
+    /// Gets a reference to the gitai Repository
+    pub fn gitai_repo(&self) -> &crate::git::repository::Repository {
+        &self.repo_gitai
+    }
+
+    /// Amends the current commit with the staged changes and returns the new commit SHA
+    pub fn amend_commit(&self, message: &str) -> Result<String, GitAiError> {
+        // Get the current HEAD commit that we're amending
+        let head = self.repo_git2.head()?;
+        let _current_commit = self.repo_git2.find_commit(head.target().unwrap())?;
+
+        // Use git CLI to amend the commit (this is simpler and more reliable)
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&[
+                "commit",
+                "--amend",
+                "-m",
+                message,
+                "--allow-empty",
+                "--no-verify",
+            ])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git commit --amend: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git commit --amend failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        // Get the new commit SHA after amending
+        let new_head = self.repo_git2.head()?;
+        let new_commit_sha = new_head.target().unwrap().to_string();
+
+        Ok(new_commit_sha)
+    }
 }
 
 #[allow(dead_code)]

@@ -76,9 +76,13 @@ impl RepoStorage {
 
     /* Rewrite Log Persistance */
 
-    /// Append a rewrite event to the rewrite log file
-    pub fn append_rewrite_event(&self, event: RewriteLogEvent) -> Result<(), GitAiError> {
-        append_event_to_file(&self.rewrite_log, event)
+    /// Append a rewrite event to the rewrite log file and return the full log
+    pub fn append_rewrite_event(
+        &self,
+        event: RewriteLogEvent,
+    ) -> Result<Vec<RewriteLogEvent>, GitAiError> {
+        append_event_to_file(&self.rewrite_log, event)?;
+        self.read_rewrite_events()
     }
 
     /// Read all rewrite events from the rewrite log file

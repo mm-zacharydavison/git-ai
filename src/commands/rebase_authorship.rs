@@ -1,9 +1,43 @@
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
-use crate::git::find_repository_in_path;
-use crate::git::repository::{Commit, Repository};
+use crate::git::refs::get_reference_as_authorship_log_v3;
+use crate::git::repository::{Commit, Repository, Signature};
+use crate::git::rewrite_log::RewriteLogEvent;
+use crate::git::{find_repository_in_path, post_commit, repository};
 use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
+use crate::utils::debug_log;
 use similar::{ChangeTag, TextDiff};
+
+// Process events in the rewrite log and call the correct rewrite functions in this file
+pub fn rewrite_authorship_if_needed(
+    repo: &Repository,
+    last_event: &RewriteLogEvent,
+    commit_author: String,
+    _full_log: &Vec<RewriteLogEvent>,
+) -> Result<(), GitAiError> {
+    match last_event {
+        RewriteLogEvent::Commit { commit } => {
+            // This is going to become the regualar post-commit
+            post_commit::post_commit(repo)?;
+        }
+        RewriteLogEvent::CommitAmend { commit_amend } => {
+            rewrite_authorship_after_commit_amend(
+                repo,
+                &commit_amend.original_commit,
+                &commit_amend.amended_commit_sha,
+                commit_author,
+            )?;
+
+            debug_log(&format!(
+                "Ammended commit {} now has authorship log {}",
+                &commit_amend.original_commit, &commit_amend.amended_commit_sha
+            ));
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
 
 /// Rewrite authorship log after a squash merge or rebase
 ///
@@ -97,6 +131,83 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     }
 
     Ok(new_authorship_log)
+}
+
+#[allow(dead_code)]
+pub fn rewrite_authorship_after_commit_amend(
+    repo: &Repository,
+    original_commit: &str,
+    amended_commit: &str,
+    human_author: String,
+) -> Result<AuthorshipLog, GitAiError> {
+    // Step 1: Load the existing authorship log for the original commit (or create empty if none)
+    let ref_name = format!("ai/authorship/{}", original_commit);
+    let mut authorship_log = match get_reference_as_authorship_log_v3(repo, &ref_name) {
+        Ok(log) => {
+            // Found existing log - use it as the base
+            log
+        }
+        Err(_) => {
+            // No existing authorship log - create a new empty one
+            let mut log = AuthorshipLog::new();
+            // Set base_commit_sha to the original commit
+            log.metadata.base_commit_sha = original_commit.to_string();
+            log
+        }
+    };
+
+    // Step 2: Load the working log for the original commit (if exists)
+    let repo_storage = &repo.storage;
+    let working_log = repo_storage.working_log_for_base_commit(original_commit);
+    let checkpoints = match working_log.read_all_checkpoints() {
+        Ok(checkpoints) => checkpoints,
+        Err(_) => {
+            // No working log found - just return the existing authorship log with updated commit SHA
+            // Update the base_commit_sha to the amended commit
+            authorship_log.metadata.base_commit_sha = amended_commit.to_string();
+            return Ok(authorship_log);
+        }
+    };
+
+    // Step 3: Apply all checkpoints from the working log to the authorship log
+    let mut session_additions = std::collections::HashMap::new();
+    let mut session_deletions = std::collections::HashMap::new();
+
+    for checkpoint in &checkpoints {
+        authorship_log.apply_checkpoint(
+            checkpoint,
+            Some(&human_author),
+            &mut session_additions,
+            &mut session_deletions,
+        );
+    }
+
+    // Finalize the log (cleanup, consolidate, calculate metrics)
+    authorship_log.finalize(&session_additions, &session_deletions);
+
+    // Update the base_commit_sha to the amended commit
+    authorship_log.metadata.base_commit_sha = amended_commit.to_string();
+
+    // Step 4: Save the authorship log with the amended commit SHA
+    let authorship_json = authorship_log
+        .serialize_to_string()
+        .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
+
+    let ref_name = format!("ai/authorship/{}", amended_commit);
+    crate::git::refs::put_reference(
+        repo,
+        &ref_name,
+        &authorship_json,
+        &format!(
+            "AI authorship attestation for amended commit {}",
+            amended_commit
+        ),
+    )?;
+
+    // Step 5: Delete the working log for the original commit
+    repo_storage.delete_working_log_for_base_commit(original_commit)?;
+
+    Ok(authorship_log)
 }
 
 /// Apply a diff as a merge commit, creating a hanging commit that's not attached to any branch
@@ -720,6 +831,7 @@ pub fn handle_squash_authorship(args: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::test_utils::TmpRepo;
     use insta::assert_debug_snapshot;
 
     #[test]
@@ -761,6 +873,201 @@ mod tests {
         )
         .unwrap();
 
+        assert_debug_snapshot!(authorship_log);
+    }
+
+    /// Test amending a commit by adding AI-authored lines at the top of the file.
+    ///
+    /// Note: The snapshot's `base_commit_sha` will differ on each run since we create
+    /// new commits. The important parts to verify are:
+    /// - Line ranges are correct (lines 1-2 for AI additions)
+    /// - Metrics are accurate (total_additions, accepted_lines)
+    /// - Prompts and agent info are preserved
+    #[test]
+    fn test_amend_add_lines_at_top() {
+        // Create a repo with an initial commit containing human-authored content
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Initial file with human content
+        let initial_content = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        tmp_repo
+            .write_file("test.txt", initial_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        let initial_log = tmp_repo.commit_with_message("Initial commit").unwrap();
+
+        // Get the original commit SHA
+        let original_commit = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Now make AI changes - add lines at the top
+        let amended_content =
+            "// AI added line 1\n// AI added line 2\nline 1\nline 2\nline 3\nline 4\nline 5\n";
+        tmp_repo
+            .write_file("test.txt", amended_content, true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+
+        // Amend the commit
+        let amended_commit = tmp_repo.amend_commit("Initial commit (amended)").unwrap();
+
+        // Run the rewrite function
+        let mut authorship_log = rewrite_authorship_after_commit_amend(
+            &tmp_repo.gitai_repo(),
+            &original_commit,
+            &amended_commit,
+            "Test User <test@example.com>".to_string(),
+        )
+        .unwrap();
+
+        // Clear commit SHA for stable snapshots
+        authorship_log.metadata.base_commit_sha = "".to_string();
+        assert_debug_snapshot!(authorship_log);
+    }
+
+    #[test]
+    fn test_amend_add_lines_in_middle() {
+        // Create a repo with an initial commit containing human-authored content
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Initial file with human content
+        let initial_content = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        tmp_repo
+            .write_file("test.txt", initial_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Initial commit").unwrap();
+
+        // Get the original commit SHA
+        let original_commit = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Now make AI changes - add lines in the middle
+        let amended_content = "line 1\nline 2\n// AI inserted line 1\n// AI inserted line 2\nline 3\nline 4\nline 5\n";
+        tmp_repo
+            .write_file("test.txt", amended_content, true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+
+        // Amend the commit
+        let amended_commit = tmp_repo.amend_commit("Initial commit (amended)").unwrap();
+
+        // Run the rewrite function
+        let mut authorship_log = rewrite_authorship_after_commit_amend(
+            &tmp_repo.gitai_repo(),
+            &original_commit,
+            &amended_commit,
+            "Test User <test@example.com>".to_string(),
+        )
+        .unwrap();
+
+        // Clear commit SHA for stable snapshots
+        authorship_log.metadata.base_commit_sha = "".to_string();
+        assert_debug_snapshot!(authorship_log);
+    }
+
+    #[test]
+    fn test_amend_add_lines_at_bottom() {
+        // Create a repo with an initial commit containing human-authored content
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Initial file with human content
+        let initial_content = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        tmp_repo
+            .write_file("test.txt", initial_content, true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Initial commit").unwrap();
+
+        // Get the original commit SHA
+        let original_commit = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Now make AI changes - add lines at the bottom
+        let amended_content = "line 1\nline 2\nline 3\nline 4\nline 5\n// AI appended line 1\n// AI appended line 2\n";
+        tmp_repo
+            .write_file("test.txt", amended_content, true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+
+        // Amend the commit
+        let amended_commit = tmp_repo.amend_commit("Initial commit (amended)").unwrap();
+
+        // Run the rewrite function
+        let mut authorship_log = rewrite_authorship_after_commit_amend(
+            &tmp_repo.gitai_repo(),
+            &original_commit,
+            &amended_commit,
+            "Test User <test@example.com>".to_string(),
+        )
+        .unwrap();
+
+        // Clear commit SHA for stable snapshots
+        authorship_log.metadata.base_commit_sha = "".to_string();
+        assert_debug_snapshot!(authorship_log);
+    }
+
+    #[test]
+    fn test_amend_multiple_changes() {
+        // Create a repo with an initial commit containing AI-authored content
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Initial file with AI content
+        let initial_content = "function example() {\n  return 42;\n}\n";
+        tmp_repo
+            .write_file("code.js", initial_content, true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent_1", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+        tmp_repo
+            .commit_with_message("Add example function")
+            .unwrap();
+
+        // Get the original commit SHA
+        let original_commit = tmp_repo.get_head_commit_sha().unwrap();
+
+        // First amendment - add at top
+        let content_v2 = "// Header comment\nfunction example() {\n  return 42;\n}\n";
+        tmp_repo.write_file("code.js", content_v2, true).unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent_2", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+
+        // Second amendment - add in middle
+        let content_v3 =
+            "// Header comment\nfunction example() {\n  // Added documentation\n  return 42;\n}\n";
+        tmp_repo.write_file("code.js", content_v3, true).unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent_3", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+
+        // Third amendment - add at bottom
+        let content_v4 = "// Header comment\nfunction example() {\n  // Added documentation\n  return 42;\n}\n\n// Footer\n";
+        tmp_repo.write_file("code.js", content_v4, true).unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_agent_4", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+
+        // Amend the commit
+        let amended_commit = tmp_repo
+            .amend_commit("Add example function (amended)")
+            .unwrap();
+
+        // Run the rewrite function
+        let mut authorship_log = rewrite_authorship_after_commit_amend(
+            &tmp_repo.gitai_repo(),
+            &original_commit,
+            &amended_commit,
+            "Test User <test@example.com>".to_string(),
+        )
+        .unwrap();
+
+        // Clear commit SHA for stable snapshots
+        authorship_log.metadata.base_commit_sha = "".to_string();
         assert_debug_snapshot!(authorship_log);
     }
 }

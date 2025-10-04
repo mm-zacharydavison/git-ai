@@ -1,3 +1,4 @@
+use crate::commands::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
 use crate::error::GitAiError;
 use crate::git::repo_storage::RepoStorage;
@@ -477,8 +478,24 @@ impl Repository {
         self.pre_command_refname = Some(self.head().unwrap().name().unwrap().to_string());
     }
 
-    pub fn handle_rewrite_log_event(&mut self, rewrite_log_event: RewriteLogEvent) {
-        self.storage.append_rewrite_event(rewrite_log_event);
+    pub fn handle_rewrite_log_event(
+        &mut self,
+        rewrite_log_event: RewriteLogEvent,
+        commit_author: String,
+        apply_side_effects: bool,
+    ) {
+        let log = self
+            .storage
+            .append_rewrite_event(rewrite_log_event.clone())
+            .ok()
+            .expect("Error writing .git/ai/rewrite_log");
+
+        if apply_side_effects {
+            match rewrite_authorship_if_needed(self, &rewrite_log_event, commit_author, &log) {
+                Ok(_) => (),
+                Err(_) => {}
+            }
+        }
     }
 
     // Internal util to get the git object type for a given OID

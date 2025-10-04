@@ -7,6 +7,7 @@ use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
 
+// @todo Acunniffe - move this and simplify.
 pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiError> {
     // Get the current commit SHA (the commit that was just made)
     let head = repo.head()?;
@@ -28,7 +29,7 @@ pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiEr
     };
 
     // Initialize the new storage system
-    let repo_storage = RepoStorage::for_repo_path(repo.path());
+    let repo_storage = &repo.storage;
     let working_log = repo_storage.working_log_for_base_commit(&parent_sha);
 
     // Pull all working log entries from the parent commit

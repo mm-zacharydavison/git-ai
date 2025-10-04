@@ -46,22 +46,31 @@ pub fn commit_post_command_hook(
         return;
     }
 
+    let commit_author = get_commit_default_author(repository, &parsed_args.command_args);
     if parsed_args.has_command_flag("--amend") {
-        repository.handle_rewrite_log_event(RewriteLogEvent::commit_amend(
-            repository.pre_command_base_commit.clone().unwrap(),
-            repository.head().unwrap().target().unwrap(),
-        ));
+        repository.handle_rewrite_log_event(
+            RewriteLogEvent::commit_amend(
+                repository.pre_command_base_commit.clone().unwrap(),
+                repository.head().unwrap().target().unwrap(),
+            ),
+            commit_author,
+            true,
+        );
     } else {
-        repository.handle_rewrite_log_event(RewriteLogEvent::commit(
-            repository.pre_command_base_commit.clone().unwrap(),
-            repository.head().unwrap().target().unwrap(),
-        ));
+        repository.handle_rewrite_log_event(
+            RewriteLogEvent::commit(
+                repository.pre_command_base_commit.clone().unwrap(),
+                repository.head().unwrap().target().unwrap(),
+            ),
+            commit_author,
+            true,
+        );
     }
 
-    // @todo @acunniffe -> this should be trigged by handle_rewrite
-    if let Err(e) = post_commit::post_commit(&repository) {
-        eprintln!("git-ai authorship log generation failed: {}", e);
-    }
+    // // @todo @acunniffe -> this should be trigged by handle_rewrite
+    // if let Err(e) = post_commit::post_commit(&repository) {
+    //     eprintln!("git-ai authorship log generation failed: {}", e);
+    // }
 }
 
 fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
@@ -75,42 +84,75 @@ fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
     }
 
     // Normal precedence when --author is not specified:
-    // 1. GIT_AUTHOR_NAME environment variable
-    // 2. user.name config variable
-    // 3. EMAIL environment variable
-    // 4. System user name and hostname (we'll use 'unknown' as fallback)
+    // Name precedence: GIT_AUTHOR_NAME env > user.name config > extract from EMAIL env > "unknown"
+    // Email precedence: GIT_AUTHOR_EMAIL env > user.email config > EMAIL env > None
+
+    let mut author_name: Option<String> = None;
+    let mut author_email: Option<String> = None;
 
     // Check GIT_AUTHOR_NAME environment variable
-    if let Ok(author_name) = std::env::var("GIT_AUTHOR_NAME") {
-        if !author_name.trim().is_empty() {
-            return author_name.trim().to_string();
+    if let Ok(name) = std::env::var("GIT_AUTHOR_NAME") {
+        if !name.trim().is_empty() {
+            author_name = Some(name.trim().to_string());
         }
     }
 
     // Fall back to git config user.name
-    if let Ok(Some(name)) = repo.config_get_str("user.name") {
-        if !name.trim().is_empty() {
-            return name.trim().to_string();
+    if author_name.is_none() {
+        if let Ok(Some(name)) = repo.config_get_str("user.name") {
+            if !name.trim().is_empty() {
+                author_name = Some(name.trim().to_string());
+            }
         }
     }
 
-    // Check EMAIL environment variable as fallback
-    if let Ok(email) = std::env::var("EMAIL") {
+    // Check GIT_AUTHOR_EMAIL environment variable
+    if let Ok(email) = std::env::var("GIT_AUTHOR_EMAIL") {
         if !email.trim().is_empty() {
-            // Extract name part from email if it contains a name
-            if let Some(at_pos) = email.find('@') {
-                let name_part = &email[..at_pos];
-                if !name_part.is_empty() {
-                    return name_part.to_string();
+            author_email = Some(email.trim().to_string());
+        }
+    }
+
+    // Fall back to git config user.email
+    if author_email.is_none() {
+        if let Ok(Some(email)) = repo.config_get_str("user.email") {
+            if !email.trim().is_empty() {
+                author_email = Some(email.trim().to_string());
+            }
+        }
+    }
+
+    // Check EMAIL environment variable as fallback for both name and email
+    if author_name.is_none() || author_email.is_none() {
+        if let Ok(email) = std::env::var("EMAIL") {
+            if !email.trim().is_empty() {
+                // Extract name part from email if we don't have a name yet
+                if author_name.is_none() {
+                    if let Some(at_pos) = email.find('@') {
+                        let name_part = &email[..at_pos];
+                        if !name_part.is_empty() {
+                            author_name = Some(name_part.to_string());
+                        }
+                    }
+                }
+                // Use as email if we don't have an email yet
+                if author_email.is_none() {
+                    author_email = Some(email.trim().to_string());
                 }
             }
-            return email;
         }
     }
 
-    // Final fallback (instead of trying to get system user name and hostname)
-    eprintln!("Warning: No author information found. Using 'unknown' as author.");
-    "unknown".to_string()
+    // Format the author string based on what we have
+    match (author_name, author_email) {
+        (Some(name), Some(email)) => format!("{} <{}>", name, email),
+        (Some(name), None) => name,
+        (None, Some(email)) => email,
+        (None, None) => {
+            eprintln!("Warning: No author information found. Using 'unknown' as author.");
+            "unknown".to_string()
+        }
+    }
 }
 
 fn extract_author_from_args(args: &[String]) -> Option<String> {
