@@ -33,6 +33,33 @@ pub fn rewrite_authorship_if_needed(
                 &commit_amend.original_commit, &commit_amend.amended_commit_sha
             ));
         }
+        RewriteLogEvent::MergeSquash { merge_squash } => {
+            // --squash always fails if repo is not clean
+            // this clears old working logs in the event you reset, make manual changes, reset, try again
+            repo.storage
+                .delete_working_log_for_base_commit(&merge_squash.base_head)?;
+
+            // Prepare checkpoints from the squashed changes
+            let checkpoints = prepare_working_log_after_squash(
+                repo,
+                &merge_squash.source_head,
+                &merge_squash.base_head,
+                &commit_author,
+            )?;
+
+            // Append checkpoints to the working log for the base commit
+            let working_log = repo
+                .storage
+                .working_log_for_base_commit(&merge_squash.base_head);
+            for checkpoint in checkpoints {
+                working_log.append_checkpoint(&checkpoint)?;
+            }
+
+            debug_log(&format!(
+                "✓ Prepared authorship checkpoints for merge --squash of {} into {}",
+                merge_squash.source_branch, merge_squash.base_branch
+            ));
+        }
         _ => {}
     }
 
@@ -131,6 +158,96 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     }
 
     Ok(new_authorship_log)
+}
+
+/// Prepare working log checkpoints after a merge --squash (before commit)
+///
+/// This handles the case where `git merge --squash` has staged changes but hasn't committed yet.
+/// It works similarly to `rewrite_authorship_after_squash_or_rebase`, but:
+/// 1. Compares against the working directory instead of a new commit
+/// 2. Returns checkpoints that can be appended to the current working log
+/// 3. Doesn't save anything - just prepares the checkpoints
+///
+/// # Arguments
+/// * `repo` - Git repository
+/// * `source_head_sha` - SHA of the HEAD commit of the branch that was squashed
+/// * `target_branch_head_sha` - SHA of the current HEAD (target branch)
+/// * `human_author` - The human author identifier to use for human-authored lines
+///
+/// # Returns
+/// Vector of checkpoints ready to be appended to the working log
+pub fn prepare_working_log_after_squash(
+    repo: &Repository,
+    source_head_sha: &str,
+    target_branch_head_sha: &str,
+    human_author: &str,
+) -> Result<Vec<crate::log_fmt::working_log::Checkpoint>, GitAiError> {
+    // Step 1: Find the common origin base between source and target
+    let origin_base =
+        find_common_origin_base_from_head(repo, source_head_sha, target_branch_head_sha)?;
+
+    // Step 2: Build the old_shas path from source_head_sha to origin_base
+    let _old_shas = build_commit_path_to_base(repo, source_head_sha, &origin_base)?;
+
+    // Step 3: Get the target branch head commit (this is where the squash is being merged into)
+    let target_commit = repo.find_commit(target_branch_head_sha.to_string())?;
+
+    // Step 4: Apply the diff from origin_base to target_commit onto source_head
+    // This creates a hanging commit that represents "what would the source branch look like
+    // if we applied the changes from origin_base to target on top of it"
+
+    // Create hanging commit: merge origin_base -> target changes onto source_head
+    let hanging_commit_sha = apply_diff_as_merge_commit(
+        repo,
+        &origin_base,
+        &target_commit.id().to_string(),
+        source_head_sha, // HEAD of old shas history
+    )?;
+
+    // Step 5: Get the working directory tree (staged changes from squash)
+    // Use `git write-tree` to write the current index to a tree
+    let mut args = repo.global_args_for_exec();
+    args.push("write-tree".to_string());
+    let output = crate::git::repository::exec_git(&args)?;
+    let working_tree_oid = String::from_utf8(output.stdout)?.trim().to_string();
+    let working_tree = repo.find_tree(working_tree_oid)?;
+
+    // Step 6: Create a temporary commit for the working directory state
+    // This allows us to use the same diff logic as the regular squash case
+    let temp_commit = repo.commit(
+        None, // Don't update any refs
+        &target_commit.author()?,
+        &target_commit.committer()?,
+        "Temporary commit for squash authorship reconstruction",
+        &working_tree,
+        &[&target_commit], // Parent is the target branch head
+    )?;
+
+    // Step 7: Reconstruct authorship from the diff between temp_commit and target_commit
+    // This tells us what changed in the squash
+    let temp_commit_obj = repo.find_commit(temp_commit.to_string())?;
+    let new_authorship_log = reconstruct_authorship_from_diff(
+        repo,
+        &temp_commit_obj,
+        &target_commit,
+        &hanging_commit_sha,
+    )?;
+
+    // Step 8: Clean up temporary commits
+    delete_hanging_commit(repo, &hanging_commit_sha)?;
+    delete_hanging_commit(repo, &temp_commit.to_string())?;
+
+    // Step 9: Convert authorship log to checkpoints
+    let checkpoints = new_authorship_log
+        .convert_to_checkpoints_for_squash(human_author)
+        .map_err(|e| {
+            GitAiError::Generic(format!(
+                "Failed to convert authorship log to checkpoints: {}",
+                e
+            ))
+        })?;
+
+    Ok(checkpoints)
 }
 
 #[allow(dead_code)]

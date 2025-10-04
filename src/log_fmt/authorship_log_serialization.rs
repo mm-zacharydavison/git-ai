@@ -578,6 +578,212 @@ impl AuthorshipLog {
         }
         None
     }
+
+    /// Convert authorship log to working log checkpoints for merge --squash
+    ///
+    /// This creates one checkpoint for human-authored lines and one checkpoint per AI prompt session.
+    /// The checkpoints can then be appended to the current working log for the base commit.
+    ///
+    /// # Arguments
+    /// * `human_author` - The human author identifier (email) to use for human-authored lines
+    ///
+    /// # Returns
+    /// Vector of checkpoints: first checkpoint is human (if any human lines), followed by one checkpoint per AI session
+    #[allow(dead_code)]
+    pub fn convert_to_checkpoints_for_squash(
+        &self,
+        human_author: &str,
+    ) -> Result<Vec<crate::log_fmt::working_log::Checkpoint>, Box<dyn std::error::Error>> {
+        use crate::log_fmt::working_log::{Checkpoint, WorkingLogEntry};
+        use std::collections::{HashMap, HashSet};
+
+        let mut checkpoints = Vec::new();
+
+        // Track all files that have attestations
+        let mut all_files: HashSet<String> = HashSet::new();
+        for file_attestation in &self.attestations {
+            all_files.insert(file_attestation.file_path.clone());
+        }
+
+        // Build human checkpoint first
+        // Human owns all lines NOT attributed to AI
+        let mut human_entries: Vec<WorkingLogEntry> = Vec::new();
+
+        for file_path in &all_files {
+            // Find all AI-attributed lines for this file
+            let mut ai_lines: HashSet<u32> = HashSet::new();
+
+            if let Some(file_attestation) =
+                self.attestations.iter().find(|f| f.file_path == *file_path)
+            {
+                for entry in &file_attestation.entries {
+                    for range in &entry.line_ranges {
+                        ai_lines.extend(range.expand());
+                    }
+                }
+            }
+
+            // Determine which lines are human-owned
+            // For simplicity, we need to know the total line count in the file
+            // Since we're working from an authorship log from a squash, we can infer it from max line number
+            let max_line = self
+                .attestations
+                .iter()
+                .find(|f| f.file_path == *file_path)
+                .map(|f| {
+                    f.entries
+                        .iter()
+                        .flat_map(|e| &e.line_ranges)
+                        .map(|r| match r {
+                            LineRange::Single(l) => *l,
+                            LineRange::Range(_, end) => *end,
+                        })
+                        .max()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+
+            // Collect human lines (all lines from 1..=max_line that aren't in ai_lines)
+            let mut human_lines: Vec<u32> = (1..=max_line)
+                .filter(|line| !ai_lines.contains(line))
+                .collect();
+
+            if !human_lines.is_empty() {
+                // Convert to Line ranges
+                human_lines.sort_unstable();
+                let human_line_ranges = compress_lines_to_working_log_format(&human_lines);
+
+                human_entries.push(WorkingLogEntry::new(
+                    file_path.clone(),
+                    String::new(), // Empty blob_sha for now
+                    human_line_ranges,
+                    vec![], // No deletions in squash conversion
+                ));
+            }
+        }
+
+        // Add human checkpoint if there are any human-authored lines
+        if !human_entries.is_empty() {
+            let human_checkpoint = Checkpoint::new(
+                String::new(), // Empty diff hash
+                human_author.to_string(),
+                human_entries,
+            );
+            checkpoints.push(human_checkpoint);
+        }
+
+        // Build AI checkpoints - one per session
+        // Group attestations by session hash
+        let mut session_data: HashMap<String, Vec<(String, Vec<LineRange>)>> = HashMap::new();
+
+        for file_attestation in &self.attestations {
+            for entry in &file_attestation.entries {
+                session_data
+                    .entry(entry.hash.clone())
+                    .or_insert_with(Vec::new)
+                    .push((
+                        file_attestation.file_path.clone(),
+                        entry.line_ranges.clone(),
+                    ));
+            }
+        }
+
+        // Create a checkpoint for each AI session
+        for (session_hash, file_ranges) in session_data {
+            let prompt_record = self
+                .metadata
+                .prompts
+                .get(&session_hash)
+                .ok_or_else(|| format!("Missing prompt record for hash: {}", session_hash))?;
+
+            let mut ai_entries = Vec::new();
+
+            // Group by file
+            let mut file_map: HashMap<String, Vec<LineRange>> = HashMap::new();
+            for (file_path, ranges) in file_ranges {
+                file_map
+                    .entry(file_path)
+                    .or_insert_with(Vec::new)
+                    .extend(ranges);
+            }
+
+            for (file_path, ranges) in file_map {
+                // Expand ranges to individual lines, then compress to working log format
+                let mut all_lines: Vec<u32> = Vec::new();
+                for range in ranges {
+                    all_lines.extend(range.expand());
+                }
+                all_lines.sort_unstable();
+                all_lines.dedup();
+
+                let line_ranges = compress_lines_to_working_log_format(&all_lines);
+
+                ai_entries.push(WorkingLogEntry::new(
+                    file_path,
+                    String::new(), // Empty blob_sha for now
+                    line_ranges,
+                    vec![], // No deletions in squash conversion
+                ));
+            }
+
+            let mut ai_checkpoint = Checkpoint::new(
+                String::new(), // Empty diff hash
+                "ai".to_string(),
+                ai_entries,
+            );
+            ai_checkpoint.agent_id = Some(prompt_record.agent_id.clone());
+
+            // Reconstruct transcript from messages
+            let mut transcript = crate::log_fmt::transcript::AiTranscript::new();
+            for message in &prompt_record.messages {
+                transcript.add_message(message.clone());
+            }
+            ai_checkpoint.transcript = Some(transcript);
+
+            checkpoints.push(ai_checkpoint);
+        }
+
+        Ok(checkpoints)
+    }
+}
+
+/// Convert line numbers to working log Line format (Single/Range)
+#[allow(dead_code)]
+fn compress_lines_to_working_log_format(lines: &[u32]) -> Vec<crate::log_fmt::working_log::Line> {
+    use crate::log_fmt::working_log::Line;
+
+    if lines.is_empty() {
+        return vec![];
+    }
+
+    let mut result = Vec::new();
+    let mut start = lines[0];
+    let mut end = lines[0];
+
+    for &line in &lines[1..] {
+        if line == end + 1 {
+            // Consecutive line, extend range
+            end = line;
+        } else {
+            // Gap found, save current range and start new one
+            if start == end {
+                result.push(Line::Single(start));
+            } else {
+                result.push(Line::Range(start, end));
+            }
+            start = line;
+            end = line;
+        }
+    }
+
+    // Add the final range
+    if start == end {
+        result.push(Line::Single(start));
+    } else {
+        result.push(Line::Range(start, end));
+    }
+
+    result
 }
 
 impl Default for AuthorshipLog {
@@ -1068,5 +1274,174 @@ mod tests {
         // - Checkpoint 2 adds 5-9 (5 lines), shifts existing 5-7 down to 10-12
         // - Final: AI owns 1-4, 5-9, 10-12 = 12 lines
         assert_eq!(prompt_record.accepted_lines, 12);
+    }
+
+    #[test]
+    fn test_convert_authorship_log_to_checkpoints() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::AgentId;
+
+        // Create an authorship log with both AI and human-attributed lines
+        let mut log = AuthorshipLog::new();
+        log.metadata.base_commit_sha = "base123".to_string();
+
+        // Add AI prompt session
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session_abc".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(Message::user("Add error handling".to_string()));
+        transcript.add_message(Message::assistant("Added error handling".to_string()));
+
+        let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
+        log.metadata.prompts.insert(
+            session_hash.clone(),
+            crate::log_fmt::authorship_log::PromptRecord {
+                agent_id: agent_id.clone(),
+                human_author: Some("alice@example.com".to_string()),
+                messages: transcript.messages().to_vec(),
+                total_additions: 15,
+                total_deletions: 3,
+                accepted_lines: 12,
+            },
+        );
+
+        // Add file attestations - AI owns lines 1-5, 10-15
+        let mut file1 = FileAttestation::new("src/main.rs".to_string());
+        file1.add_entry(AttestationEntry::new(
+            session_hash.clone(),
+            vec![LineRange::Range(1, 5), LineRange::Range(10, 15)],
+        ));
+        log.attestations.push(file1);
+
+        // Convert to checkpoints
+        let result = log.convert_to_checkpoints_for_squash("alice@example.com");
+        assert!(result.is_ok());
+        let checkpoints = result.unwrap();
+
+        // Should have 2 checkpoints: 1 human + 1 AI
+        assert_eq!(checkpoints.len(), 2);
+
+        // First checkpoint should be human with lines 6-9 (inverse of AI lines)
+        let human_checkpoint = &checkpoints[0];
+        assert_eq!(human_checkpoint.author, "alice@example.com");
+        assert!(human_checkpoint.agent_id.is_none());
+        assert!(human_checkpoint.transcript.is_none());
+        assert_eq!(human_checkpoint.entries.len(), 1);
+        let human_entry = &human_checkpoint.entries[0];
+        assert_eq!(human_entry.file, "src/main.rs");
+        assert_eq!(
+            human_entry.added_lines,
+            vec![crate::log_fmt::working_log::Line::Range(6, 9)]
+        );
+        assert!(human_entry.deleted_lines.is_empty());
+
+        // Second checkpoint should be AI with original lines
+        let ai_checkpoint = &checkpoints[1];
+        assert_eq!(ai_checkpoint.author, "ai");
+        assert!(ai_checkpoint.agent_id.is_some());
+        assert_eq!(ai_checkpoint.agent_id.as_ref().unwrap().tool, "cursor");
+        assert!(ai_checkpoint.transcript.is_some());
+        assert_eq!(ai_checkpoint.entries.len(), 1);
+        let ai_entry = &ai_checkpoint.entries[0];
+        assert_eq!(ai_entry.file, "src/main.rs");
+        assert_eq!(
+            ai_entry.added_lines,
+            vec![
+                crate::log_fmt::working_log::Line::Range(1, 5),
+                crate::log_fmt::working_log::Line::Range(10, 15)
+            ]
+        );
+        assert!(ai_entry.deleted_lines.is_empty());
+    }
+
+    #[test]
+    fn test_convert_authorship_log_multiple_ai_sessions() {
+        use crate::log_fmt::transcript::{AiTranscript, Message};
+        use crate::log_fmt::working_log::AgentId;
+
+        // Create authorship log with 2 different AI sessions
+        let mut log = AuthorshipLog::new();
+        log.metadata.base_commit_sha = "base456".to_string();
+
+        // First AI session
+        let agent1 = AgentId {
+            tool: "cursor".to_string(),
+            id: "session_1".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let mut transcript1 = AiTranscript::new();
+        transcript1.add_message(Message::user("Add function".to_string()));
+        transcript1.add_message(Message::assistant("Added function".to_string()));
+        let session1_hash = generate_short_hash(&agent1.id, &agent1.tool);
+        log.metadata.prompts.insert(
+            session1_hash.clone(),
+            crate::log_fmt::authorship_log::PromptRecord {
+                agent_id: agent1,
+                human_author: Some("bob@example.com".to_string()),
+                messages: transcript1.messages().to_vec(),
+                total_additions: 10,
+                total_deletions: 0,
+                accepted_lines: 10,
+            },
+        );
+
+        // Second AI session
+        let agent2 = AgentId {
+            tool: "cursor".to_string(),
+            id: "session_2".to_string(),
+            model: "claude-3-opus".to_string(),
+        };
+        let mut transcript2 = AiTranscript::new();
+        transcript2.add_message(Message::user("Add tests".to_string()));
+        transcript2.add_message(Message::assistant("Added tests".to_string()));
+        let session2_hash = generate_short_hash(&agent2.id, &agent2.tool);
+        log.metadata.prompts.insert(
+            session2_hash.clone(),
+            crate::log_fmt::authorship_log::PromptRecord {
+                agent_id: agent2,
+                human_author: Some("bob@example.com".to_string()),
+                messages: transcript2.messages().to_vec(),
+                total_additions: 20,
+                total_deletions: 0,
+                accepted_lines: 20,
+            },
+        );
+
+        // File with both sessions, plus some human lines
+        let mut file1 = FileAttestation::new("src/lib.rs".to_string());
+        file1.add_entry(AttestationEntry::new(
+            session1_hash.clone(),
+            vec![LineRange::Range(1, 10)],
+        ));
+        file1.add_entry(AttestationEntry::new(
+            session2_hash.clone(),
+            vec![LineRange::Range(11, 30)],
+        ));
+        // Human owns lines 31-40 (implicitly, by not being in any AI attestation)
+        log.attestations.push(file1);
+
+        // Convert to checkpoints
+        let result = log.convert_to_checkpoints_for_squash("bob@example.com");
+        assert!(result.is_ok());
+        let checkpoints = result.unwrap();
+
+        // Should have 2 AI checkpoints (no human lines since we only have AI-attributed lines 1-30)
+        assert_eq!(checkpoints.len(), 2);
+
+        // Both are AI sessions
+        let ai_checkpoints: Vec<_> = checkpoints
+            .iter()
+            .filter(|c| c.agent_id.is_some())
+            .collect();
+        assert_eq!(ai_checkpoints.len(), 2);
+
+        // Verify that the AI sessions are distinct
+        assert_ne!(
+            ai_checkpoints[0].agent_id.as_ref().unwrap().id,
+            ai_checkpoints[1].agent_id.as_ref().unwrap().id
+        );
     }
 }

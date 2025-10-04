@@ -150,26 +150,23 @@ impl MergeEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MergeSquashEvent {
     pub source_branch: String,
-    pub target_branch: String,
-    pub squash_commit_sha: Option<String>,
-    pub success: bool,
-    pub squashed_commits: Vec<String>,
+    pub source_head: String,
+    pub base_branch: String,
+    pub base_head: String,
 }
 
 impl MergeSquashEvent {
     pub fn new(
         source_branch: String,
-        target_branch: String,
-        squash_commit_sha: Option<String>,
-        success: bool,
-        squashed_commits: Vec<String>,
+        source_head: String,
+        base_branch: String,
+        base_head: String,
     ) -> Self {
         Self {
             source_branch,
-            target_branch,
-            squash_commit_sha,
-            success,
-            squashed_commits,
+            source_head,
+            base_branch,
+            base_head,
         }
     }
 }

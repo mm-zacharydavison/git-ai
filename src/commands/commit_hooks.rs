@@ -73,7 +73,7 @@ pub fn commit_post_command_hook(
     // }
 }
 
-fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
+pub fn get_commit_default_author(repo: &Repository, args: &[String]) -> String {
     // According to git commit manual, --author flag overrides all other author information
     if let Some(author_spec) = extract_author_from_args(args) {
         if let Ok(Some(resolved_author)) = repo.resolve_author_spec(&author_spec) {
