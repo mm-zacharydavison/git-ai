@@ -1,5 +1,8 @@
+use crate::commands::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
 use crate::error::GitAiError;
+use crate::git::repo_storage::RepoStorage;
+use crate::git::rewrite_log::RewriteLogEvent;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -451,6 +454,9 @@ impl<'a> Iterator for References<'a> {
 pub struct Repository {
     global_args: Vec<String>,
     git_dir: PathBuf,
+    pub storage: RepoStorage,
+    pub pre_command_base_commit: Option<String>,
+    pub pre_command_refname: Option<String>,
 }
 
 impl Repository {
@@ -461,6 +467,35 @@ impl Repository {
             args.push("--no-pager".to_string());
         }
         args
+    }
+
+    pub fn require_pre_command_head(&mut self) {
+        if self.pre_command_base_commit.is_some() || self.pre_command_refname.is_some() {
+            return;
+        }
+
+        self.pre_command_base_commit = Some(self.head().unwrap().target().unwrap().to_string());
+        self.pre_command_refname = Some(self.head().unwrap().name().unwrap().to_string());
+    }
+
+    pub fn handle_rewrite_log_event(
+        &mut self,
+        rewrite_log_event: RewriteLogEvent,
+        commit_author: String,
+        apply_side_effects: bool,
+    ) {
+        let log = self
+            .storage
+            .append_rewrite_event(rewrite_log_event.clone())
+            .ok()
+            .expect("Error writing .git/ai/rewrite_log");
+
+        if apply_side_effects {
+            match rewrite_authorship_if_needed(self, &rewrite_log_event, commit_author, &log) {
+                Ok(_) => (),
+                Err(_) => {}
+            }
+        }
     }
 
     // Internal util to get the git object type for a given OID
@@ -898,7 +933,7 @@ impl Repository {
     }
 }
 
-pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiError> {
+pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiError> {
     let mut args = global_args.clone();
     args.push("rev-parse".to_string());
     args.push("--absolute-git-dir".to_string());
@@ -916,14 +951,17 @@ pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiErro
     }
 
     Ok(Repository {
-        global_args,
+        global_args: global_args.clone(),
+        storage: RepoStorage::for_repo_path(&path),
         git_dir: path,
+        pre_command_base_commit: None,
+        pre_command_refname: None,
     })
 }
 
 pub fn find_repository_in_path(path: &str) -> Result<Repository, GitAiError> {
     let global_args = vec!["-C".to_string(), path.to_string()];
-    return find_repository(global_args);
+    return find_repository(&global_args);
 }
 
 /// Helper to execute a git command

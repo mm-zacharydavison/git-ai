@@ -278,7 +278,7 @@ fn handle_stats_delta(args: &[String]) {
 
     // TODO: Do we have any 'global' args for the stats-delta?
     // Find the git repository
-    let repo = match find_repository(Vec::<String>::new()) {
+    let repo = match find_repository(&Vec::<String>::new()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);
@@ -300,7 +300,7 @@ fn handle_ai_blame(args: &[String]) {
 
     // TODO: Do we have any 'global' args for the ai-blame?
     // Find the git repository
-    let repo = match find_repository(Vec::<String>::new()) {
+    let repo = match find_repository(&Vec::<String>::new()) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);

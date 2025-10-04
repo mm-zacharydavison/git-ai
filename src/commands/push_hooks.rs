@@ -20,7 +20,7 @@ pub fn push_post_command_hook(
     }
 
     // Find the git repository
-    let repo = match find_repository(parsed_args.global_args.clone()) {
+    let repo = match find_repository(&parsed_args.global_args) {
         Ok(repo) => repo,
         Err(e) => {
             eprintln!("Failed to find repository: {}", e);

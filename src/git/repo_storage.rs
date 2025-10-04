@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
 use crate::log_fmt::working_log::Checkpoint;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -22,9 +23,13 @@ impl RepoStorage {
             rewrite_log: rewrite_log_file,
         };
 
+        // @todo - @acunniffe, make this lazy on a read or write.
+        // it's probably fine to run this when Repository is loaded but there
+        // are many git commands for which it is not needed
         config.ensure_config_directory().unwrap();
         return config;
     }
+
     fn ensure_config_directory(&self) -> Result<(), GitAiError> {
         let ai_dir = self.repo_path.join("ai");
 
@@ -69,7 +74,26 @@ impl RepoStorage {
         Ok(())
     }
 
-    /* Authorship Log Persistance */
+    /* Rewrite Log Persistance */
+
+    /// Append a rewrite event to the rewrite log file and return the full log
+    pub fn append_rewrite_event(
+        &self,
+        event: RewriteLogEvent,
+    ) -> Result<Vec<RewriteLogEvent>, GitAiError> {
+        append_event_to_file(&self.rewrite_log, event)?;
+        self.read_rewrite_events()
+    }
+
+    /// Read all rewrite events from the rewrite log file
+    pub fn read_rewrite_events(&self) -> Result<Vec<RewriteLogEvent>, GitAiError> {
+        if !self.rewrite_log.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = fs::read_to_string(&self.rewrite_log)?;
+        crate::git::rewrite_log::deserialize_events_from_jsonl(&content)
+    }
 }
 
 pub struct PersistedWorkingLog {
