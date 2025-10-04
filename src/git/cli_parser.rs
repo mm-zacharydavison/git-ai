@@ -46,6 +46,9 @@ impl ParsedGitInvocation {
         v.extend(self.command_args.iter().cloned());
         v
     }
+    pub fn has_command_flag(&self, flag: &str) -> bool {
+        self.command_args.iter().any(|arg| arg == flag)
+    }
 }
 
 pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {

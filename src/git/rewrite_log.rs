@@ -37,6 +37,70 @@ pub enum RewriteLogEvent {
     },
 }
 
+impl RewriteLogEvent {
+    pub fn merge(
+        source_branch: String,
+        target_branch: String,
+        merge_commit_sha: Option<String>,
+        success: bool,
+        conflicts: Vec<String>,
+    ) -> Self {
+        Self::Merge {
+            merge: MergeEvent::new(
+                source_branch,
+                target_branch,
+                merge_commit_sha,
+                success,
+                conflicts,
+            ),
+        }
+    }
+
+    pub fn merge_squash(event: MergeSquashEvent) -> Self {
+        Self::MergeSquash {
+            merge_squash: event,
+        }
+    }
+
+    pub fn rebase_interactive(event: RebaseInteractiveEvent) -> Self {
+        Self::RebaseInteractive {
+            rebase_interactive: event,
+        }
+    }
+
+    pub fn rebase(event: RebaseEvent) -> Self {
+        Self::Rebase { rebase: event }
+    }
+
+    pub fn cherry_pick(event: CherryPickEvent) -> Self {
+        Self::CherryPick { cherry_pick: event }
+    }
+
+    pub fn revert_mixed(event: RevertMixedEvent) -> Self {
+        Self::RevertMixed {
+            revert_mixed: event,
+        }
+    }
+
+    pub fn reset_soft(event: ResetSoftEvent) -> Self {
+        Self::ResetSoft { reset_soft: event }
+    }
+
+    pub fn reset_hard(event: ResetHardEvent) -> Self {
+        Self::ResetHard { reset_hard: event }
+    }
+
+    pub fn commit_amend(original_commit: String, amended_commit_sha: String) -> Self {
+        Self::CommitAmend {
+            commit_amend: CommitAmendEvent::new(original_commit, amended_commit_sha),
+        }
+    }
+
+    pub fn stash(event: StashEvent) -> Self {
+        Self::Stash { stash: event }
+    }
+}
+
 /// Simple case classes - no timestamps, git already has that data
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MergeEvent {
@@ -45,6 +109,24 @@ pub struct MergeEvent {
     pub merge_commit_sha: Option<String>,
     pub success: bool,
     pub conflicts: Vec<String>,
+}
+
+impl MergeEvent {
+    pub fn new(
+        source_branch: String,
+        target_branch: String,
+        merge_commit_sha: Option<String>,
+        success: bool,
+        conflicts: Vec<String>,
+    ) -> Self {
+        Self {
+            source_branch,
+            target_branch,
+            merge_commit_sha,
+            success,
+            conflicts,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,6 +138,24 @@ pub struct MergeSquashEvent {
     pub squashed_commits: Vec<String>,
 }
 
+impl MergeSquashEvent {
+    pub fn new(
+        source_branch: String,
+        target_branch: String,
+        squash_commit_sha: Option<String>,
+        success: bool,
+        squashed_commits: Vec<String>,
+    ) -> Self {
+        Self {
+            source_branch,
+            target_branch,
+            squash_commit_sha,
+            success,
+            squashed_commits,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RebaseInteractiveEvent {
     pub base_commit: String,
@@ -63,6 +163,24 @@ pub struct RebaseInteractiveEvent {
     pub state: RebaseState,
     pub original_commits: Vec<String>,
     pub new_commits: Vec<String>,
+}
+
+impl RebaseInteractiveEvent {
+    pub fn new(
+        base_commit: String,
+        commit_count: u32,
+        state: RebaseState,
+        original_commits: Vec<String>,
+        new_commits: Vec<String>,
+    ) -> Self {
+        Self {
+            base_commit,
+            commit_count,
+            state,
+            original_commits,
+            new_commits,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,6 +193,26 @@ pub struct RebaseEvent {
     pub new_commits: Vec<String>,
 }
 
+impl RebaseEvent {
+    pub fn new(
+        base_commit: String,
+        state: RebaseState,
+        commit_count: u32,
+        current_commit: Option<String>,
+        original_commits: Vec<String>,
+        new_commits: Vec<String>,
+    ) -> Self {
+        Self {
+            base_commit,
+            state,
+            commit_count,
+            current_commit,
+            original_commits,
+            new_commits,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CherryPickEvent {
     pub source_commit: String,
@@ -84,11 +222,39 @@ pub struct CherryPickEvent {
     pub conflicts: Vec<String>,
 }
 
+impl CherryPickEvent {
+    pub fn new(
+        source_commit: String,
+        target_branch: String,
+        new_commit_sha: Option<String>,
+        success: bool,
+        conflicts: Vec<String>,
+    ) -> Self {
+        Self {
+            source_commit,
+            target_branch,
+            new_commit_sha,
+            success,
+            conflicts,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RevertMixedEvent {
     pub reverted_commit: String,
     pub success: bool,
     pub affected_files: Vec<String>,
+}
+
+impl RevertMixedEvent {
+    pub fn new(reverted_commit: String, success: bool, affected_files: Vec<String>) -> Self {
+        Self {
+            reverted_commit,
+            success,
+            affected_files,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +264,16 @@ pub struct ResetSoftEvent {
     pub success: bool,
 }
 
+impl ResetSoftEvent {
+    pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
+        Self {
+            target_commit,
+            previous_head,
+            success,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResetHardEvent {
     pub target_commit: String,
@@ -105,12 +281,30 @@ pub struct ResetHardEvent {
     pub success: bool,
 }
 
+impl ResetHardEvent {
+    pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
+        Self {
+            target_commit,
+            previous_head,
+            success,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommitAmendEvent {
     pub original_commit: String,
     pub amended_commit_sha: String,
-    pub success: bool,
-    pub changed_files: Vec<String>,
+}
+
+impl CommitAmendEvent {
+    /// Create a new CommitAmendEvent with the given parameters
+    pub fn new(original_commit: String, amended_commit_sha: String) -> Self {
+        Self {
+            original_commit,
+            amended_commit_sha,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,6 +313,22 @@ pub struct StashEvent {
     pub stash_ref: Option<String>,
     pub success: bool,
     pub affected_files: Vec<String>,
+}
+
+impl StashEvent {
+    pub fn new(
+        operation: StashOperation,
+        stash_ref: Option<String>,
+        success: bool,
+        affected_files: Vec<String>,
+    ) -> Self {
+        Self {
+            operation,
+            stash_ref,
+            success,
+            affected_files,
+        }
+    }
 }
 
 /// Rebase state tracking
@@ -239,15 +449,13 @@ mod tests {
 
     #[test]
     fn test_merge_event_serialization() {
-        let event = RewriteLogEvent::Merge {
-            merge: MergeEvent {
-                source_branch: "feature-branch".to_string(),
-                target_branch: "main".to_string(),
-                merge_commit_sha: Some("abc123def456".to_string()),
-                success: true,
-                conflicts: vec![],
-            },
-        };
+        let event = RewriteLogEvent::merge(MergeEvent::new(
+            "feature-branch".to_string(),
+            "main".to_string(),
+            Some("abc123def456".to_string()),
+            true,
+            vec![],
+        ));
 
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: RewriteLogEvent = serde_json::from_str(&json).unwrap();
@@ -266,25 +474,21 @@ mod tests {
 
     #[test]
     fn test_events_jsonl_serialization() {
-        let event1 = RewriteLogEvent::Merge {
-            merge: MergeEvent {
-                source_branch: "feature".to_string(),
-                target_branch: "main".to_string(),
-                merge_commit_sha: Some("abc123".to_string()),
-                success: true,
-                conflicts: vec![],
-            },
-        };
+        let event1 = RewriteLogEvent::merge(MergeEvent::new(
+            "feature".to_string(),
+            "main".to_string(),
+            Some("abc123".to_string()),
+            true,
+            vec![],
+        ));
 
-        let event2 = RewriteLogEvent::CherryPick {
-            cherry_pick: CherryPickEvent {
-                source_commit: "def456".to_string(),
-                target_branch: "main".to_string(),
-                new_commit_sha: Some("ghi789".to_string()),
-                success: true,
-                conflicts: vec![],
-            },
-        };
+        let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
+            "def456".to_string(),
+            "main".to_string(),
+            Some("ghi789".to_string()),
+            true,
+            vec![],
+        ));
 
         let events = vec![event1.clone(), event2.clone()];
         let jsonl = serialize_events_to_jsonl(&events).unwrap();
@@ -310,26 +514,46 @@ mod tests {
     }
 
     #[test]
-    fn test_append_event_to_jsonl() {
-        let event1 = RewriteLogEvent::Merge {
-            merge: MergeEvent {
-                source_branch: "feature".to_string(),
-                target_branch: "main".to_string(),
-                merge_commit_sha: Some("abc123".to_string()),
-                success: true,
-                conflicts: vec![],
-            },
-        };
+    fn test_commit_amend_event_serialization() {
+        let event =
+            RewriteLogEvent::commit_amend("abc123def456".to_string(), "def456ghi789".to_string());
 
-        let event2 = RewriteLogEvent::CherryPick {
-            cherry_pick: CherryPickEvent {
-                source_commit: "def456".to_string(),
-                target_branch: "main".to_string(),
-                new_commit_sha: Some("ghi789".to_string()),
-                success: true,
-                conflicts: vec![],
-            },
-        };
+        let json = serde_json::to_string(&event).unwrap();
+        println!("Serialized CommitAmend: {}", json);
+
+        // Should serialize as {"commit_amend":{"original_commit":"abc123def456","amended_commit_sha":"def456ghi789"}}
+        assert!(json.contains("\"commit_amend\""));
+        assert!(json.contains("\"original_commit\":\"abc123def456\""));
+        assert!(json.contains("\"amended_commit_sha\":\"def456ghi789\""));
+
+        let deserialized: RewriteLogEvent = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            RewriteLogEvent::CommitAmend { commit_amend } => {
+                assert_eq!(commit_amend.original_commit, "abc123def456");
+                assert_eq!(commit_amend.amended_commit_sha, "def456ghi789");
+            }
+            _ => panic!("Expected CommitAmend event"),
+        }
+    }
+
+    #[test]
+    fn test_append_event_to_jsonl() {
+        let event1 = RewriteLogEvent::merge(MergeEvent::new(
+            "feature".to_string(),
+            "main".to_string(),
+            Some("abc123".to_string()),
+            true,
+            vec![],
+        ));
+
+        let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
+            "def456".to_string(),
+            "main".to_string(),
+            Some("ghi789".to_string()),
+            true,
+            vec![],
+        ));
 
         let initial_jsonl = serialize_events_to_jsonl(&[event1.clone()]).unwrap();
         // Test with temp file

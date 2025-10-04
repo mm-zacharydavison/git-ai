@@ -1,40 +1,34 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
-use crate::git::find_repository;
-use crate::git::post_commit;
-use crate::git::pre_commit;
-use crate::git::repo_storage::RepoStorage;
-use crate::git::rewrite_log::{CommitAmendEvent, RewriteLogEvent};
+use crate::git::repository::Repository;
+use crate::git::rewrite_log::RewriteLogEvent;
 
-pub fn commit_pre_command_hook(parsed_args: &ParsedGitInvocation) {
-    if is_dry_run(&parsed_args.command_args) {
+pub fn commit_pre_command_hook(
+    parsed_args: &ParsedGitInvocation,
+    repository_option: &mut Option<Repository>,
+) {
+    if is_dry_run(&parsed_args.command_args) || repository_option.is_none() {
         return;
     }
 
-    // TODO Take global args into account
-    // TODO Remove this once we migrate off of libgit2
-    // Find the git repository
-    let repo = match find_repository() {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let repo: &mut Repository = repository_option.as_mut().unwrap();
+    // store this so it's availible after
+    repo.require_pre_command_head();
 
-    let default_user_name = get_commit_default_user_name(&repo, &parsed_args.command_args);
-
-    // Run pre-commit logic
-    if let Err(e) = pre_commit::pre_commit(&repo, default_user_name.clone()) {
-        eprintln!("Pre-commit failed: {}", e);
-        std::process::exit(1);
-    }
+    // @todo add back this logic
+    // // repo.resolve_author_spec(author_spec)
+    // // Run pre-commit logic
+    // if let Err(e) = pre_commit::pre_commit(&repo, "Aidan".to_string()) {
+    //     eprintln!("Pre-commit failed: {}", e);
+    //     std::process::exit(1);
+    // }
 }
 
 pub fn commit_post_command_hook(
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
+    repository_option: &mut Option<Repository>,
 ) {
-    if is_dry_run(&parsed_args.command_args) {
+    if is_dry_run(&parsed_args.command_args) || repository_option.is_none() {
         return;
     }
 
@@ -42,34 +36,53 @@ pub fn commit_post_command_hook(
         return;
     }
 
-    // TODO Take global args into account
-    // TODO Remove this once we migrate off of libgit2
-    // Find the git repository
-    let repo = match find_repository() {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let repo: &mut Repository = repository_option.as_mut().unwrap();
 
-    if let Err(e) = post_commit::post_commit(&repo, false) {
-        eprintln!("Post-commit failed: {}", e);
+    if parsed_args.has_command_flag("--amend") {
+        repo.handle_rewrite_log_event(RewriteLogEvent::commit_amend(
+            repo.pre_command_base_commit.as_ref().unwrap().clone(),
+            repo.head().unwrap().target().unwrap().to_string(),
+        ))
     }
 
-    let amended_commit_sha = repo.head().unwrap().target().unwrap().to_string();
+    // repo.storage
+    //     .append_rewrite_event(RewriteLogEvent::CommitAmend {
+    //         commit_amend: CommitAmendEvent {
+    //             // original_commit: parsed_args.command_args[0].clone(),
+    //             // amended_commit_sha: repo.head().unwrap().target().unwrap().to_string(),
+    //             // success: exit_status.success(),
+    //             // changed_files: vec![],
+    //         },
+    //     })
 
-    let repo_storage = RepoStorage::for_repo_path(repo.path());
-    repo_storage
-        .append_rewrite_event(RewriteLogEvent::CommitAmend {
-            commit_amend: CommitAmendEvent {
-                original_commit: parsed_args.command_args[0].clone(),
-                amended_commit_sha,
-                success: true,         // success - assuming it will succeed
-                changed_files: vec![], // changed_files - could be populated from git diff
-            },
-        })
-        .unwrap();
+    // TODO Take global args into account
+    // TODO Remove this once we migrate off of libgit2
+    // // Find the git repository
+    // let repo = match find_repository() {
+    //     Ok(repo) => repo,
+    //     Err(e) => {
+    //         eprintln!("Failed to find repository: {}", e);
+    //         std::process::exit(1);
+    //     }
+    // };
+
+    // if let Err(e) = post_commit::post_commit(&repo, false) {
+    //     eprintln!("Post-commit failed: {}", e);
+    // }
+
+    // let amended_commit_sha = repo.head().unwrap().target().unwrap().to_string();
+
+    // let repo_storage = RepoStorage::for_repo_path(repo.path());
+    // repo_storage
+    //     .append_rewrite_event(RewriteLogEvent::CommitAmend {
+    //         commit_amend: CommitAmendEvent {
+    //             original_commit: parsed_args.command_args[0].clone(),
+    //             amended_commit_sha,
+    //             success: true,         // success - assuming it will succeed
+    //             changed_files: vec![], // changed_files - could be populated from git diff
+    //         },
+    //     })
+    //     .unwrap();
 }
 
 fn get_commit_default_user_name(repo: &git2::Repository, args: &[String]) -> String {

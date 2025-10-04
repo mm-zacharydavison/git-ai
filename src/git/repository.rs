@@ -1,5 +1,7 @@
 use crate::config;
 use crate::error::GitAiError;
+use crate::git::repo_storage::RepoStorage;
+use crate::git::rewrite_log::RewriteLogEvent;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -451,6 +453,9 @@ impl<'a> Iterator for References<'a> {
 pub struct Repository {
     global_args: Vec<String>,
     git_dir: PathBuf,
+    pub storage: RepoStorage,
+    pub pre_command_base_commit: Option<String>,
+    pub pre_command_refname: Option<String>,
 }
 
 impl Repository {
@@ -461,6 +466,19 @@ impl Repository {
             args.push("--no-pager".to_string());
         }
         args
+    }
+
+    pub fn require_pre_command_head(&mut self) {
+        if self.pre_command_base_commit.is_some() || self.pre_command_refname.is_some() {
+            return;
+        }
+
+        self.pre_command_base_commit = Some(self.head().unwrap().target().unwrap().to_string());
+        self.pre_command_refname = Some(self.head().unwrap().name().unwrap().to_string());
+    }
+
+    pub fn handle_rewrite_log_event(&mut self, rewrite_log_event: RewriteLogEvent) {
+        self.storage.append_rewrite_event(rewrite_log_event);
     }
 
     // Internal util to get the git object type for a given OID
@@ -917,7 +935,10 @@ pub fn find_repository(global_args: Vec<String>) -> Result<Repository, GitAiErro
 
     Ok(Repository {
         global_args,
+        storage: RepoStorage::for_repo_path(&path),
         git_dir: path,
+        pre_command_base_commit: None,
+        pre_command_refname: None,
     })
 }
 

@@ -23,9 +23,13 @@ impl RepoStorage {
             rewrite_log: rewrite_log_file,
         };
 
+        // @todo - @acunniffe, make this lazy on a read or write.
+        // it's probably fine to run this when Repository is loaded but there
+        // are many git commands for which it is not needed
         config.ensure_config_directory().unwrap();
         return config;
     }
+
     fn ensure_config_directory(&self) -> Result<(), GitAiError> {
         let ai_dir = self.repo_path.join("ai");
 
