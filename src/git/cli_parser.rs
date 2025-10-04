@@ -49,6 +49,81 @@ impl ParsedGitInvocation {
     pub fn has_command_flag(&self, flag: &str) -> bool {
         self.command_args.iter().any(|arg| arg == flag)
     }
+
+    /// Returns the n-th positional argument after the command (0-indexed).
+    /// Skips all arguments that start with '-' (flags and their inline values).
+    ///
+    /// Examples:
+    /// - `git merge abc --squash` => pos_command(0) returns Some("abc")
+    /// - `git merge --squash --no-verify abc` => pos_command(0) returns Some("abc")
+    /// - `git merge abc def --squash` => pos_command(1) returns Some("def")
+    pub fn pos_command(&self, n: u8) -> Option<String> {
+        let mut positional_count = 0u8;
+        let mut skip_next = false;
+
+        for arg in &self.command_args {
+            // If we're skipping this arg because it's a value for a previous flag
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+
+            // Skip flags
+            if arg.starts_with('-') {
+                // Check if this is a flag that takes a separate value
+                // (e.g., -m, -X, --message without =)
+                if arg.contains('=') {
+                    // Flag with inline value like --message=foo, count as one arg
+                    continue;
+                } else if is_flag_with_value(arg) {
+                    // Flag that takes the next arg as its value
+                    skip_next = true;
+                    continue;
+                } else {
+                    // Flag without value
+                    continue;
+                }
+            }
+
+            // This is a positional argument
+            if positional_count == n {
+                return Some(arg.clone());
+            }
+            positional_count += 1;
+        }
+
+        None
+    }
+}
+
+/// Returns true if the given flag typically takes a value as the next argument.
+/// This is a heuristic for common git command flags that take values.
+fn is_flag_with_value(flag: &str) -> bool {
+    matches!(
+        flag,
+        // Commit/merge message flags
+        "-m" | "--message" |
+        "-F" | "--file" |
+        "-t" | "--template" |
+        "-e" | "--edit" |
+        "--author" | "--date" |
+        // Merge strategy
+        "-s" | "--strategy" |
+        "-X" | "--strategy-option" |
+        // Log/diff flags
+        "--since" | "--until" | "--before" | "--after" |
+        "--format" | "--pretty" |
+        "-n" | "--max-count" |
+        "--skip" |
+        // Checkout/branch flags
+        "-b" | "-B" |
+        // Push/pull flags
+        "-u" | "--set-upstream" |
+        // Config flags
+        "--config" |
+        // Misc
+        "--depth" | "--shallow-since"
+    )
 }
 
 pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
@@ -388,4 +463,77 @@ pub fn parse_git_cli_args(args: &[String]) -> ParsedGitInvocation {
 
 pub fn is_dry_run(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--dry-run")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pos_command_basic() {
+        // Test: git merge abc --squash
+        let args = vec![
+            "merge".to_string(),
+            "abc".to_string(),
+            "--squash".to_string(),
+        ];
+        let parsed = parse_git_cli_args(&args);
+        assert_eq!(parsed.pos_command(0), Some("abc".to_string()));
+        assert_eq!(parsed.pos_command(1), None);
+    }
+
+    #[test]
+    fn test_pos_command_flags_before() {
+        // Test: git merge --squash --no-verify abc
+        let args = vec![
+            "merge".to_string(),
+            "--squash".to_string(),
+            "--no-verify".to_string(),
+            "abc".to_string(),
+        ];
+        let parsed = parse_git_cli_args(&args);
+        assert_eq!(parsed.pos_command(0), Some("abc".to_string()));
+        assert_eq!(parsed.pos_command(1), None);
+    }
+
+    #[test]
+    fn test_pos_command_multiple_positional() {
+        // Test: git merge abc def --squash
+        let args = vec![
+            "merge".to_string(),
+            "abc".to_string(),
+            "def".to_string(),
+            "--squash".to_string(),
+        ];
+        let parsed = parse_git_cli_args(&args);
+        assert_eq!(parsed.pos_command(0), Some("abc".to_string()));
+        assert_eq!(parsed.pos_command(1), Some("def".to_string()));
+        assert_eq!(parsed.pos_command(2), None);
+    }
+
+    #[test]
+    fn test_pos_command_with_flag_value() {
+        // Test: git commit -m "message" file.txt
+        let args = vec![
+            "commit".to_string(),
+            "-m".to_string(),
+            "message".to_string(),
+            "file.txt".to_string(),
+        ];
+        let parsed = parse_git_cli_args(&args);
+        assert_eq!(parsed.pos_command(0), Some("file.txt".to_string()));
+        assert_eq!(parsed.pos_command(1), None);
+    }
+
+    #[test]
+    fn test_pos_command_inline_flag_value() {
+        // Test: git merge --strategy=recursive abc
+        let args = vec![
+            "merge".to_string(),
+            "--strategy=recursive".to_string(),
+            "abc".to_string(),
+        ];
+        let parsed = parse_git_cli_args(&args);
+        assert_eq!(parsed.pos_command(0), Some("abc".to_string()));
+    }
 }

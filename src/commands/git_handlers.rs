@@ -149,7 +149,7 @@ fn run_post_command_hooks(
                 let commit_author =
                     get_commit_default_author(&repository, &parsed_args.command_args);
 
-                let source_branch = parsed_args.command_args.iter().nth(1).unwrap();
+                let source_branch = parsed_args.pos_command(0).unwrap();
 
                 let source_head_sha = match repository
                     .revparse_single(source_branch.as_str())
