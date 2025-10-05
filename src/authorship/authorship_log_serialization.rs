@@ -1,4 +1,5 @@
 use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
+use crate::config;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -7,32 +8,6 @@ use std::io::{BufRead, Write};
 
 /// Authorship log format version identifier
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/3.0.0";
-
-/// Generate a short hash (7 characters) from agent_id and tool
-fn generate_short_hash(agent_id: &str, tool: &str) -> String {
-    let combined = format!("{}:{}", tool, agent_id);
-    let mut hasher = Sha256::new();
-    hasher.update(combined.as_bytes());
-    let result = hasher.finalize();
-    // Take first 7 characters of the hex representation
-    format!("{:x}", result)[..7].to_string()
-}
-
-/// Count the number of lines represented by a working_log::Line
-fn count_working_log_lines(line: &crate::authorship::working_log::Line) -> u32 {
-    match line {
-        crate::authorship::working_log::Line::Single(_) => 1,
-        crate::authorship::working_log::Line::Range(start, end) => end - start + 1,
-    }
-}
-
-/// Count the number of lines represented by a LineRange
-fn count_line_range(range: &LineRange) -> u32 {
-    match range {
-        LineRange::Single(_) => 1,
-        LineRange::Range(start, end) => end - start + 1,
-    }
-}
 
 /// Metadata section that goes below the divider as JSON
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -422,7 +397,9 @@ impl AuthorshipLog {
                 let mut all_deleted_lines = Vec::new();
                 for line in &entry.deleted_lines {
                     match line {
-                        crate::authorship::working_log::Line::Single(l) => all_deleted_lines.push(*l),
+                        crate::authorship::working_log::Line::Single(l) => {
+                            all_deleted_lines.push(*l)
+                        }
                         crate::authorship::working_log::Line::Range(start, end) => {
                             for l in *start..=*end {
                                 all_deleted_lines.push(l);
@@ -594,6 +571,15 @@ impl AuthorshipLog {
 
         // Finalize the log (cleanup, consolidate, metrics)
         authorship_log.finalize(&session_additions, &session_deletions);
+
+        // If prompts should be ignored, clear the transcripts but keep the prompt records
+        let ignore_prompts: bool = config::Config::get().get_ignore_prompts();
+        if ignore_prompts {
+            // Clear transcripts but keep the prompt records
+            for prompt_record in authorship_log.metadata.prompts.values_mut() {
+                prompt_record.messages.clear();
+            }
+        }
 
         authorship_log
     }
@@ -1057,6 +1043,32 @@ fn parse_attestation_section(
 /// Check if a file path needs quoting (contains spaces or whitespace)
 fn needs_quoting(path: &str) -> bool {
     path.contains(' ') || path.contains('\t') || path.contains('\n')
+}
+
+/// Generate a short hash (7 characters) from agent_id and tool
+fn generate_short_hash(agent_id: &str, tool: &str) -> String {
+    let combined = format!("{}:{}", tool, agent_id);
+    let mut hasher = Sha256::new();
+    hasher.update(combined.as_bytes());
+    let result = hasher.finalize();
+    // Take first 7 characters of the hex representation
+    format!("{:x}", result)[..7].to_string()
+}
+
+/// Count the number of lines represented by a working_log::Line
+fn count_working_log_lines(line: &crate::authorship::working_log::Line) -> u32 {
+    match line {
+        crate::authorship::working_log::Line::Single(_) => 1,
+        crate::authorship::working_log::Line::Range(start, end) => end - start + 1,
+    }
+}
+
+/// Count the number of lines represented by a LineRange
+fn count_line_range(range: &LineRange) -> u32 {
+    match range {
+        LineRange::Single(_) => 1,
+        LineRange::Range(start, end) => end - start + 1,
+    }
 }
 
 #[cfg(test)]

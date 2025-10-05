@@ -31,6 +31,10 @@ impl Config {
         &self.git_path
     }
 
+    pub fn get_ignore_prompts(&self) -> bool {
+        self.ignore_prompts
+    }
+
     /// Returns whether prompts should be ignored (currently unused by internal APIs).
     #[allow(dead_code)]
     pub fn ignore_prompts(&self) -> bool {
