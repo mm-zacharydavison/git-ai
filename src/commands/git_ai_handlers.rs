@@ -1,9 +1,9 @@
 use crate::authorship::working_log::AgentId;
 use crate::commands;
-use crate::config;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
 };
+use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use std::io::IsTerminal;
@@ -27,9 +27,9 @@ pub fn handle_git_ai(args: &[String]) {
         "checkpoint" => {
             handle_checkpoint(&args[1..]);
         }
-        "ai-blame" => {
+        "blame" => {
             handle_ai_blame(&args[1..]);
-        },
+        }
         "git-path" => {
             let config = config::Config::get();
             println!("{}", config.git_cmd());
@@ -63,23 +63,16 @@ fn print_help() {
     eprintln!("Usage: git-ai <git or git-ai command> [args...]");
     eprintln!("");
     eprintln!("Commands:");
-    eprintln!("  checkpoint    [new] checkpoint working changes and specify author");
-    eprintln!("    Presets: claude, cursor");
-    eprintln!("    --author <name>       Override default author");
-    eprintln!("    --model <model>       Override default model");
-    eprintln!("    --prompt <json>       Override default prompt with JSON");
-    eprintln!("    --prompt-path <path>  Override default prompt with file path");
-    eprintln!("    --prompt-id <id>      Override default prompt with ID");
+    eprintln!("  checkpoint         [new] checkpoint working changes and specify author");
+    eprintln!("    Presets: claude, cursor. Debug/Testing presets mock_ai");
     eprintln!("    --show-working-log    Display current working log");
     eprintln!("    --reset               Reset working log");
-    eprintln!("  blame         [override] git blame with AI authorship tracking");
+    eprintln!("  blame              [override] git blame with AI authorship tracking");
     eprintln!(
-        "  commit        [wrapper] pass through to 'git commit' with git-ai before/after hooks"
+        "  commit             [wrapper] pass through to 'git commit' with git-ai before/after hooks"
     );
-    eprintln!("  fetch         [rewritten] Fetch from remote with AI authorship refs appended");
-    eprintln!("  push          [rewritten] Push to remote with AI authorship refs appended");
-    eprintln!("  install-hooks [new] Install git hooks for AI authorship tracking");
-    eprintln!("  squash-authorship [new] Generate authorship from squashed commits");
+    eprintln!("  install-hooks      [new] Install git hooks for AI authorship tracking");
+    eprintln!("  squash-authorship  [new] Generate authorship from squashed commits");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("");
