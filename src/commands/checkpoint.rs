@@ -163,18 +163,40 @@ pub fn run(
 
     if !quiet {
         let log_author = agent_tool.unwrap_or(author);
-        eprintln!(
-            "{}{} changed {} of the {} file(s) that have changed since the last {}",
-            if agent_run_result.is_some() {
-                "AI: "
-            } else {
-                "Human: "
-            },
-            log_author,
-            entries.len(),
-            files.len(),
-            label
-        );
+        // Only count files that actually have checkpoint entries to avoid confusion.
+        // Files that were previously checkpointed but have no new changes won't have entries.
+        let files_with_entries = entries.len();
+        let total_uncommitted_files = files.len();
+
+        if files_with_entries == total_uncommitted_files {
+            // All files with changes got entries
+            eprintln!(
+                "{}{} changed {} file(s) that have changed since the last {}",
+                if agent_run_result.is_some() {
+                    "AI: "
+                } else {
+                    "Human: "
+                },
+                log_author,
+                files_with_entries,
+                label
+            );
+        } else {
+            // Some files were already checkpointed
+            eprintln!(
+                "{}{} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
+                if agent_run_result.is_some() {
+                    "AI: "
+                } else {
+                    "Human: "
+                },
+                log_author,
+                files_with_entries,
+                total_uncommitted_files,
+                label,
+                total_uncommitted_files - files_with_entries
+            );
+        }
     }
 
     // Return the requested values: (entries_len, files_len, working_log_len)
@@ -404,6 +426,9 @@ fn get_subsequent_checkpoint_entries(
     for file_path in files {
         let abs_path = working_log.repo_root.join(file_path);
 
+        // Read current content directly from the file system
+        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
         // Read the previous content from the blob storage using the previous checkpoint's blob_sha
         let previous_content = if let Some(prev_content_hash) = previous_file_hashes.get(file_path)
         {
@@ -413,9 +438,6 @@ fn get_subsequent_checkpoint_entries(
         } else {
             String::new() // No previous version, treat as empty
         };
-
-        // Read current content directly from the file system
-        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
         // Normalize by ensuring trailing newline to avoid off-by-one when appending lines
         let prev_norm = if previous_content.ends_with('\n') {
@@ -531,6 +553,7 @@ fn consolidate_lines(mut lines: Vec<u32>) -> Vec<Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::test_utils::TmpRepo;
     use crate::log_fmt::working_log::Line;
 
     #[test]
@@ -567,6 +590,179 @@ mod tests {
         let lines = vec![];
         let result = consolidate_lines(lines);
         assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_checkpoint_with_staged_changes() {
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Make changes to the file
+        file.append("New line added by user\n").unwrap();
+
+        // Note: TmpFile.append() automatically stages changes (see write_to_disk in test_utils)
+        // So at this point, the file has staged changes
+
+        // Run checkpoint - it should track the changes even though they're staged
+        let (entries_len, files_len, _checkpoints_len) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        // The bug: when changes are staged, entries_len is 0 instead of 1
+        assert_eq!(files_len, 1, "Should have 1 file with changes");
+        assert_eq!(
+            entries_len, 1,
+            "Should have 1 file entry in checkpoint (staged changes should be tracked)"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_with_unstaged_changes() {
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Make changes to the file BUT keep them unstaged
+        // We need to manually write to the file without staging
+        let file_path = file.path();
+        let mut current_content = std::fs::read_to_string(&file_path).unwrap();
+        current_content.push_str("New line added by user\n");
+        std::fs::write(&file_path, current_content).unwrap();
+
+        // Run checkpoint - it should track the unstaged changes
+        let (entries_len, files_len, _checkpoints_len) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        // This should work correctly
+        assert_eq!(files_len, 1, "Should have 1 file with changes");
+        assert_eq!(entries_len, 1, "Should have 1 file entry in checkpoint");
+    }
+
+    #[test]
+    fn test_checkpoint_with_staged_changes_after_previous_checkpoint() {
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Make first changes and checkpoint
+        file.append("First change\n").unwrap();
+        let (entries_len_1, files_len_1, _) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        assert_eq!(
+            files_len_1, 1,
+            "First checkpoint: should have 1 file with changes"
+        );
+        assert_eq!(
+            entries_len_1, 1,
+            "First checkpoint: should have 1 file entry"
+        );
+
+        // Make second changes - these are already staged by append()
+        file.append("Second change\n").unwrap();
+
+        // Run checkpoint again - it should track the staged changes even after a previous checkpoint
+        let (entries_len_2, files_len_2, _) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        // The bug might show up here
+        println!(
+            "Second checkpoint: entries_len={}, files_len={}",
+            entries_len_2, files_len_2
+        );
+        assert_eq!(
+            files_len_2, 1,
+            "Second checkpoint: should have 1 file with changes"
+        );
+        assert_eq!(
+            entries_len_2, 1,
+            "Second checkpoint: should have 1 file entry in checkpoint (staged changes should be tracked)"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_with_only_staged_no_unstaged_changes() {
+        use std::fs;
+
+        // Create a repo with an initial commit
+        let (tmp_repo, file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Get the file path
+        let file_path = file.path();
+        let filename = file.filename();
+
+        // Manually modify the file (bypassing TmpFile's automatic staging)
+        let mut content = fs::read_to_string(&file_path).unwrap();
+        content.push_str("New line for staging test\n");
+        fs::write(&file_path, &content).unwrap();
+
+        // Now manually stage it using git (this is what "git add" does)
+        tmp_repo.stage_file(filename).unwrap();
+
+        // At this point: HEAD has old content, index has new content, workdir has new content
+        // And unstaged should be "Unmodified" because workdir == index
+
+        // Now run checkpoint
+        let (entries_len, files_len, _checkpoints_len) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        println!(
+            "Checkpoint result: entries_len={}, files_len={}",
+            entries_len, files_len
+        );
+
+        // This should work: we should see 1 file with 1 entry
+        assert_eq!(files_len, 1, "Should detect 1 file with staged changes");
+        assert_eq!(
+            entries_len, 1,
+            "Should track the staged changes in checkpoint"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_then_stage_then_checkpoint_again() {
+        use std::fs;
+
+        // Create a repo with an initial commit
+        let (tmp_repo, file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Get the file path
+        let file_path = file.path();
+        let filename = file.filename();
+
+        // Step 1: Manually modify the file WITHOUT staging
+        let mut content = fs::read_to_string(&file_path).unwrap();
+        content.push_str("New line added\n");
+        fs::write(&file_path, &content).unwrap();
+
+        // Step 2: Checkpoint the unstaged changes
+        let (entries_len_1, files_len_1, _) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        println!(
+            "First checkpoint (unstaged): entries_len={}, files_len={}",
+            entries_len_1, files_len_1
+        );
+        assert_eq!(files_len_1, 1, "First checkpoint: should detect 1 file");
+        assert_eq!(entries_len_1, 1, "First checkpoint: should create 1 entry");
+
+        // Step 3: Now stage the file (without making any new changes)
+        tmp_repo.stage_file(filename).unwrap();
+
+        // Step 4: Try to checkpoint again - the file is now staged but content hasn't changed
+        let (entries_len_2, files_len_2, _) =
+            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
+
+        println!(
+            "Second checkpoint (staged, no new changes): entries_len={}, files_len={}",
+            entries_len_2, files_len_2
+        );
+
+        // After the fix: The checkpoint correctly recognizes that the file was already checkpointed
+        // and doesn't create a duplicate entry. The improved message clarifies this to the user:
+        // "changed 0 of the 1 file(s) that have changed since the last commit (1 already checkpointed)"
+        assert_eq!(files_len_2, 1, "Second checkpoint: file is still staged");
+        assert_eq!(
+            entries_len_2, 0,
+            "Second checkpoint: no NEW changes, so no new entry (already checkpointed)"
+        );
     }
 }
 

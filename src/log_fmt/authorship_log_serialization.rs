@@ -145,6 +145,148 @@ impl AuthorshipLog {
         }
     }
 
+    /// Extract entries that match unstaged line ranges into a new AuthorshipLog
+    ///
+    /// This creates a new AuthorshipLog containing only the lines that will be filtered out.
+    /// Used to save unstaged AI-authored lines to the working log for future attribution.
+    ///
+    /// # Arguments
+    /// * `unstaged_hunks` - Map of file paths to their unstaged line ranges
+    ///
+    /// # Returns
+    /// A new AuthorshipLog with only the unstaged entries
+    pub fn extract_unstaged_lines(
+        &self,
+        unstaged_hunks: &HashMap<String, Vec<LineRange>>,
+    ) -> AuthorshipLog {
+        let mut extracted_log = AuthorshipLog::new();
+        extracted_log.metadata.base_commit_sha = self.metadata.base_commit_sha.clone();
+
+        for file_attestation in &self.attestations {
+            if let Some(unstaged_ranges) = unstaged_hunks.get(&file_attestation.file_path) {
+                let mut extracted_file = FileAttestation::new(file_attestation.file_path.clone());
+
+                for entry in &file_attestation.entries {
+                    // Expand entry's line ranges to individual lines
+                    let mut entry_lines: Vec<u32> = Vec::new();
+                    for range in &entry.line_ranges {
+                        entry_lines.extend(range.expand());
+                    }
+
+                    // Find which lines are unstaged
+                    let mut unstaged_lines: Vec<u32> = Vec::new();
+                    for line in entry_lines {
+                        // Check if this line is in any unstaged range
+                        for unstaged_range in unstaged_ranges {
+                            if unstaged_range.contains(line) {
+                                unstaged_lines.push(line);
+                                break;
+                            }
+                        }
+                    }
+
+                    if !unstaged_lines.is_empty() {
+                        // Copy the prompt record to the extracted log
+                        if let Some(prompt) = self.metadata.prompts.get(&entry.hash) {
+                            extracted_log
+                                .metadata
+                                .prompts
+                                .insert(entry.hash.clone(), prompt.clone());
+                        }
+
+                        // Compress unstaged lines back to ranges
+                        unstaged_lines.sort_unstable();
+                        unstaged_lines.dedup();
+                        let compressed_ranges = LineRange::compress_lines(&unstaged_lines);
+
+                        extracted_file.add_entry(AttestationEntry::new(
+                            entry.hash.clone(),
+                            compressed_ranges,
+                        ));
+                    }
+                }
+
+                if !extracted_file.entries.is_empty() {
+                    extracted_log.attestations.push(extracted_file);
+                }
+            }
+        }
+
+        extracted_log
+    }
+
+    /// Filter authorship log to keep only committed line ranges
+    ///
+    /// This keeps only attributions for lines that were actually committed, removing everything else.
+    /// This is the inverse of filter_unstaged_lines - instead of removing unstaged, we keep only committed.
+    ///
+    /// # Arguments
+    /// * `committed_hunks` - Map of file paths to their committed line ranges
+    pub fn filter_to_committed_lines(&mut self, committed_hunks: &HashMap<String, Vec<LineRange>>) {
+        for file_attestation in &mut self.attestations {
+            if let Some(committed_ranges) = committed_hunks.get(&file_attestation.file_path) {
+                // For each attestation entry, keep only the lines that were committed
+                for entry in &mut file_attestation.entries {
+                    // Expand entry's line ranges to individual lines
+                    let mut entry_lines: Vec<u32> = Vec::new();
+                    for range in &entry.line_ranges {
+                        entry_lines.extend(range.expand());
+                    }
+
+                    // Keep only lines that are in committed ranges
+                    let mut committed_lines: Vec<u32> = Vec::new();
+                    for line in entry_lines {
+                        if committed_ranges.iter().any(|range| range.contains(line)) {
+                            committed_lines.push(line);
+                        }
+                    }
+
+                    if !committed_lines.is_empty() {
+                        committed_lines.sort_unstable();
+                        committed_lines.dedup();
+                        entry.line_ranges = LineRange::compress_lines(&committed_lines);
+                    } else {
+                        entry.line_ranges.clear();
+                    }
+                }
+
+                // Remove entries that have no line ranges left
+                file_attestation
+                    .entries
+                    .retain(|entry| !entry.line_ranges.is_empty());
+            } else {
+                // No committed lines for this file, remove all entries
+                file_attestation.entries.clear();
+            }
+        }
+
+        // Remove file attestations that have no entries left
+        self.attestations.retain(|file| !file.entries.is_empty());
+
+        // Clean up prompt metadata for sessions that no longer have attributed lines
+        self.cleanup_unused_prompts();
+    }
+
+    /// Remove prompt records that are not referenced by any attestation entries
+    ///
+    /// After filtering the authorship log (e.g., to only committed lines), some AI sessions
+    /// may no longer have any attributed lines. This method removes their PromptRecords from
+    /// the metadata to keep it clean and accurate.
+    pub fn cleanup_unused_prompts(&mut self) {
+        // Collect all hashes that are still referenced in attestations
+        let mut referenced_hashes = std::collections::HashSet::new();
+        for file_attestation in &self.attestations {
+            for entry in &file_attestation.entries {
+                referenced_hashes.insert(entry.hash.clone());
+            }
+        }
+
+        // Remove prompts that are not referenced
+        self.metadata
+            .prompts
+            .retain(|hash, _| referenced_hashes.contains(hash));
+    }
+
     /// Merge overlapping and adjacent line ranges
     fn merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
         if ranges.is_empty() {
@@ -749,7 +891,9 @@ impl AuthorshipLog {
 
 /// Convert line numbers to working log Line format (Single/Range)
 #[allow(dead_code)]
-fn compress_lines_to_working_log_format(lines: &[u32]) -> Vec<crate::log_fmt::working_log::Line> {
+pub fn compress_lines_to_working_log_format(
+    lines: &[u32],
+) -> Vec<crate::log_fmt::working_log::Line> {
     use crate::log_fmt::working_log::Line;
 
     if lines.is_empty() {

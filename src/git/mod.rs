@@ -8,4 +8,5 @@ pub use repository::{find_repository, find_repository_in_path};
 pub mod repo_storage;
 pub mod rewrite_log;
 pub mod status;
+#[cfg(feature = "test-support")]
 pub mod test_utils;
