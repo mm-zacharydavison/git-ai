@@ -5,7 +5,7 @@ use crate::git::repository::{Repository, exec_git, exec_git_stdin};
 use serde_json;
 use std::fs;
 
-pub const AI_AUTHORSHIP_REFSPEC: &str = "+refs/notes/ai/:refs/notes/ai/";
+pub const AI_AUTHORSHIP_REFSPEC: &str = "+refs/notes/ai/*:refs/notes/ai/*";
 
 pub fn notes_add(
     repo: &Repository,
