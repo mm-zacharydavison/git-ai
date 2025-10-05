@@ -3,7 +3,7 @@ use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::working_log::Checkpoint;
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
-use crate::git::refs::put_reference;
+use crate::git::refs::notes_add;
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
 use crate::utils::debug_log;
@@ -38,7 +38,7 @@ pub fn post_commit(
     // mutates inline
     CursorPreset::update_cursor_conversations_to_latest(&mut filtered_working_log)?;
 
-    // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---
+    // --- NEW: Serialize authorship log and store it in notes/ai/{commit_sha} ---
     let mut authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
         &filtered_working_log,
         &parent_sha,
@@ -71,16 +71,10 @@ pub fn post_commit(
         .serialize_to_string()
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
-    let ref_name = format!("ai/authorship/{}", commit_sha);
-    put_reference(
-        repo,
-        &ref_name,
-        &authorship_json,
-        &format!("AI authorship attestation for commit {}", commit_sha),
-    )?;
+    notes_add(repo, &commit_sha, &authorship_json)?;
 
     debug_log(&format!(
-        "Authorship log written to refs/ai/authorship/{}",
+        "Authorship log written to notes/ai/{}",
         commit_sha
     ));
 
@@ -147,7 +141,7 @@ pub fn post_commit(
         ));
     }
 
-    Ok((ref_name, authorship_log))
+    Ok((commit_sha.to_string(), authorship_log))
 }
 
 /// Filter out working log entries for untracked files

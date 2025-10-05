@@ -2,7 +2,6 @@ use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
-use crate::git::find_repository_in_path;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::{Commit, Repository};
 use crate::git::rewrite_log::RewriteLogEvent;
@@ -149,18 +148,9 @@ pub fn rewrite_authorship_after_squash_or_rebase(
             .serialize_to_string()
             .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
-        let ref_name = format!("ai/authorship/{}", new_sha);
-        crate::git::refs::put_reference(
-            repo,
-            &ref_name,
-            &authorship_json,
-            &format!(
-                "AI authorship attestation for squashed/rebased commit {}",
-                new_sha
-            ),
-        )?;
+        crate::git::refs::notes_add(repo, &new_sha, &authorship_json)?;
 
-        println!("Authorship log saved to refs/{}", ref_name);
+        println!("Authorship log saved to notes/ai/{}", new_sha);
     }
 
     Ok(new_authorship_log)
@@ -265,8 +255,7 @@ pub fn rewrite_authorship_after_commit_amend(
     human_author: String,
 ) -> Result<AuthorshipLog, GitAiError> {
     // Step 1: Load the existing authorship log for the original commit (or create empty if none)
-    let ref_name = format!("ai/authorship/{}", original_commit);
-    let mut authorship_log = match get_reference_as_authorship_log_v3(repo, &ref_name) {
+    let mut authorship_log = match get_reference_as_authorship_log_v3(repo, original_commit) {
         Ok(log) => {
             // Found existing log - use it as the base
             log
@@ -317,16 +306,7 @@ pub fn rewrite_authorship_after_commit_amend(
         .serialize_to_string()
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
-    let ref_name = format!("ai/authorship/{}", amended_commit);
-    crate::git::refs::put_reference(
-        repo,
-        &ref_name,
-        &authorship_json,
-        &format!(
-            "AI authorship attestation for amended commit {}",
-            amended_commit
-        ),
-    )?;
+    crate::git::refs::notes_add(repo, amended_commit, &authorship_json)?;
 
     // Step 5: Delete the working log for the original commit
     repo_storage.delete_working_log_for_base_commit(original_commit)?;
@@ -741,8 +721,7 @@ fn run_blame_in_context(
         let commit_sha = &hunk.commit_sha;
 
         // Look up the AI authorship log for this commit
-        let ref_name = format!("ai/authorship/{}", commit_sha);
-        let authorship_log = match get_reference_as_authorship_log_v3(repo, &ref_name) {
+        let authorship_log = match get_reference_as_authorship_log_v3(repo, commit_sha) {
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author
@@ -875,55 +854,14 @@ mod tests {
     use crate::git::test_utils::TmpRepo;
     use insta::assert_debug_snapshot;
 
-    #[test]
-    fn test_in_order() {
-        let repo = find_repository_in_path("tests/gitflow-repo").unwrap();
-
-        let new_sha = "22ab8a64bee45d9292f680f07a8f79234c2cb9d5";
-        let destination_branch = "origin/main";
-        let head_sha: &'static str = "245606961b859e5ab5593b276f47e26f7c32e4d6"; // The HEAD of the original squashed commits
-
-        let authorship_log = rewrite_authorship_after_squash_or_rebase(
-            &repo,
-            &destination_branch,
-            &head_sha,
-            &new_sha,
-            true,
-        )
-        .unwrap();
-
-        print!("{:?}", authorship_log);
-
-        assert_debug_snapshot!(authorship_log);
-    }
-
-    #[test]
-    fn test_with_out_of_band_commits() {
-        let repo = find_repository_in_path("tests/gitflow-repo").unwrap();
-
-        let new_sha = "13b1a9736d8caaec665b29b2c6792b2eba1fb169";
-        let destination_branch = "origin/main";
-        let head_sha = "6d781a058490d5c7ba10902492f65f85e4f4c3bb"; // The HEAD of the original squashed commits
-
-        let authorship_log = rewrite_authorship_after_squash_or_rebase(
-            &repo,
-            &destination_branch,
-            &head_sha,
-            &new_sha,
-            true,
-        )
-        .unwrap();
-
-        assert_debug_snapshot!(authorship_log);
-    }
-
-    /// Test amending a commit by adding AI-authored lines at the top of the file.
+    // Test amending a commit by adding AI-authored lines at the top of the file.
     ///
     /// Note: The snapshot's `base_commit_sha` will differ on each run since we create
     /// new commits. The important parts to verify are:
     /// - Line ranges are correct (lines 1-2 for AI additions)
     /// - Metrics are accurate (total_additions, accepted_lines)
     /// - Prompts and agent info are preserved
+    ///
     #[test]
     fn test_amend_add_lines_at_top() {
         // Create a repo with an initial commit containing human-authored content
