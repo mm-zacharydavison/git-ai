@@ -1,7 +1,7 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::error::GitAiError;
-use crate::git::refs::get_reference;
-use crate::git::refs::put_reference;
+use crate::git::refs::notes_add;
+use crate::git::refs::show_authorship_note;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::repository::Repository;
 use std::collections::HashMap;
@@ -113,9 +113,7 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
 
         for child_commit in children {
             // Check if authorship log already exists for this child
-            let authorship_ref = format!("ai/authorship/{}", child_commit);
-
-            if get_reference(repo, &authorship_ref).is_err() {
+            if show_authorship_note(repo, child_commit).is_none() {
                 // No authorship log exists, create one
                 let authorship_log =
                     AuthorshipLog::from_working_log_with_base_commit_and_human_author(
@@ -129,20 +127,15 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                     GitAiError::Generic("Failed to serialize authorship log".to_string())
                 })?;
 
-                // Create the authorship log reference
-                put_reference(
-                    repo,
-                    &authorship_ref,
-                    &authorship_json,
-                    &format!("AI authorship attestation for commit {}", child_commit),
-                )?;
+                // Create the authorship log note
+                notes_add(repo, child_commit, &authorship_json)?;
 
                 if json_output {
                     // Store the authorship log for JSON output
                     authorship_logs.insert(child_commit.clone(), authorship_log);
                 } else {
                     // Print individual ref as before
-                    println!("refs/ai/authorship{}", child_commit);
+                    println!("notes/ai/{}", child_commit);
                 }
             }
         }
@@ -167,10 +160,9 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
         let empty_vec = Vec::new();
         let children = parent_to_children.get(commit_hash).unwrap_or(&empty_vec);
 
-        let all_children_have_authorship = children.iter().all(|child| {
-            let authorship_ref = format!("ai/authorship/{}", child);
-            get_reference(repo, &authorship_ref).is_ok()
-        });
+        let all_children_have_authorship = children
+            .iter()
+            .all(|child| show_authorship_note(repo, child).is_some());
 
         if all_children_have_authorship && !children.is_empty() {
             // Delete the working log using the new storage system

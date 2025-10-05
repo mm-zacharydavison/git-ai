@@ -650,7 +650,6 @@ impl Repository {
             ref_name: name.to_string(),
         })
     }
-
     // Find a merge base between two commits
     pub fn merge_base(&self, one: String, two: String) -> Result<String, GitAiError> {
         let mut args = self.global_args_for_exec();

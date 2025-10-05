@@ -1,8 +1,8 @@
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
 use crate::git::repository::exec_git;
-use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use std::collections::HashMap;
 use std::fs;
@@ -491,8 +491,7 @@ fn overlay_ai_authorship(
             cached.clone()
         } else {
             // Try to get authorship log for this commit
-            let ref_name = format!("ai/authorship/{}", hunk.commit_sha);
-            let authorship = match get_reference_as_authorship_log_v3(repo, &ref_name) {
+            let authorship = match get_reference_as_authorship_log_v3(repo, &hunk.commit_sha) {
                 Ok(v3_log) => Some(v3_log),
                 Err(_) => None, // No AI authorship data for this commit
             };

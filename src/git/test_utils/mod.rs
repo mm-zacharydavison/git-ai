@@ -915,15 +915,13 @@ impl TmpRepo {
     ) -> Result<crate::authorship::authorship_log_serialization::AuthorshipLog, GitAiError> {
         let head = self.repo_git2.head()?;
         let commit_id = head.target().unwrap().to_string();
-        let ref_name = format!("ai/authorship/{}", commit_id);
-
-        match crate::git::refs::get_reference(&self.repo_gitai, &ref_name) {
-            Ok(content) => {
-                // Parse the authorship log from the reference content
+        match crate::git::refs::show_authorship_note(&self.repo_gitai, &commit_id) {
+            Some(content) => {
+                // Parse the authorship log from the note content
                 crate::authorship::authorship_log_serialization::AuthorshipLog::deserialize_from_string(&content)
                     .map_err(|e| GitAiError::Generic(format!("Failed to parse authorship log: {}", e)))
             }
-            Err(_) => Err(GitAiError::Generic("No authorship log found".to_string())),
+            None => Err(GitAiError::Generic("No authorship log found".to_string())),
         }
     }
 
