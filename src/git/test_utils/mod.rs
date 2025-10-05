@@ -1,8 +1,8 @@
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::post_commit::post_commit;
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
-use crate::authorship::post_commit::post_commit;
 use crate::git::repository::Repository as GitAiRepository;
-use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
 use std::fs;
@@ -361,9 +361,9 @@ impl TmpRepo {
         model: Option<&str>,
         tool: Option<&str>,
     ) -> Result<(usize, usize, usize), GitAiError> {
-        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
         use crate::authorship::transcript::AiTranscript;
         use crate::authorship::working_log::AgentId;
+        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 
         // Use a deterministic but unique session ID based on agent_name
         // For common agent names (Claude, GPT-4), use fixed ID for backwards compat

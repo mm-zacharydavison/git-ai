@@ -31,7 +31,7 @@ expression: "(authorship_log, second_authorship_log)"
                         model: "claude-3-sonnet",
                     },
                     human_author: Some(
-                        "Test User <test@example.com>",
+                        "Test User",
                     ),
                     messages: [],
                     total_additions: 4,
@@ -69,7 +69,7 @@ expression: "(authorship_log, second_authorship_log)"
                         model: "claude-3-sonnet",
                     },
                     human_author: Some(
-                        "Test User <test@example.com>",
+                        "Test User",
                     ),
                     messages: [],
                     total_additions: 2,

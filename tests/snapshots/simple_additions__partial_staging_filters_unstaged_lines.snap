@@ -30,7 +30,7 @@ AuthorshipLogV3 {
                     model: "claude-3-sonnet",
                 },
                 human_author: Some(
-                    "Test User <test@example.com>",
+                    "Test User",
                 ),
                 messages: [],
                 total_additions: 4,
