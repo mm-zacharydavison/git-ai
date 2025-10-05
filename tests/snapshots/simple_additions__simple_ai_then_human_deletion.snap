@@ -3,40 +3,10 @@ source: tests/simple_additions.rs
 expression: authorship_log
 ---
 AuthorshipLogV3 {
-    attestations: [
-        FileAttestation {
-            file_path: "file.txt",
-            entries: [
-                AttestationEntry {
-                    hash: "d6f9ad9",
-                    line_ranges: [
-                        Range(
-                            1,
-                            2,
-                        ),
-                    ],
-                },
-            ],
-        },
-    ],
+    attestations: [],
     metadata: AuthorshipMetadata {
         schema_version: "authorship/3.0.0",
-        base_commit_sha: "initial",
-        prompts: {
-            "d6f9ad9": PromptRecord {
-                agent_id: AgentId {
-                    tool: "some-ai",
-                    id: "test_session_fixed",
-                    model: "claude-3-sonnet",
-                },
-                human_author: Some(
-                    "Test User <test@example.com>",
-                ),
-                messages: [],
-                total_additions: 3,
-                total_deletions: 1,
-                accepted_lines: 2,
-            },
-        },
+        base_commit_sha: "fd8e89860a69ca38d30084d9580dbbf01f219f8f",
+        prompts: {},
     },
 }

@@ -530,123 +530,124 @@ impl CursorPreset {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// HARD TO TEST IN CI. We need to figure out a way to get cursor and some known good data into the cursor dir.
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn cursor_preset_with_conversation_id() {
-        // This test requires a real Cursor installation with at least one conversation.
-        // We'll use a sample conversation_id (you can replace with an actual ID from your database)
+//     #[test]
+//     fn cursor_preset_with_conversation_id() {
+//         // This test requires a real Cursor installation with at least one conversation.
+//         // We'll use a sample conversation_id (you can replace with an actual ID from your database)
 
-        // First, let's try to get a real conversation ID from the database
-        let user_dir = match CursorPreset::cursor_user_dir() {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Cursor not installed, skipping test");
-                return;
-            }
-        };
+//         // First, let's try to get a real conversation ID from the database
+//         let user_dir = match CursorPreset::cursor_user_dir() {
+//             Ok(dir) => dir,
+//             Err(_) => {
+//                 println!("Cursor not installed, skipping test");
+//                 return;
+//             }
+//         };
 
-        let global_db = user_dir.join("globalStorage").join("state.vscdb");
-        if !global_db.exists() {
-            println!("Cursor database not found, skipping test");
-            return;
-        }
+//         let global_db = user_dir.join("globalStorage").join("state.vscdb");
+//         if !global_db.exists() {
+//             println!("Cursor database not found, skipping test");
+//             return;
+//         }
 
-        // Get a real conversation ID from the database
-        let conn = match CursorPreset::open_sqlite_readonly(&global_db) {
-            Ok(c) => c,
-            Err(_) => {
-                println!("Could not open Cursor database, skipping test");
-                return;
-            }
-        };
+//         // Get a real conversation ID from the database
+//         let conn = match CursorPreset::open_sqlite_readonly(&global_db) {
+//             Ok(c) => c,
+//             Err(_) => {
+//                 println!("Could not open Cursor database, skipping test");
+//                 return;
+//             }
+//         };
 
-        // Find a conversation with fullConversationHeadersOnly (bubbles format)
-        let mut stmt = match conn.prepare(
-            "SELECT json_extract(value, '$.composerId') FROM cursorDiskKV 
-             WHERE key LIKE 'composerData:%' 
-             AND json_extract(value, '$.fullConversationHeadersOnly') IS NOT NULL
-             AND json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) > 0
-             LIMIT 1",
-        ) {
-            Ok(s) => s,
-            Err(_) => {
-                println!("Could not query database, skipping test");
-                return;
-            }
-        };
+//         // Find a conversation with fullConversationHeadersOnly (bubbles format)
+//         let mut stmt = match conn.prepare(
+//             "SELECT json_extract(value, '$.composerId') FROM cursorDiskKV
+//              WHERE key LIKE 'composerData:%'
+//              AND json_extract(value, '$.fullConversationHeadersOnly') IS NOT NULL
+//              AND json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) > 0
+//              LIMIT 1",
+//         ) {
+//             Ok(s) => s,
+//             Err(_) => {
+//                 println!("Could not query database, skipping test");
+//                 return;
+//             }
+//         };
 
-        let conversation_id: String = match stmt.query_row([], |row| row.get(0)) {
-            Ok(id) => id,
-            Err(_) => {
-                println!("No conversations with messages found in database, skipping test");
-                return;
-            }
-        };
+//         let conversation_id: String = match stmt.query_row([], |row| row.get(0)) {
+//             Ok(id) => id,
+//             Err(_) => {
+//                 println!("No conversations with messages found in database, skipping test");
+//                 return;
+//             }
+//         };
 
-        println!("Testing with conversation_id: {}", conversation_id);
+//         println!("Testing with conversation_id: {}", conversation_id);
 
-        // Create mock hook_input
-        let hook_input = serde_json::json!({
-            "conversation_id": conversation_id,
-            "workspace_roots": ["/tmp/test-workspace"]
-        });
+//         // Create mock hook_input
+//         let hook_input = serde_json::json!({
+//             "conversation_id": conversation_id,
+//             "workspace_roots": ["/tmp/test-workspace"]
+//         });
 
-        let preset = CursorPreset;
-        let result = preset.run(AgentCheckpointFlags {
-            prompt_id: None,
-            hook_input: Some(hook_input.to_string()),
-        });
+//         let preset = CursorPreset;
+//         let result = preset.run(AgentCheckpointFlags {
+//             prompt_id: None,
+//             hook_input: Some(hook_input.to_string()),
+//         });
 
-        match result {
-            Ok(run) => {
-                println!("✓ Cursor Agent: {}:{}", run.agent_id.tool, run.agent_id.id);
-                println!("✓ Model: {}", run.agent_id.model);
-                let transcript = run.transcript.unwrap();
-                println!("✓ Message count: {}", transcript.messages.len());
+//         match result {
+//             Ok(run) => {
+//                 println!("✓ Cursor Agent: {}:{}", run.agent_id.tool, run.agent_id.id);
+//                 println!("✓ Model: {}", run.agent_id.model);
+//                 let transcript = run.transcript.unwrap();
+//                 println!("✓ Message count: {}", transcript.messages.len());
 
-                for (i, m) in transcript.messages.iter().enumerate() {
-                    match m {
-                        Message::User { text, .. } => {
-                            let preview = if text.len() > 100 {
-                                format!("{}...", &text[..100])
-                            } else {
-                                text.clone()
-                            };
-                            println!("  [{}] User: {}", i, preview);
-                        }
-                        Message::Assistant { text, .. } => {
-                            let preview = if text.len() > 100 {
-                                format!("{}...", &text[..100])
-                            } else {
-                                text.clone()
-                            };
-                            println!("  [{}] Assistant: {}", i, preview);
-                        }
-                        Message::ToolUse { name, input, .. } => {
-                            println!(
-                                "  [{}] ToolUse: {} (input: {} chars)",
-                                i,
-                                name,
-                                input.to_string().len()
-                            );
-                        }
-                    }
-                }
+//                 for (i, m) in transcript.messages.iter().enumerate() {
+//                     match m {
+//                         Message::User { text, .. } => {
+//                             let preview = if text.len() > 100 {
+//                                 format!("{}...", &text[..100])
+//                             } else {
+//                                 text.clone()
+//                             };
+//                             println!("  [{}] User: {}", i, preview);
+//                         }
+//                         Message::Assistant { text, .. } => {
+//                             let preview = if text.len() > 100 {
+//                                 format!("{}...", &text[..100])
+//                             } else {
+//                                 text.clone()
+//                             };
+//                             println!("  [{}] Assistant: {}", i, preview);
+//                         }
+//                         Message::ToolUse { name, input, .. } => {
+//                             println!(
+//                                 "  [{}] ToolUse: {} (input: {} chars)",
+//                                 i,
+//                                 name,
+//                                 input.to_string().len()
+//                             );
+//                         }
+//                     }
+//                 }
 
-                // Assert that we got at least some messages
-                assert!(
-                    !transcript.messages.is_empty(),
-                    "Transcript should have at least one message"
-                );
-                assert_eq!(run.agent_id.tool, "cursor");
-                assert_eq!(run.agent_id.id, conversation_id);
-            }
-            Err(e) => {
-                panic!("CursorPreset error: {}", e);
-            }
-        }
-    }
-}
+//                 // Assert that we got at least some messages
+//                 assert!(
+//                     !transcript.messages.is_empty(),
+//                     "Transcript should have at least one message"
+//                 );
+//                 assert_eq!(run.agent_id.tool, "cursor");
+//                 assert_eq!(run.agent_id.id, conversation_id);
+//             }
+//             Err(e) => {
+//                 panic!("CursorPreset error: {}", e);
+//             }
+//         }
+//     }
+// }

@@ -368,11 +368,12 @@ impl TmpRepo {
         // Use a deterministic but unique session ID based on agent_name
         // For common agent names (Claude, GPT-4), use fixed ID for backwards compat
         // For unique names like "ai_session_1", use the name itself to allow distinct sessions
-        let session_id = if agent_name == "Claude" || agent_name == "GPT-4" || agent_name == "GPT-4o" {
-            "test_session_fixed".to_string()
-        } else {
-            agent_name.to_string()
-        };
+        let session_id =
+            if agent_name == "Claude" || agent_name == "GPT-4" || agent_name == "GPT-4o" {
+                "test_session_fixed".to_string()
+            } else {
+                agent_name.to_string()
+            };
 
         // Create agent ID
         let agent_id = AgentId {
@@ -598,6 +599,207 @@ impl TmpRepo {
             .ok_or_else(|| GitAiError::Generic("No HEAD commit found".to_string()))?
             .to_string();
         Ok(commit_sha)
+    }
+
+    /// Stages a specific file
+    pub fn stage_file(&self, filename: &str) -> Result<(), GitAiError> {
+        let mut index = self.repo_git2.index()?;
+        index.add_path(std::path::Path::new(filename))?;
+        index.write()?;
+        Ok(())
+    }
+
+    /// Unstages a specific file (resets it to HEAD)
+    pub fn unstage_file(&self, filename: &str) -> Result<(), GitAiError> {
+        let head = self.repo_git2.head()?;
+        let commit = self.repo_git2.find_commit(head.target().unwrap())?;
+        let tree = commit.tree()?;
+        let tree_entry = tree.get_path(std::path::Path::new(filename))?;
+
+        let mut index = self.repo_git2.index()?;
+        index.add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: tree_entry.filemode() as u32,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: tree_entry.id(),
+            flags: 0,
+            flags_extended: 0,
+            path: filename.as_bytes().to_vec(),
+        })?;
+        index.write()?;
+        Ok(())
+    }
+
+    /// Appends content to a file and stages it
+    pub fn append_and_stage_file(
+        &self,
+        file: &mut TmpFile,
+        content: &str,
+    ) -> Result<(), GitAiError> {
+        file.append(content)?;
+        self.stage_file(&file.filename)?;
+        Ok(())
+    }
+
+    /// Appends content to a file but keeps it unstaged
+    ///
+    /// This appends content to the working directory WITHOUT modifying the index.
+    /// Whatever was previously staged remains staged, and the new content is unstaged.
+    pub fn append_unstaged_file(
+        &self,
+        file: &mut TmpFile,
+        content: &str,
+    ) -> Result<(), GitAiError> {
+        // Simply append to the working directory without touching the index
+        // The index keeps whatever was previously staged (or points to HEAD if nothing was staged)
+        file.append(content)?;
+        Ok(())
+    }
+
+    /// Stages specific line ranges from a file (simulating `git add -p` behavior)
+    ///
+    /// This creates a staged version with only the specified line ranges from the working directory,
+    /// while leaving other changes unstaged.
+    ///
+    /// # Arguments
+    /// * `file` - The file to partially stage
+    /// * `line_ranges` - Tuples of (start_line, end_line) to stage (1-indexed, inclusive)
+    pub fn stage_lines_from_file(
+        &self,
+        file: &TmpFile,
+        line_ranges: &[(usize, usize)],
+    ) -> Result<(), GitAiError> {
+        let file_path = self.path.join(&file.filename);
+
+        // Read current working directory content
+        let working_content = std::fs::read_to_string(&file_path)?;
+        let working_lines: Vec<&str> = working_content.lines().collect();
+
+        // Get the current HEAD version (or empty if new file)
+        let head_content = {
+            let head = self.repo_git2.head()?;
+            let commit = self.repo_git2.find_commit(head.target().unwrap())?;
+            let tree = commit.tree()?;
+
+            match tree.get_path(std::path::Path::new(&file.filename)) {
+                Ok(entry) => {
+                    if let Ok(blob) = self.repo_git2.find_blob(entry.id()) {
+                        String::from_utf8_lossy(blob.content()).to_string()
+                    } else {
+                        String::new()
+                    }
+                }
+                Err(_) => String::new(),
+            }
+        };
+        let head_lines: Vec<&str> = head_content.lines().collect();
+
+        // Build the staged version by selecting lines from working directory or HEAD
+        let mut staged_lines = Vec::new();
+
+        // Determine which lines to take from working directory vs HEAD
+        let max_lines = working_lines.len().max(head_lines.len());
+        for line_num in 1..=max_lines {
+            let should_stage = line_ranges
+                .iter()
+                .any(|(start, end)| line_num >= *start && line_num <= *end);
+
+            if should_stage {
+                // Take from working directory if available
+                if line_num <= working_lines.len() {
+                    staged_lines.push(working_lines[line_num - 1]);
+                }
+            } else {
+                // Take from HEAD if available
+                if line_num <= head_lines.len() {
+                    staged_lines.push(head_lines[line_num - 1]);
+                }
+            }
+        }
+
+        // Create the staged content
+        let mut staged_content = staged_lines.join("\n");
+        if !staged_content.is_empty() {
+            staged_content.push('\n');
+        }
+
+        // Create a blob with the staged content
+        let blob_id = self.repo_git2.blob(staged_content.as_bytes())?;
+
+        // Update the index with this blob
+        let mut index = self.repo_git2.index()?;
+        index.add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644, // Regular file
+            uid: 0,
+            gid: 0,
+            file_size: staged_content.len() as u32,
+            id: blob_id,
+            flags: 0,
+            flags_extended: 0,
+            path: file.filename.as_bytes().to_vec(),
+        })?;
+        index.write()?;
+
+        Ok(())
+    }
+
+    /// Commits only staged changes with the given message and runs post-commit hook
+    pub fn commit_staged_with_message(&self, message: &str) -> Result<AuthorshipLog, GitAiError> {
+        // Get the current index (staged changes)
+        let mut index = self.repo_git2.index()?;
+
+        // Create the commit from staged changes only
+        let tree_id = index.write_tree()?;
+        let tree = self.repo_git2.find_tree(tree_id)?;
+
+        // After write_tree, the index might get auto-updated. Clear and reload it from the tree
+        // to ensure it matches exactly what we're committing
+        index.clear()?;
+        index.read_tree(&tree)?;
+        index.write()?;
+
+        // Use a fixed timestamp for stable test results
+        let fixed_time = git2::Time::new(1672574400, 0);
+        let signature = Signature::new("Test User", "test@example.com", &fixed_time)?;
+
+        // Get the current HEAD for the parent commit
+        let parent_commit = if let Ok(head) = self.repo_git2.head() {
+            if let Some(target) = head.target() {
+                Some(self.repo_git2.find_commit(target)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let _commit_id = if let Some(parent) = parent_commit {
+            self.repo_git2.commit(
+                Some(&"HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[&parent],
+            )?
+        } else {
+            self.repo_git2
+                .commit(Some(&"HEAD"), &signature, &signature, message, &tree, &[])?
+        };
+
+        // Run the post-commit hook
+        let post_commit_result = post_commit(&self.repo_gitai)?;
+
+        Ok(post_commit_result.1)
     }
 
     /// Gets the default branch name (first branch created)

@@ -5,18 +5,14 @@ expression: authorship_log
 AuthorshipLogV3 {
     attestations: [
         FileAttestation {
-            file_path: "test.txt",
+            file_path: "test.ts",
             entries: [
                 AttestationEntry {
                     hash: "1cee1d9",
                     line_ranges: [
                         Range(
                             2,
-                            4,
-                        ),
-                        Range(
-                            12,
-                            13,
+                            6,
                         ),
                     ],
                 },
@@ -25,7 +21,7 @@ AuthorshipLogV3 {
     ],
     metadata: AuthorshipMetadata {
         schema_version: "authorship/3.0.0",
-        base_commit_sha: "1387fa7644fb10e1edbe7dc1fd07a931b798cf0b",
+        base_commit_sha: "b82b8fa3b85de492123de23d6aa6268f47522bd8",
         prompts: {
             "1cee1d9": PromptRecord {
                 agent_id: AgentId {
@@ -37,9 +33,9 @@ AuthorshipLogV3 {
                     "Test User <test@example.com>",
                 ),
                 messages: [],
-                total_additions: 5,
-                total_deletions: 2,
-                accepted_lines: 5,
+                total_additions: 7,
+                total_deletions: 0,
+                accepted_lines: 7,
             },
         },
     },
