@@ -16,6 +16,10 @@ pub fn handle_git_ai(args: &[String]) {
         "help" | "--help" | "-h" => {
             print_help();
         }
+        "version" | "--version" | "-v" => {
+            println!(env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
         "stats-delta" => {
             handle_stats_delta(&args[1..]);
         }
