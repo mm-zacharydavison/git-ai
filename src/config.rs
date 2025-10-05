@@ -10,6 +10,13 @@ pub struct Config {
     git_path: String,
     ignore_prompts: bool,
 }
+#[derive(Deserialize)]
+struct FileConfig {
+    #[serde(default)]
+    git_path: Option<String>,
+    #[serde(default)]
+    ignore_prompts: Option<bool>,
+}
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
@@ -40,14 +47,6 @@ impl Config {
     pub fn ignore_prompts(&self) -> bool {
         self.ignore_prompts
     }
-}
-
-#[derive(Deserialize)]
-struct FileConfig {
-    #[serde(default)]
-    git_path: Option<String>,
-    #[serde(default)]
-    ignore_prompts: Option<bool>,
 }
 
 fn build_config() -> Config {
