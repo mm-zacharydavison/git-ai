@@ -19,7 +19,12 @@ pub fn rewrite_authorship_if_needed(
     match last_event {
         RewriteLogEvent::Commit { commit } => {
             // This is going to become the regualar post-commit
-            post_commit::post_commit(repo, commit_author)?;
+            post_commit::post_commit(
+                repo,
+                commit.base_commit.clone(),
+                commit.commit_sha.clone(),
+                commit_author,
+            )?;
         }
         RewriteLogEvent::CommitAmend { commit_amend } => {
             rewrite_authorship_after_commit_amend(

@@ -12,26 +12,13 @@ use std::collections::HashMap;
 
 pub fn post_commit(
     repo: &Repository,
+    base_commit: Option<String>,
+    commit_sha: String,
     human_author: String,
 ) -> Result<(String, AuthorshipLog), GitAiError> {
-    // Get the current commit SHA (the commit that was just made)
-    let head = repo.head()?;
-    let commit_sha = match head.target() {
-        Ok(oid) => oid.to_string(),
-        Err(_) => {
-            return Err(GitAiError::Generic(
-                "No HEAD commit found. Cannot run post-commit hook.".to_string(),
-            ));
-        }
-    };
-
-    let current_commit = repo.find_commit(head.target().unwrap())?;
-
-    // Get the parent commit (base commit this was made on top of)
-    let parent_sha = match current_commit.parent(0) {
-        Ok(parent) => parent.id().to_string(),
-        Err(_) => "initial".to_string(), // No parent commit found, use "initial" like in checkpoint.rs
-    };
+    // Use base_commit parameter if provided, otherwise use "initial" for empty repos
+    // This matches the convention in checkpoint.rs
+    let parent_sha = base_commit.unwrap_or_else(|| "initial".to_string());
 
     // Initialize the new storage system
     let repo_storage = &repo.storage;
@@ -41,7 +28,7 @@ pub fn post_commit(
     let parent_working_log = working_log.read_all_checkpoints()?;
 
     // Filter out untracked files from the working log
-    let mut filtered_working_log = filter_untracked_files(repo, &parent_working_log)?;
+    let mut filtered_working_log = filter_untracked_files(repo, &parent_working_log, &commit_sha)?;
 
     debug_log(&format!(
         "Working log entries: {}",
@@ -66,7 +53,7 @@ pub fn post_commit(
     authorship_log.filter_to_committed_lines(&committed_hunks);
 
     // Check if there are unstaged AI-authored lines to preserve in working log
-    let unstaged_hunks = collect_unstaged_hunks(repo)?;
+    let unstaged_hunks = collect_unstaged_hunks(repo, &commit_sha)?;
     let has_unstaged_ai_lines = if !unstaged_hunks.is_empty() {
         // Check if any unstaged lines match the working log
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
@@ -167,10 +154,10 @@ pub fn post_commit(
 fn filter_untracked_files(
     repo: &Repository,
     working_log: &[Checkpoint],
+    commit_sha: &str,
 ) -> Result<Vec<Checkpoint>, GitAiError> {
     // Get the current commit tree to see which files are currently tracked
-    let head = repo.head()?;
-    let current_commit = repo.find_commit(head.target().unwrap())?;
+    let current_commit = repo.find_commit(commit_sha.to_string())?;
     let current_tree = current_commit.tree()?;
 
     // Get the parent commit tree to see which files were tracked before
@@ -386,6 +373,7 @@ fn collect_committed_hunks(
 /// These lines should be excluded from the authorship log.
 fn collect_unstaged_hunks(
     repo: &Repository,
+    commit_sha: &str,
 ) -> Result<HashMap<String, Vec<LineRange>>, GitAiError> {
     let mut unstaged_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
 
@@ -394,8 +382,7 @@ fn collect_unstaged_hunks(
     debug_log(&format!("Git status found {} entries", statuses.len()));
 
     // Get the HEAD commit tree (what was just committed)
-    let head = repo.head()?;
-    let head_commit = repo.find_commit(head.target().unwrap())?;
+    let head_commit = repo.find_commit(commit_sha.to_string())?;
     let head_tree = head_commit.tree()?;
 
     let repo_workdir = repo.workdir()?;
@@ -484,4 +471,71 @@ fn collect_unstaged_hunks(
     }
 
     Ok(unstaged_hunks)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::git::test_utils::TmpRepo;
+
+    #[test]
+    fn test_post_commit_empty_repo_with_checkpoint() {
+        // Create an empty repo (no commits yet)
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Create a file and checkpoint it (no commit yet)
+        let mut file = tmp_repo
+            .write_file("test.txt", "Hello, world!\n", false)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_author("test_user")
+            .unwrap();
+
+        // Make a change and checkpoint again
+        file.append("Second line\n").unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_author("test_user")
+            .unwrap();
+
+        // Now make the first commit (empty repo case: base_commit is None)
+        let result = tmp_repo.commit_with_message("Initial commit");
+
+        // Should not panic or error - this is the key test
+        // The main goal is to ensure empty repos (base_commit=None) don't cause errors
+        assert!(
+            result.is_ok(),
+            "post_commit should handle empty repo (base_commit=None) without errors"
+        );
+
+        // The authorship log is created successfully (even if empty for human-only checkpoints)
+        let _authorship_log = result.unwrap();
+    }
+
+    #[test]
+    fn test_post_commit_empty_repo_no_checkpoint() {
+        // Create an empty repo (no commits yet)
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Create a file without checkpointing
+        tmp_repo
+            .write_file("test.txt", "Hello, world!\n", false)
+            .unwrap();
+
+        // Make the first commit with no prior checkpoints
+        let result = tmp_repo.commit_with_message("Initial commit");
+
+        // Should not panic or error even with no working log
+        assert!(
+            result.is_ok(),
+            "post_commit should handle empty repo with no checkpoints without errors"
+        );
+
+        let authorship_log = result.unwrap();
+
+        // The authorship log should be created but empty (no AI checkpoints)
+        // All changes will be attributed to the human author
+        assert!(
+            authorship_log.attestations.is_empty(),
+            "Should have empty attestations when no checkpoints exist"
+        );
+    }
 }

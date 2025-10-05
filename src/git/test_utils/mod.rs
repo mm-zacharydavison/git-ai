@@ -445,24 +445,38 @@ impl TmpRepo {
             None
         };
 
-        let _commit_id = if let Some(parent) = parent_commit {
-            self.repo_git2.commit(
+        let (parent_sha, _commit_id) = if let Some(parent) = parent_commit {
+            let parent_sha = Some(parent.id().to_string());
+            let commit_id = self.repo_git2.commit(
                 Some(&"HEAD"),
                 &signature,
                 &signature,
                 message,
                 &tree,
                 &[&parent],
-            )?
+            )?;
+            (parent_sha, commit_id)
         } else {
-            self.repo_git2
-                .commit(Some(&"HEAD"), &signature, &signature, message, &tree, &[])?
+            let commit_id = self.repo_git2.commit(
+                Some(&"HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[],
+            )?;
+            (None, commit_id)
         };
 
         println!("Commit ID: {}", _commit_id);
 
         // Run the post-commit hook for all commits (including initial commit)
-        let post_commit_result = post_commit(&self.repo_gitai, "Test User".to_string())?;
+        let post_commit_result = post_commit(
+            &self.repo_gitai,
+            parent_sha,
+            _commit_id.to_string(),
+            "Test User".to_string(),
+        )?;
 
         Ok(post_commit_result.1)
     }
@@ -517,7 +531,18 @@ impl TmpRepo {
         }
 
         // Run post-commit hook
-        post_commit(&self.repo_gitai, "Test User".to_string())?;
+        // Get the merge commit SHA and its parent
+        let head = self.repo_git2.head()?;
+        let merge_commit_sha = head.target().unwrap().to_string();
+        let merge_commit = self.repo_git2.find_commit(head.target().unwrap())?;
+        let parent_sha = merge_commit.parent(0).ok().map(|p| p.id().to_string());
+
+        post_commit(
+            &self.repo_gitai,
+            parent_sha,
+            merge_commit_sha,
+            "Test User".to_string(),
+        )?;
 
         Ok(())
     }
@@ -577,7 +602,18 @@ impl TmpRepo {
         // )?;
 
         // Run post-commit hook
-        post_commit(&self.repo_gitai, "Test User".to_string())?;
+        // Get the rebase commit SHA and its parent
+        let head = self.repo_git2.head()?;
+        let rebase_commit_sha = head.target().unwrap().to_string();
+        let rebase_commit = self.repo_git2.find_commit(head.target().unwrap())?;
+        let parent_sha = rebase_commit.parent(0).ok().map(|p| p.id().to_string());
+
+        post_commit(
+            &self.repo_gitai,
+            parent_sha,
+            rebase_commit_sha,
+            "Test User".to_string(),
+        )?;
 
         Ok(())
     }
@@ -782,22 +818,36 @@ impl TmpRepo {
             None
         };
 
-        let _commit_id = if let Some(parent) = parent_commit {
-            self.repo_git2.commit(
+        let (parent_sha, _commit_id) = if let Some(parent) = parent_commit {
+            let parent_sha = Some(parent.id().to_string());
+            let commit_id = self.repo_git2.commit(
                 Some(&"HEAD"),
                 &signature,
                 &signature,
                 message,
                 &tree,
                 &[&parent],
-            )?
+            )?;
+            (parent_sha, commit_id)
         } else {
-            self.repo_git2
-                .commit(Some(&"HEAD"), &signature, &signature, message, &tree, &[])?
+            let commit_id = self.repo_git2.commit(
+                Some(&"HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[],
+            )?;
+            (None, commit_id)
         };
 
         // Run the post-commit hook
-        let post_commit_result = post_commit(&self.repo_gitai, "Test User".to_string())?;
+        let post_commit_result = post_commit(
+            &self.repo_gitai,
+            parent_sha,
+            _commit_id.to_string(),
+            "Test User".to_string(),
+        )?;
 
         Ok(post_commit_result.1)
     }
