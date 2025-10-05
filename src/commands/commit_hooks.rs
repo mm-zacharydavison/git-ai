@@ -1,6 +1,5 @@
+use crate::authorship::pre_commit;
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
-use crate::git::post_commit;
-use crate::git::pre_commit;
 use crate::git::repository::Repository;
 use crate::git::rewrite_log::RewriteLogEvent;
 

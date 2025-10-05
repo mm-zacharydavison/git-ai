@@ -1,17 +1,19 @@
+use crate::authorship::authorship_log::LineRange;
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::working_log::Checkpoint;
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
 use crate::git::refs::put_reference;
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::log_fmt::authorship_log::LineRange;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
-use crate::log_fmt::working_log::Checkpoint;
 use crate::utils::debug_log;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
 
-// @todo Acunniffe - move this and simplify.
-pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiError> {
+pub fn post_commit(
+    repo: &Repository,
+    human_author: String,
+) -> Result<(String, AuthorshipLog), GitAiError> {
     // Get the current commit SHA (the commit that was just made)
     let head = repo.head()?;
     let commit_sha = match head.target() {
@@ -49,35 +51,11 @@ pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiEr
     // mutates inline
     CursorPreset::update_cursor_conversations_to_latest(&mut filtered_working_log)?;
 
-    // Get git user information for human_author field
-    let human_author = {
-        let name = repo
-            .config_get_str("user.name")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let email = repo
-            .config_get_str("user.email")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let display_name = if name.trim().is_empty() {
-            "unknown".to_string()
-        } else {
-            name
-        };
-        Some(if email.trim().is_empty() {
-            display_name
-        } else {
-            format!("{} <{}>", display_name, email)
-        })
-    };
-
     // --- NEW: Serialize authorship log and store it in refs/ai/authorship/{commit_sha} ---
     let mut authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
         &filtered_working_log,
         &parent_sha,
-        human_author.as_deref(),
+        Some(&human_author),
     );
 
     // Filter the authorship log to only include committed lines
@@ -143,8 +121,8 @@ pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiEr
                     let mut all_lines: Vec<u32> = Vec::new();
                     for line in &entry.added_lines {
                         match line {
-                            crate::log_fmt::working_log::Line::Single(l) => all_lines.push(*l),
-                            crate::log_fmt::working_log::Line::Range(start, end) => {
+                            crate::authorship::working_log::Line::Single(l) => all_lines.push(*l),
+                            crate::authorship::working_log::Line::Range(start, end) => {
                                 all_lines.extend(*start..=*end);
                             }
                         }
@@ -154,7 +132,7 @@ pub fn post_commit(repo: &Repository) -> Result<(String, AuthorshipLog), GitAiEr
                     all_lines.retain(|l| unstaged_ranges.iter().any(|range| range.contains(*l)));
 
                     // Recompress to Line format
-                    entry.added_lines = crate::log_fmt::authorship_log_serialization::compress_lines_to_working_log_format(&all_lines);
+                    entry.added_lines = crate::authorship::authorship_log_serialization::compress_lines_to_working_log_format(&all_lines);
 
                     // Clear deleted_lines since they're relative to the old base commit
                     // After a commit, the base commit changes, so old deletions are no longer relevant

@@ -1,10 +1,10 @@
+use crate::authorship::working_log::AgentId;
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
 };
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
-use crate::log_fmt::working_log::AgentId;
 use std::io::IsTerminal;
 
 pub fn handle_git_ai(args: &[String]) {
@@ -42,7 +42,7 @@ pub fn handle_git_ai(args: &[String]) {
             }
         }
         "squash-authorship" => {
-            commands::rebase_authorship::handle_squash_authorship(&args[1..]);
+            commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
         _ => {
             println!("Unknown git-ai command: {}", args[0]);

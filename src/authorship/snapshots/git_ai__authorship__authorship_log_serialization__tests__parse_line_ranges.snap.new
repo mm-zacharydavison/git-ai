@@ -1,0 +1,17 @@
+---
+source: src/authorship/authorship_log_serialization.rs
+assertion_line: 1081
+expression: ranges
+---
+[
+    Single(
+        1,
+    ),
+    Single(
+        2,
+    ),
+    Range(
+        19,
+        222,
+    ),
+]

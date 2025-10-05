@@ -2,7 +2,7 @@ use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
 use crate::git::repository::exec_git;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use std::collections::HashMap;
 use std::fs;

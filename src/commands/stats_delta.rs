@@ -1,9 +1,9 @@
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference;
 use crate::git::refs::put_reference;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::repository::Repository;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use std::collections::HashMap;
 
 pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {

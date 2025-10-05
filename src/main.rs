@@ -1,8 +1,8 @@
+mod authorship;
 mod commands;
 mod config;
 mod error;
 mod git;
-mod log_fmt;
 mod utils;
 
 use clap::Parser;

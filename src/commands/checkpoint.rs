@@ -1,9 +1,9 @@
+use crate::authorship::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::log_fmt::working_log::{Checkpoint, Line, WorkingLogEntry};
 use crate::utils::debug_log;
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
@@ -71,7 +71,7 @@ pub fn run(
                 // Display first user message from transcript if available
                 if let Some(transcript) = &checkpoint.transcript {
                     if let Some(first_message) = transcript.messages().first() {
-                        if let crate::log_fmt::transcript::Message::User { text, .. } =
+                        if let crate::authorship::transcript::Message::User { text, .. } =
                             first_message
                         {
                             let agent_info = checkpoint
@@ -553,8 +553,8 @@ fn consolidate_lines(mut lines: Vec<u32>) -> Vec<Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authorship::working_log::Line;
     use crate::git::test_utils::TmpRepo;
-    use crate::log_fmt::working_log::Line;
 
     #[test]
     fn test_consolidate_lines() {

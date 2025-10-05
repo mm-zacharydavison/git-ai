@@ -1,4 +1,4 @@
-use crate::log_fmt::authorship_log::{Author, LineRange, PromptRecord};
+use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -19,10 +19,10 @@ fn generate_short_hash(agent_id: &str, tool: &str) -> String {
 }
 
 /// Count the number of lines represented by a working_log::Line
-fn count_working_log_lines(line: &crate::log_fmt::working_log::Line) -> u32 {
+fn count_working_log_lines(line: &crate::authorship::working_log::Line) -> u32 {
     match line {
-        crate::log_fmt::working_log::Line::Single(_) => 1,
-        crate::log_fmt::working_log::Line::Range(start, end) => end - start + 1,
+        crate::authorship::working_log::Line::Single(_) => 1,
+        crate::authorship::working_log::Line::Range(start, end) => end - start + 1,
     }
 }
 
@@ -364,7 +364,7 @@ impl AuthorshipLog {
     /// handling deletions, additions, and tracking metrics.
     pub fn apply_checkpoint(
         &mut self,
-        checkpoint: &crate::log_fmt::working_log::Checkpoint,
+        checkpoint: &crate::authorship::working_log::Checkpoint,
         human_author: Option<&str>,
         session_additions: &mut HashMap<String, u32>,
         session_deletions: &mut HashMap<String, u32>,
@@ -422,8 +422,8 @@ impl AuthorshipLog {
                 let mut all_deleted_lines = Vec::new();
                 for line in &entry.deleted_lines {
                     match line {
-                        crate::log_fmt::working_log::Line::Single(l) => all_deleted_lines.push(*l),
-                        crate::log_fmt::working_log::Line::Range(start, end) => {
+                        crate::authorship::working_log::Line::Single(l) => all_deleted_lines.push(*l),
+                        crate::authorship::working_log::Line::Range(start, end) => {
                             for l in *start..=*end {
                                 all_deleted_lines.push(l);
                             }
@@ -455,8 +455,8 @@ impl AuthorshipLog {
             let mut added_lines = Vec::new();
             for line in &entry.added_lines {
                 match line {
-                    crate::log_fmt::working_log::Line::Single(l) => added_lines.push(*l),
-                    crate::log_fmt::working_log::Line::Range(start, end) => {
+                    crate::authorship::working_log::Line::Single(l) => added_lines.push(*l),
+                    crate::authorship::working_log::Line::Range(start, end) => {
                         for l in *start..=*end {
                             added_lines.push(l);
                         }
@@ -571,7 +571,7 @@ impl AuthorshipLog {
 
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log_with_base_commit_and_human_author(
-        checkpoints: &[crate::log_fmt::working_log::Checkpoint],
+        checkpoints: &[crate::authorship::working_log::Checkpoint],
         base_commit_sha: &str,
         human_author: Option<&str>,
     ) -> Self {
@@ -735,8 +735,8 @@ impl AuthorshipLog {
     pub fn convert_to_checkpoints_for_squash(
         &self,
         human_author: &str,
-    ) -> Result<Vec<crate::log_fmt::working_log::Checkpoint>, Box<dyn std::error::Error>> {
-        use crate::log_fmt::working_log::{Checkpoint, WorkingLogEntry};
+    ) -> Result<Vec<crate::authorship::working_log::Checkpoint>, Box<dyn std::error::Error>> {
+        use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
         use std::collections::{HashMap, HashSet};
 
         let mut checkpoints = Vec::new();
@@ -876,7 +876,7 @@ impl AuthorshipLog {
             ai_checkpoint.agent_id = Some(prompt_record.agent_id.clone());
 
             // Reconstruct transcript from messages
-            let mut transcript = crate::log_fmt::transcript::AiTranscript::new();
+            let mut transcript = crate::authorship::transcript::AiTranscript::new();
             for message in &prompt_record.messages {
                 transcript.add_message(message.clone());
             }
@@ -893,8 +893,8 @@ impl AuthorshipLog {
 #[allow(dead_code)]
 pub fn compress_lines_to_working_log_format(
     lines: &[u32],
-) -> Vec<crate::log_fmt::working_log::Line> {
-    use crate::log_fmt::working_log::Line;
+) -> Vec<crate::authorship::working_log::Line> {
+    use crate::authorship::working_log::Line;
 
     if lines.is_empty() {
         return vec![];
@@ -1182,7 +1182,7 @@ mod tests {
         let mut log = AuthorshipLog::new();
 
         // Add a prompt to the metadata
-        let agent_id = crate::log_fmt::working_log::AgentId {
+        let agent_id = crate::authorship::working_log::AgentId {
             tool: "cursor".to_string(),
             id: "session_123".to_string(),
             model: "claude-3-sonnet".to_string(),
@@ -1190,7 +1190,7 @@ mod tests {
         let prompt_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
             prompt_hash.clone(),
-            crate::log_fmt::authorship_log::PromptRecord {
+            crate::authorship::authorship_log::PromptRecord {
                 agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
@@ -1247,7 +1247,7 @@ mod tests {
         let mut log = AuthorshipLog::new();
 
         // Add a prompt to the metadata
-        let agent_id = crate::log_fmt::working_log::AgentId {
+        let agent_id = crate::authorship::working_log::AgentId {
             tool: "cursor".to_string(),
             id: "session_123".to_string(),
             model: "claude-3-sonnet".to_string(),
@@ -1255,7 +1255,7 @@ mod tests {
         let prompt_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
             prompt_hash.clone(),
-            crate::log_fmt::authorship_log::PromptRecord {
+            crate::authorship::authorship_log::PromptRecord {
                 agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
@@ -1294,7 +1294,7 @@ mod tests {
         let mut log = AuthorshipLog::new();
         log.metadata.base_commit_sha = "abc123".to_string();
 
-        let agent_id = crate::log_fmt::working_log::AgentId {
+        let agent_id = crate::authorship::working_log::AgentId {
             tool: "cursor".to_string(),
             id: "session_123".to_string(),
             model: "claude-3-sonnet".to_string(),
@@ -1302,7 +1302,7 @@ mod tests {
         let prompt_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
             prompt_hash,
-            crate::log_fmt::authorship_log::PromptRecord {
+            crate::authorship::authorship_log::PromptRecord {
                 agent_id: agent_id,
                 human_author: None,
                 messages: vec![],
@@ -1358,8 +1358,8 @@ mod tests {
 
     #[test]
     fn test_metrics_calculation() {
-        use crate::log_fmt::transcript::{AiTranscript, Message};
-        use crate::log_fmt::working_log::{AgentId, Checkpoint, Line, WorkingLogEntry};
+        use crate::authorship::transcript::{AiTranscript, Message};
+        use crate::authorship::working_log::{AgentId, Checkpoint, Line, WorkingLogEntry};
 
         // Create an agent ID
         let agent_id = AgentId {
@@ -1422,8 +1422,8 @@ mod tests {
 
     #[test]
     fn test_convert_authorship_log_to_checkpoints() {
-        use crate::log_fmt::transcript::{AiTranscript, Message};
-        use crate::log_fmt::working_log::AgentId;
+        use crate::authorship::transcript::{AiTranscript, Message};
+        use crate::authorship::working_log::AgentId;
 
         // Create an authorship log with both AI and human-attributed lines
         let mut log = AuthorshipLog::new();
@@ -1442,7 +1442,7 @@ mod tests {
         let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
             session_hash.clone(),
-            crate::log_fmt::authorship_log::PromptRecord {
+            crate::authorship::authorship_log::PromptRecord {
                 agent_id: agent_id.clone(),
                 human_author: Some("alice@example.com".to_string()),
                 messages: transcript.messages().to_vec(),
@@ -1478,7 +1478,7 @@ mod tests {
         assert_eq!(human_entry.file, "src/main.rs");
         assert_eq!(
             human_entry.added_lines,
-            vec![crate::log_fmt::working_log::Line::Range(6, 9)]
+            vec![crate::authorship::working_log::Line::Range(6, 9)]
         );
         assert!(human_entry.deleted_lines.is_empty());
 
@@ -1494,8 +1494,8 @@ mod tests {
         assert_eq!(
             ai_entry.added_lines,
             vec![
-                crate::log_fmt::working_log::Line::Range(1, 5),
-                crate::log_fmt::working_log::Line::Range(10, 15)
+                crate::authorship::working_log::Line::Range(1, 5),
+                crate::authorship::working_log::Line::Range(10, 15)
             ]
         );
         assert!(ai_entry.deleted_lines.is_empty());
@@ -1503,8 +1503,8 @@ mod tests {
 
     #[test]
     fn test_convert_authorship_log_multiple_ai_sessions() {
-        use crate::log_fmt::transcript::{AiTranscript, Message};
-        use crate::log_fmt::working_log::AgentId;
+        use crate::authorship::transcript::{AiTranscript, Message};
+        use crate::authorship::working_log::AgentId;
 
         // Create authorship log with 2 different AI sessions
         let mut log = AuthorshipLog::new();
@@ -1522,7 +1522,7 @@ mod tests {
         let session1_hash = generate_short_hash(&agent1.id, &agent1.tool);
         log.metadata.prompts.insert(
             session1_hash.clone(),
-            crate::log_fmt::authorship_log::PromptRecord {
+            crate::authorship::authorship_log::PromptRecord {
                 agent_id: agent1,
                 human_author: Some("bob@example.com".to_string()),
                 messages: transcript1.messages().to_vec(),
@@ -1544,7 +1544,7 @@ mod tests {
         let session2_hash = generate_short_hash(&agent2.id, &agent2.tool);
         log.metadata.prompts.insert(
             session2_hash.clone(),
-            crate::log_fmt::authorship_log::PromptRecord {
+            crate::authorship::authorship_log::PromptRecord {
                 agent_id: agent2,
                 human_author: Some("bob@example.com".to_string()),
                 messages: transcript2.messages().to_vec(),

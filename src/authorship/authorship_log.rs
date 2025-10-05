@@ -1,5 +1,5 @@
-use crate::log_fmt::transcript::Message;
-use crate::log_fmt::working_log::AgentId;
+use crate::authorship::transcript::Message;
+use crate::authorship::working_log::AgentId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

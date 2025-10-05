@@ -6,7 +6,6 @@ use crate::config;
 use crate::git::cli_parser::is_dry_run;
 use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
 use crate::git::find_repository;
-use crate::git::find_repository_in_path;
 use crate::git::repository::Repository;
 use crate::git::rewrite_log::MergeSquashEvent;
 use crate::git::rewrite_log::RewriteLogEvent;

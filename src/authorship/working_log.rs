@@ -1,4 +1,4 @@
-use crate::log_fmt::transcript::AiTranscript;
+use crate::authorship::transcript::AiTranscript;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -156,7 +156,7 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log_fmt::transcript::Message;
+    use crate::authorship::transcript::Message;
 
     #[test]
     fn test_line_serialization() {

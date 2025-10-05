@@ -1,10 +1,11 @@
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::post_commit;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
+use crate::git::find_repository_in_path;
 use crate::git::refs::get_reference_as_authorship_log_v3;
-use crate::git::repository::{Commit, Repository, Signature};
+use crate::git::repository::{Commit, Repository};
 use crate::git::rewrite_log::RewriteLogEvent;
-use crate::git::{find_repository_in_path, post_commit, repository};
-use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
 use crate::utils::debug_log;
 use similar::{ChangeTag, TextDiff};
 
@@ -18,7 +19,7 @@ pub fn rewrite_authorship_if_needed(
     match last_event {
         RewriteLogEvent::Commit { commit } => {
             // This is going to become the regualar post-commit
-            post_commit::post_commit(repo)?;
+            post_commit::post_commit(repo, commit_author)?;
         }
         RewriteLogEvent::CommitAmend { commit_amend } => {
             rewrite_authorship_after_commit_amend(
@@ -181,7 +182,7 @@ pub fn prepare_working_log_after_squash(
     source_head_sha: &str,
     target_branch_head_sha: &str,
     human_author: &str,
-) -> Result<Vec<crate::log_fmt::working_log::Checkpoint>, GitAiError> {
+) -> Result<Vec<crate::authorship::working_log::Checkpoint>, GitAiError> {
     // Step 1: Find the common origin base between source and target
     let origin_base =
         find_common_origin_base_from_head(repo, source_head_sha, target_branch_head_sha)?;
@@ -568,7 +569,7 @@ fn reconstruct_authorship_from_diff(
 
     // Group entries by file and prompt session ID for efficiency
     let mut file_attestations: HashMap<String, HashMap<String, Vec<u32>>> = HashMap::new();
-    let mut prompt_records: HashMap<String, crate::log_fmt::authorship_log::PromptRecord> =
+    let mut prompt_records: HashMap<String, crate::authorship::authorship_log::PromptRecord> =
         HashMap::new();
 
     for (file_path, line_number, _author, prompt) in authorship_entries {
@@ -604,11 +605,11 @@ fn reconstruct_authorship_from_diff(
                 } else {
                     // Start new range
                     if current_start == current_end {
-                        ranges.push(crate::log_fmt::authorship_log::LineRange::Single(
+                        ranges.push(crate::authorship::authorship_log::LineRange::Single(
                             current_start,
                         ));
                     } else {
-                        ranges.push(crate::log_fmt::authorship_log::LineRange::Range(
+                        ranges.push(crate::authorship::authorship_log::LineRange::Range(
                             current_start,
                             current_end,
                         ));
@@ -620,11 +621,11 @@ fn reconstruct_authorship_from_diff(
 
             // Add the last range
             if current_start == current_end {
-                ranges.push(crate::log_fmt::authorship_log::LineRange::Single(
+                ranges.push(crate::authorship::authorship_log::LineRange::Single(
                     current_start,
                 ));
             } else {
-                ranges.push(crate::log_fmt::authorship_log::LineRange::Range(
+                ranges.push(crate::authorship::authorship_log::LineRange::Range(
                     current_start,
                     current_end,
                 ));
@@ -632,7 +633,7 @@ fn reconstruct_authorship_from_diff(
 
             // Create attestation entry with the prompt session ID
             let attestation_entry =
-                crate::log_fmt::authorship_log_serialization::AttestationEntry::new(
+                crate::authorship::authorship_log_serialization::AttestationEntry::new(
                     prompt_session_id.clone(),
                     ranges,
                 );
@@ -664,8 +665,10 @@ fn reconstruct_authorship_from_diff(
                 .line_ranges
                 .iter()
                 .map(|range| match range {
-                    crate::log_fmt::authorship_log::LineRange::Single(_) => 1,
-                    crate::log_fmt::authorship_log::LineRange::Range(start, end) => end - start + 1,
+                    crate::authorship::authorship_log::LineRange::Single(_) => 1,
+                    crate::authorship::authorship_log::LineRange::Range(start, end) => {
+                        end - start + 1
+                    }
                 })
                 .sum();
             *session_accepted_lines
@@ -703,8 +706,8 @@ fn run_blame_in_context(
     hanging_commit_sha: &str,
 ) -> Result<
     Option<(
-        crate::log_fmt::authorship_log::Author,
-        Option<(crate::log_fmt::authorship_log::PromptRecord, u32)>,
+        crate::authorship::authorship_log::Author,
+        Option<(crate::authorship::authorship_log::PromptRecord, u32)>,
     )>,
     GitAiError,
 > {
@@ -743,7 +746,7 @@ fn run_blame_in_context(
                 let author_name = author.name().unwrap_or("unknown");
                 let author_email = author.email().unwrap_or("");
 
-                let author_info = crate::log_fmt::authorship_log::Author {
+                let author_info = crate::authorship::authorship_log::Author {
                     username: author_name.to_string(),
                     email: author_email.to_string(),
                 };
@@ -767,7 +770,7 @@ fn run_blame_in_context(
             let author_name = author.name().unwrap_or("unknown");
             let author_email = author.email().unwrap_or("");
 
-            let author_info = crate::log_fmt::authorship_log::Author {
+            let author_info = crate::authorship::authorship_log::Author {
                 username: author_name.to_string(),
                 email: author_email.to_string(),
             };
@@ -859,84 +862,6 @@ fn build_commit_path_to_base(
     commits.reverse();
 
     Ok(commits)
-}
-
-pub fn handle_squash_authorship(args: &[String]) {
-    // Parse squash-authorship-specific arguments
-    let mut dry_run = false;
-    let mut branch = None;
-    let mut new_sha = None;
-    let mut old_sha = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--dry-run" => {
-                dry_run = true;
-                i += 1;
-            }
-            _ => {
-                // Positional arguments: branch, new_sha, old_sha
-                if branch.is_none() {
-                    branch = Some(args[i].clone());
-                } else if new_sha.is_none() {
-                    new_sha = Some(args[i].clone());
-                } else if old_sha.is_none() {
-                    old_sha = Some(args[i].clone());
-                } else {
-                    eprintln!("Unknown squash-authorship argument: {}", args[i]);
-                    std::process::exit(1);
-                }
-                i += 1;
-            }
-        }
-    }
-
-    // Validate required arguments
-    let branch = match branch {
-        Some(b) => b,
-        None => {
-            eprintln!("Error: branch argument is required");
-            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
-            std::process::exit(1);
-        }
-    };
-
-    let new_sha = match new_sha {
-        Some(s) => s,
-        None => {
-            eprintln!("Error: new_sha argument is required");
-            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
-            std::process::exit(1);
-        }
-    };
-
-    let old_sha = match old_sha {
-        Some(s) => s,
-        None => {
-            eprintln!("Error: old_sha argument is required");
-            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
-            std::process::exit(1);
-        }
-    };
-
-    // TODO Think about whether or not path should be an optional argument
-
-    // Find the git repository
-    let repo = match find_repository_in_path(".") {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) =
-        rewrite_authorship_after_squash_or_rebase(&repo, &branch, &old_sha, &new_sha, dry_run)
-    {
-        eprintln!("Squash authorship failed: {}", e);
-        std::process::exit(1);
-    }
 }
 
 #[cfg(test)]

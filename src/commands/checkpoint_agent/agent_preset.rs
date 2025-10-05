@@ -1,9 +1,9 @@
 use crate::{
-    error::GitAiError,
-    log_fmt::{
+    authorship::{
         transcript::{AiTranscript, Message},
         working_log::AgentId,
     },
+    error::GitAiError,
 };
 use rusqlite::{Connection, OpenFlags};
 use std::env;
@@ -209,14 +209,14 @@ impl CursorPreset {
     /// Update Cursor conversations in working logs to their latest versions
     /// This helps prevent race conditions where we miss the last message in a conversation
     pub fn update_cursor_conversations_to_latest(
-        checkpoints: &mut [crate::log_fmt::working_log::Checkpoint],
+        checkpoints: &mut [crate::authorship::working_log::Checkpoint],
     ) -> Result<(), GitAiError> {
         use std::collections::HashMap;
 
         // Group checkpoints by Cursor conversation ID
         let mut cursor_conversations: HashMap<
             String,
-            Vec<&mut crate::log_fmt::working_log::Checkpoint>,
+            Vec<&mut crate::authorship::working_log::Checkpoint>,
         > = HashMap::new();
 
         for checkpoint in checkpoints.iter_mut() {

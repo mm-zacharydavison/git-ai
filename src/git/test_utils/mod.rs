@@ -1,8 +1,8 @@
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
-use crate::git::post_commit::post_commit;
+use crate::authorship::post_commit::post_commit;
 use crate::git::repository::Repository as GitAiRepository;
-use crate::log_fmt::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use git2::{Repository, Signature};
 use std::collections::BTreeMap;
 use std::fs;
@@ -362,8 +362,8 @@ impl TmpRepo {
         tool: Option<&str>,
     ) -> Result<(usize, usize, usize), GitAiError> {
         use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
-        use crate::log_fmt::transcript::AiTranscript;
-        use crate::log_fmt::working_log::AgentId;
+        use crate::authorship::transcript::AiTranscript;
+        use crate::authorship::working_log::AgentId;
 
         // Use a deterministic but unique session ID based on agent_name
         // For common agent names (Claude, GPT-4), use fixed ID for backwards compat
@@ -462,7 +462,7 @@ impl TmpRepo {
         println!("Commit ID: {}", _commit_id);
 
         // Run the post-commit hook for all commits (including initial commit)
-        let post_commit_result = post_commit(&self.repo_gitai)?;
+        let post_commit_result = post_commit(&self.repo_gitai, "Test User".to_string())?;
 
         Ok(post_commit_result.1)
     }
@@ -517,7 +517,7 @@ impl TmpRepo {
         }
 
         // Run post-commit hook
-        post_commit(&self.repo_gitai)?;
+        post_commit(&self.repo_gitai, "Test User".to_string())?;
 
         Ok(())
     }
@@ -577,7 +577,7 @@ impl TmpRepo {
         // )?;
 
         // Run post-commit hook
-        post_commit(&self.repo_gitai)?;
+        post_commit(&self.repo_gitai, "Test User".to_string())?;
 
         Ok(())
     }
@@ -797,7 +797,7 @@ impl TmpRepo {
         };
 
         // Run the post-commit hook
-        let post_commit_result = post_commit(&self.repo_gitai)?;
+        let post_commit_result = post_commit(&self.repo_gitai, "Test User".to_string())?;
 
         Ok(post_commit_result.1)
     }
@@ -862,7 +862,7 @@ impl TmpRepo {
     /// Gets the authorship log for the current commit
     pub fn get_authorship_log(
         &self,
-    ) -> Result<crate::log_fmt::authorship_log_serialization::AuthorshipLog, GitAiError> {
+    ) -> Result<crate::authorship::authorship_log_serialization::AuthorshipLog, GitAiError> {
         let head = self.repo_git2.head()?;
         let commit_id = head.target().unwrap().to_string();
         let ref_name = format!("ai/authorship/{}", commit_id);
@@ -870,7 +870,7 @@ impl TmpRepo {
         match crate::git::refs::get_reference(&self.repo_gitai, &ref_name) {
             Ok(content) => {
                 // Parse the authorship log from the reference content
-                crate::log_fmt::authorship_log_serialization::AuthorshipLog::deserialize_from_string(&content)
+                crate::authorship::authorship_log_serialization::AuthorshipLog::deserialize_from_string(&content)
                     .map_err(|e| GitAiError::Generic(format!("Failed to parse authorship log: {}", e)))
             }
             Err(_) => Err(GitAiError::Generic("No authorship log found".to_string())),

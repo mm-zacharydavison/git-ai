@@ -1,5 +1,5 @@
+use git_ai::authorship::authorship_log::LineRange;
 use git_ai::git::test_utils::TmpRepo;
-use git_ai::log_fmt::authorship_log::LineRange;
 use insta::assert_debug_snapshot;
 
 #[test]
