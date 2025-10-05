@@ -474,8 +474,15 @@ impl Repository {
             return;
         }
 
-        self.pre_command_base_commit = Some(self.head().unwrap().target().unwrap().to_string());
-        self.pre_command_refname = Some(self.head().unwrap().name().unwrap().to_string());
+        // Safely handle empty repositories
+        if let Ok(head_ref) = self.head() {
+            if let Ok(target) = head_ref.target() {
+                let target_string = target;
+                let refname = head_ref.name().map(|n| n.to_string());
+                self.pre_command_base_commit = Some(target_string);
+                self.pre_command_refname = refname;
+            }
+        }
     }
 
     pub fn handle_rewrite_log_event(
