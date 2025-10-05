@@ -149,10 +149,6 @@ SHELL_NAME=$(echo "$SHELL_INFO" | cut -d'|' -f1)
 CONFIG_FILE=$(echo "$SHELL_INFO" | cut -d'|' -f2)
 STD_GIT_PATH=$(detect_std_git)
 PATH_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
-GIT_PATH_CMD=""
-if [ -n "$STD_GIT_PATH" ]; then
-    GIT_PATH_CMD="export GIT_AI_GIT_PATH=\"$STD_GIT_PATH\""
-fi
 
 # Install hooks
 echo "Setting up IDE/agent hooks..."
@@ -165,6 +161,24 @@ fi
 success "Successfully installed git-ai into ${INSTALL_DIR}"
 success "You can now run 'git-ai' from your terminal"
 
+# Write JSON config at ~/.git-ai/config.json
+CONFIG_DIR="$HOME/.git-ai"
+CONFIG_JSON_PATH="$CONFIG_DIR/config.json"
+mkdir -p "$CONFIG_DIR"
+
+if [ -z "$STD_GIT_PATH" ]; then
+    echo -e "${RED}Warning:${NC} Could not detect a standard git binary on PATH.\nYou can manually set it in: $CONFIG_JSON_PATH" >&2
+fi
+
+TMP_CFG="$CONFIG_JSON_PATH.tmp.$$"
+cat >"$TMP_CFG" <<EOF
+{
+  "git_path": "${STD_GIT_PATH}",
+  "ignore_prompts": false
+}
+EOF
+mv -f "$TMP_CFG" "$CONFIG_JSON_PATH"
+
 # Add to PATH automatically if not already there
 if [[ ":$PATH:" != *"$INSTALL_DIR"* ]]; then
     if [ -n "$CONFIG_FILE" ]; then
@@ -176,17 +190,11 @@ if [[ ":$PATH:" != *"$INSTALL_DIR"* ]]; then
             echo "# Added by git-ai installer on $(date)" >> "$CONFIG_FILE"
             echo "$PATH_CMD" >> "$CONFIG_FILE"
         fi
-        if [ -n "$GIT_PATH_CMD" ] && ! grep -qsF "$GIT_PATH_CMD" "$CONFIG_FILE"; then
-            echo "$GIT_PATH_CMD" >> "$CONFIG_FILE"
-        fi
         success "Updated ${CONFIG_FILE} to include ${INSTALL_DIR} in PATH"
         echo "Restart your shell or run: source \"$CONFIG_FILE\""
     else
         echo "Could not detect your shell config file."
         echo "Please add the following line(s) to your shell config and restart:"
         echo "$PATH_CMD"
-        if [ -n "$GIT_PATH_CMD" ]; then
-            echo "$GIT_PATH_CMD"
-        fi
     fi
 fi
