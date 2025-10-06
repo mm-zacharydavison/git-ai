@@ -1,9 +1,10 @@
 use crate::authorship::authorship_log::LineRange;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::stats::{stats_for_commit_stats, write_stats_to_terminal};
 use crate::authorship::working_log::Checkpoint;
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
-use crate::git::refs::notes_add;
+use crate::git::refs::{notes_add, show_authorship_note};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
 use crate::utils::debug_log;
@@ -15,6 +16,7 @@ pub fn post_commit(
     base_commit: Option<String>,
     commit_sha: String,
     human_author: String,
+    supress_output: bool,
 ) -> Result<(String, AuthorshipLog), GitAiError> {
     // Use base_commit parameter if provided, otherwise use "initial" for empty repos
     // This matches the convention in checkpoint.rs
@@ -74,7 +76,7 @@ pub fn post_commit(
     notes_add(repo, &commit_sha, &authorship_json)?;
 
     debug_log(&format!(
-        "Authorship log written to notes/ai/{}",
+        "Authorship log written. View with git notes --ref=ai show {}",
         commit_sha
     ));
 
@@ -141,6 +143,11 @@ pub fn post_commit(
         ));
     }
 
+    if !supress_output {
+        let refname = repo.head()?.name().unwrap().to_string();
+        let stats = stats_for_commit_stats(repo, &commit_sha, &refname)?;
+        write_stats_to_terminal(&stats);
+    }
     Ok((commit_sha.to_string(), authorship_log))
 }
 

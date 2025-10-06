@@ -40,6 +40,7 @@ AuthorshipLogV3 {
                 total_additions: 5,
                 total_deletions: 2,
                 accepted_lines: 5,
+                overriden_lines: 0,
             },
         },
     },

@@ -476,6 +476,7 @@ impl TmpRepo {
             parent_sha,
             _commit_id.to_string(),
             "Test User".to_string(),
+            false,
         )?;
 
         Ok(post_commit_result.1)
@@ -542,6 +543,7 @@ impl TmpRepo {
             parent_sha,
             merge_commit_sha,
             "Test User".to_string(),
+            false,
         )?;
 
         Ok(())
@@ -613,6 +615,7 @@ impl TmpRepo {
             parent_sha,
             rebase_commit_sha,
             "Test User".to_string(),
+            false,
         )?;
 
         Ok(())
@@ -847,6 +850,7 @@ impl TmpRepo {
             parent_sha,
             _commit_id.to_string(),
             "Test User".to_string(),
+            false,
         )?;
 
         Ok(post_commit_result.1)

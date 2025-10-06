@@ -194,4 +194,6 @@ pub struct PromptRecord {
     pub total_deletions: u32,
     #[serde(default)]
     pub accepted_lines: u32,
+    #[serde(default)]
+    pub overriden_lines: u32,
 }

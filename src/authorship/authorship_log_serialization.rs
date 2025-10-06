@@ -360,6 +360,7 @@ impl AuthorshipLog {
                             total_additions: 0,
                             total_deletions: 0,
                             accepted_lines: 0,
+                            overriden_lines: 0,
                         });
                 if entry.messages.len() < transcript.messages().len() {
                     entry.messages = transcript.messages().to_vec();
@@ -391,8 +392,6 @@ impl AuthorshipLog {
 
             // Process deletions first (remove lines from all authors, then shift remaining lines up)
             if !entry.deleted_lines.is_empty() {
-                let file_attestation = self.get_or_create_file(&entry.file);
-
                 // Collect all deleted line numbers
                 let mut all_deleted_lines = Vec::new();
                 for line in &entry.deleted_lines {
@@ -410,6 +409,13 @@ impl AuthorshipLog {
                 all_deleted_lines.sort_unstable();
                 all_deleted_lines.dedup();
 
+                // Check if this is a human checkpoint modifying AI lines
+                if checkpoint.agent_id.is_none() {
+                    // This is a human checkpoint - check for overridden AI lines
+                    self.detect_overridden_lines(&entry.file, &all_deleted_lines);
+                }
+
+                let file_attestation = self.get_or_create_file(&entry.file);
                 let deleted_ranges = LineRange::compress_lines(&all_deleted_lines);
 
                 // Remove the deleted lines from all attestations
@@ -543,6 +549,7 @@ impl AuthorshipLog {
             prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
             prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
             prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
+            // overriden_lines is calculated and accumulated in apply_checkpoint, don't reset it here
         }
     }
 
@@ -582,6 +589,40 @@ impl AuthorshipLog {
         }
 
         authorship_log
+    }
+
+    /// Detect lines that were originally authored by AI but are now being modified by humans
+    fn detect_overridden_lines(&mut self, file: &str, deleted_lines: &[u32]) {
+        // Find the file attestation and check for overridden lines
+        if let Some(file_attestation) = self.attestations.iter().find(|f| f.file_path == file) {
+            // For each session, count how many of its lines were overridden
+            let mut session_overridden_counts: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+
+            // For each deleted line, check if it was previously attributed to AI
+            for &line in deleted_lines {
+                for attestation_entry in &file_attestation.entries {
+                    // Check if this line was attributed to AI
+                    if attestation_entry
+                        .line_ranges
+                        .iter()
+                        .any(|range| range.contains(line))
+                    {
+                        // This line was AI-authored and is now being deleted by a human
+                        *session_overridden_counts
+                            .entry(attestation_entry.hash.clone())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+
+            // Update the overriden_lines count for each affected session
+            for (session_hash, overridden_count) in session_overridden_counts {
+                if let Some(prompt_record) = self.metadata.prompts.get_mut(&session_hash) {
+                    prompt_record.overriden_lines += overridden_count;
+                }
+            }
+        }
     }
 
     pub fn get_or_create_file(&mut self, file: &str) -> &mut FileAttestation {
@@ -1209,6 +1250,7 @@ mod tests {
                 total_additions: 0,
                 total_deletions: 0,
                 accepted_lines: 0,
+                overriden_lines: 0,
             },
         );
 
@@ -1274,6 +1316,7 @@ mod tests {
                 total_additions: 0,
                 total_deletions: 0,
                 accepted_lines: 0,
+                overriden_lines: 0,
             },
         );
 
@@ -1321,6 +1364,7 @@ mod tests {
                 total_additions: 0,
                 total_deletions: 0,
                 accepted_lines: 0,
+                overriden_lines: 0,
             },
         );
 
@@ -1461,6 +1505,7 @@ mod tests {
                 total_additions: 15,
                 total_deletions: 3,
                 accepted_lines: 12,
+                overriden_lines: 0,
             },
         );
 
@@ -1514,6 +1559,64 @@ mod tests {
     }
 
     #[test]
+    fn test_overriden_lines_detection() {
+        use crate::authorship::transcript::{AiTranscript, Message};
+        use crate::authorship::working_log::{AgentId, Checkpoint, Line, WorkingLogEntry};
+
+        // Create an AI checkpoint that adds lines 1-5
+        let agent_id = AgentId {
+            tool: "cursor".to_string(),
+            id: "session_123".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+
+        let entry1 = WorkingLogEntry::new(
+            "src/main.rs".to_string(),
+            "sha1".to_string(),
+            vec![Line::Range(1, 5)], // AI adds lines 1-5
+            vec![],
+        );
+        let mut checkpoint1 = Checkpoint::new("".to_string(), "ai".to_string(), vec![entry1]);
+        checkpoint1.agent_id = Some(agent_id.clone());
+
+        // Add transcript to make it a valid AI checkpoint
+        let mut transcript = AiTranscript::new();
+        transcript.add_message(Message::user("Add some code".to_string()));
+        transcript.add_message(Message::assistant("Added code".to_string()));
+        checkpoint1.transcript = Some(transcript);
+
+        // Create a human checkpoint that deletes lines 2-3 (overriding AI lines)
+        let entry2 = WorkingLogEntry::new(
+            "src/main.rs".to_string(),
+            "sha2".to_string(),
+            vec![],
+            vec![Line::Range(2, 3)], // Human deletes lines 2-3
+        );
+        let checkpoint2 = Checkpoint::new("".to_string(), "human".to_string(), vec![entry2]);
+        // Note: checkpoint2.agent_id is None, indicating it's a human checkpoint
+
+        // Convert to authorship log
+        let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
+            &[checkpoint1, checkpoint2],
+            "base123",
+            Some("human@example.com"),
+        );
+
+        // Get the prompt record
+        let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
+        let prompt_record = authorship_log.metadata.prompts.get(&session_hash).unwrap();
+
+        // Verify overriden_lines count
+        // AI added 5 lines (1-5), human deleted 2 lines (2-3), so 2 lines were overridden
+        assert_eq!(prompt_record.overriden_lines, 2);
+
+        // Verify other metrics
+        assert_eq!(prompt_record.total_additions, 5);
+        assert_eq!(prompt_record.total_deletions, 0); // AI didn't delete anything
+        assert_eq!(prompt_record.accepted_lines, 3); // AI still owns lines 1, 4, 5
+    }
+
+    #[test]
     fn test_convert_authorship_log_multiple_ai_sessions() {
         use crate::authorship::transcript::{AiTranscript, Message};
         use crate::authorship::working_log::AgentId;
@@ -1541,6 +1644,7 @@ mod tests {
                 total_additions: 10,
                 total_deletions: 0,
                 accepted_lines: 10,
+                overriden_lines: 0,
             },
         );
 
@@ -1563,6 +1667,7 @@ mod tests {
                 total_additions: 20,
                 total_deletions: 0,
                 accepted_lines: 20,
+                overriden_lines: 0,
             },
         );
 

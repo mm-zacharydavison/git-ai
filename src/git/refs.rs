@@ -44,6 +44,13 @@ pub fn show_authorship_note(repo: &Repository, commit_sha: &str) -> Option<Strin
     }
 }
 
+// Show an authorship note and return its JSON content if found, or None if it doesn't exist.
+pub fn get_authorship(repo: &Repository, commit_sha: &str) -> Option<AuthorshipLog> {
+    let content = show_authorship_note(repo, commit_sha)?;
+    let authorship_log = AuthorshipLog::deserialize_from_string(&content).ok()?;
+    Some(authorship_log)
+}
+
 #[allow(dead_code)]
 pub fn get_reference_as_working_log(
     repo: &Repository,

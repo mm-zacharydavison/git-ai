@@ -14,6 +14,7 @@ pub fn rewrite_authorship_if_needed(
     last_event: &RewriteLogEvent,
     commit_author: String,
     _full_log: &Vec<RewriteLogEvent>,
+    supress_output: bool,
 ) -> Result<(), GitAiError> {
     match last_event {
         RewriteLogEvent::Commit { commit } => {
@@ -23,6 +24,7 @@ pub fn rewrite_authorship_if_needed(
                 commit.base_commit.clone(),
                 commit.commit_sha.clone(),
                 commit_author,
+                supress_output,
             )?;
         }
         RewriteLogEvent::CommitAmend { commit_amend } => {
