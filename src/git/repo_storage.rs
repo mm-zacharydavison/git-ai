@@ -1,6 +1,6 @@
+use crate::authorship::working_log::Checkpoint;
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
-use crate::authorship::working_log::Checkpoint;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};

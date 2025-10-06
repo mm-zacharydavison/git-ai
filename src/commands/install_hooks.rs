@@ -5,6 +5,7 @@ use similar::{ChangeTag, TextDiff};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // Command patterns for hooks (after "git-ai")
 // Claude Code hooks (uses shell, so relative path works)
@@ -16,11 +17,11 @@ const CURSOR_BEFORE_SUBMIT_CMD: &str = "checkpoint cursor --hook-input \"$(cat)\
 const CURSOR_AFTER_EDIT_CMD: &str = "checkpoint cursor --hook-input \"$(cat)\"";
 
 pub fn run(args: &[String]) -> Result<(), GitAiError> {
-    // Parse --dry-run flag (default: true)
-    let mut dry_run = true;
+    // Parse --dry-run flag (default: false)
+    let mut dry_run = false;
     for arg in args {
-        if arg == "--dry-run=false" {
-            dry_run = false;
+        if arg == "--dry-run" || arg == "--dry-run=true" {
+            dry_run = true;
         }
     }
 
@@ -91,6 +92,43 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
         }
     }
 
+    if check_vscode() {
+        any_checked = true;
+        // Install/update VS Code hooks
+        let spinner = Spinner::new("VS Code: installing extension");
+        spinner.start();
+
+        if binary_exists("code") {
+            // Install/update VS Code extension
+            match is_vscode_extension_installed("git-ai.git-ai-vscode") {
+                Ok(true) => {
+                    spinner.success("VS Code: Extension installed");
+                }
+                Ok(false) => {
+                    if dry_run {
+                        spinner.pending("VS Code: Pending extension install (git-ai for VS Code)");
+                    } else {
+                        match install_vscode_extension("git-ai.git-ai-vscode") {
+                            Ok(()) => {
+                                spinner.success("VS Code: Extension installed");
+                            }
+                            Err(e) => {
+                                spinner.error("VS Code: Failed to install extension");
+                                eprintln!("  Error: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    spinner.error("VS Code: Failed to check extension");
+                    eprintln!("  Error: {}", e);
+                }
+            }
+        } else {
+            spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+        }
+    }
+
     if !any_checked {
         println!("No compatible IDEs or agent configurations detected. Nothing to install.");
     } else if has_changes && dry_run {
@@ -146,6 +184,19 @@ fn check_cursor() -> bool {
     // Sometimes the binary won't be in the PATH, but the dotfiles will be
     let home = home_dir();
     return home.join(".cursor").exists();
+}
+
+fn check_vscode() -> bool {
+    // TODO: Also check if dotfiles for code exist (windows?)
+    if binary_exists("code") {
+        return true;
+    }
+
+    // TODO Approach for Windows?
+
+    // Sometimes the binary won't be in the PATH, but the dotfiles will be
+    let home = home_dir();
+    return home.join(".vscode").exists();
 }
 
 // Shared utilities
@@ -592,6 +643,59 @@ fn get_current_binary_path() -> Result<PathBuf, GitAiError> {
     let canonical = path.canonicalize()?;
 
     Ok(canonical)
+}
+
+fn is_vscode_extension_installed(id_or_vsix: &str) -> Result<bool, GitAiError> {
+    // NOTE: We try up to 3 times, because the code CLI is very flaky (throws intermittent JS errors)
+    let mut last_error_message: Option<String> = None;
+    for attempt in 1..=3 {
+        match Command::new("code").args(["--list-extensions"]).output() {
+            Ok(output) => {
+                if !output.status.success() {
+                    last_error_message = Some(String::from_utf8_lossy(&output.stderr).to_string());
+                } else {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    return Ok(stdout.contains(id_or_vsix));
+                }
+            }
+            Err(e) => {
+                last_error_message = Some(e.to_string());
+            }
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+    Err(GitAiError::Generic(last_error_message.unwrap_or_else(
+        || "VS Code CLI '--list-extensions' failed".to_string(),
+    )))
+}
+
+fn install_vscode_extension(id_or_vsix: &str) -> Result<(), GitAiError> {
+    // NOTE: We try up to 3 times, because the code CLI is very flaky (throws intermittent JS errors)
+    let mut last_error_message: Option<String> = None;
+    for attempt in 1..=3 {
+        match Command::new("code")
+            .args(["--install-extension", id_or_vsix, "--force"])
+            .status()
+        {
+            Ok(status) => {
+                if status.success() {
+                    return Ok(());
+                }
+                last_error_message = Some("VS Code extension install failed".to_string());
+            }
+            Err(e) => {
+                last_error_message = Some(e.to_string());
+            }
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+    Err(GitAiError::Generic(last_error_message.unwrap_or_else(
+        || "VS Code extension install failed".to_string(),
+    )))
 }
 
 // Loader
