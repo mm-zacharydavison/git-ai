@@ -24,10 +24,9 @@ You can enable toast messages from the extension when it calls checkpoints to ge
 
 ## Installation
 
-1. **Install the extension** in VS Code
-2. **Install [`git-ai`](https://github.com/acunniffe/git-ai)** `curl -sSL https://gitai.run/install.sh | bash`
-3. **Ensure `git-ai` is on your PATH** so the extension can find it
-4. **Restart VS Code**
+1. **Install the extension** We recommend installing from the [VS Code Extension marketplace](https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode)
+2. **Install [`git-ai`](https://github.com/acunniffe/git-ai)** Follow the `git-ai` installation [instructions](https://github.com/acunniffe/git-ai#installation) for your platform.
+3. **Restart VS Code**
 
 ## License
 
