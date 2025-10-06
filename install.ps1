@@ -16,6 +16,13 @@ function Write-Success {
     Write-Host $Message -ForegroundColor Green
 }
 
+function Write-Warning {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+    Write-Host $Message -ForegroundColor Yellow
+}
+
 # GitHub repository details
 $Repo = 'acunniffe/git-ai'
 
@@ -42,12 +49,40 @@ function Get-Architecture {
 
 function Get-StdGitPath {
     $cmd = Get-Command git.exe -ErrorAction SilentlyContinue
+    $gitPath = $null
     if ($cmd -and $cmd.Path) {
-        if ($cmd.Path -notmatch "\\\.git-ai\\") {
-            return $cmd.Path
+        # Ensure we never return a path for git that contains git-ai (recursive)
+        if ($cmd.Path -notmatch "git-ai") {
+            $gitPath = $cmd.Path
         }
     }
-    return $null
+
+    # If detection failed or was our own shim, try to recover from saved config
+    if (-not $gitPath) {
+        try {
+            $cfgPath = Join-Path $HOME ".git-ai\config.json"
+            if (Test-Path -LiteralPath $cfgPath) {
+                $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+                if ($cfg -and $cfg.git_path -and ($cfg.git_path -notmatch 'git-ai') -and (Test-Path -LiteralPath $cfg.git_path)) {
+                    $gitPath = $cfg.git_path
+                }
+            }
+        } catch { }
+    }
+
+    # If still not found, fail with a clear message
+    if (-not $gitPath) {
+        Write-ErrorAndExit "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    }
+
+    try {
+        & $gitPath --version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'bad' }
+    } catch {
+        Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    }
+
+    return $gitPath
 }
 
 # Ensure $PathToAdd is inserted before any PATH entry that contains "git" (case-insensitive)
@@ -130,6 +165,9 @@ function Set-PathPrependBeforeGit {
     return $updatedScope
 }
 
+# Detect standard Git early and validate (fail-fast behavior)
+$stdGitPath = Get-StdGitPath
+
 # Detect architecture and OS
 $arch = Get-Architecture
 if (-not $arch) { Write-ErrorAndExit "Unsupported architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)" }
@@ -187,8 +225,11 @@ $gitShim = Join-Path $installDir 'git.exe'
 Copy-Item -Force -Path $finalExe -Destination $gitShim
 try { Unblock-File -Path $gitShim -ErrorAction SilentlyContinue } catch { }
 
-# Detect standard Git path to avoid recursion (used to seed JSON config)
-$stdGitPath = Get-StdGitPath
+# Create a shim so calling `git-og` invokes the standard Git
+$gitOgShim = Join-Path $installDir 'git-og.cmd'
+$gitOgShimContent = "@echo off$([Environment]::NewLine)`"$stdGitPath`" %*$([Environment]::NewLine)"
+Set-Content -Path $gitOgShim -Value $gitOgShimContent -Encoding ASCII -Force
+try { Unblock-File -Path $gitOgShim -ErrorAction SilentlyContinue } catch { }
 
 # Install hooks
 Write-Host 'Setting up IDE/agent hooks...'
@@ -196,7 +237,7 @@ try {
     & $finalExe install-hooks | Out-Host
     Write-Success 'Successfully set up IDE/agent hooks'
 } catch {
-    Write-Host 'Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks.' -ForegroundColor Yellow
+    Write-Warning "Warning: Failed to set up IDE/agent hooks. Please try running 'git-ai install-hooks' manually."
 }
 
 # Update PATH so our shim takes precedence over any Git entries
@@ -215,10 +256,6 @@ try {
     $configDir = Join-Path $HOME '.git-ai'
     $configJsonPath = Join-Path $configDir 'config.json'
     New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-
-    if (-not $stdGitPath) {
-        Write-Host "Warning: Could not detect a standard git binary on PATH.`nYou can manually set it in: $configJsonPath" -ForegroundColor Yellow
-    }
 
     $cfg = @{ git_path = $stdGitPath; ignore_prompts = $false } | ConvertTo-Json -Compress
     $cfg | Out-File -FilePath $configJsonPath -Encoding UTF8 -Force

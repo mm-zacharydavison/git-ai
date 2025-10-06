@@ -6,6 +6,7 @@ IFS=$'\n\t'
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 # GitHub repository details
@@ -15,6 +16,10 @@ REPO="acunniffe/git-ai"
 error() {
     echo -e "${RED}Error: $1${NC}" >&2
     exit 1
+}
+
+warn() {
+    echo -e "${YELLOW}Warning: $1${NC}" >&2
 }
 
 # Function to print success messages
@@ -67,13 +72,44 @@ detect_std_git() {
         git_path=$(which git 2>/dev/null || true)
     fi
 
-	# Ensure we never return a path for git that leads to ~/.git-ai (recursive)
-	if [ -n "$git_path" ] && [[ "$git_path" == *"/.git-ai/"* ]]; then
+	# Ensure we never return a path for git that contains git-ai (recursive)
+	if [ -n "$git_path" ] && [[ "$git_path" == *"git-ai"* ]]; then
 		git_path=""
 	fi
 
+    # If detection failed or was our own shim, try to recover from saved config
+    if [ -z "$git_path" ]; then
+        local cfg_json="$HOME/.git-ai/config.json"
+        if [ -f "$cfg_json" ]; then
+            # Extract git_path value without jq
+            local cfg_git_path
+            cfg_git_path=$(sed -n 's/.*"git_path"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$cfg_json" | head -n1 || true)
+            if [ -n "$cfg_git_path" ] && [[ "$cfg_git_path" != *"git-ai"* ]]; then
+                if "$cfg_git_path" --version >/dev/null 2>&1; then
+                    git_path="$cfg_git_path"
+                fi
+            fi
+        fi
+    fi
+
+    # Fail if we couldn't find a standard git
+    if [ -z "$git_path" ]; then
+        error "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    fi
+
+    # Verify detected git is usable
+    if ! "$git_path" --version >/dev/null 2>&1; then
+        error "Detected git at $git_path is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    fi
+
     echo "$git_path"
 }
+
+# Detect shell and get alias information
+SHELL_INFO=$(detect_shell)
+SHELL_NAME=$(echo "$SHELL_INFO" | cut -d'|' -f1)
+CONFIG_FILE=$(echo "$SHELL_INFO" | cut -d'|' -f2)
+STD_GIT_PATH=$(detect_std_git)
 
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -138,37 +174,31 @@ chmod +x "${INSTALL_DIR}/git-ai"
 # Symlink git to git-ai
 ln -sf "${INSTALL_DIR}/git-ai" "${INSTALL_DIR}/git"
 
+# Symlink git-og to the detected standard git path
+ln -sf "$STD_GIT_PATH" "${INSTALL_DIR}/git-og"
+
 # Remove quarantine attribute on macOS
 if [ "$OS" = "macos" ]; then
     xattr -d com.apple.quarantine "${INSTALL_DIR}/git-ai" 2>/dev/null || true
 fi
 
-# Detect shell and get alias information
-SHELL_INFO=$(detect_shell)
-SHELL_NAME=$(echo "$SHELL_INFO" | cut -d'|' -f1)
-CONFIG_FILE=$(echo "$SHELL_INFO" | cut -d'|' -f2)
-STD_GIT_PATH=$(detect_std_git)
 PATH_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
+
+success "Successfully installed git-ai into ${INSTALL_DIR}"
+success "You can now run 'git-ai' from your terminal"
 
 # Install hooks
 echo "Setting up IDE/agent hooks..."
 if ! ${INSTALL_DIR}/git-ai install-hooks; then
-    echo "Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks." >&2
+    warn "Warning: Failed to set up IDE/agent hooks. Please try running 'git-ai install-hooks' manually."
 else
     success "Successfully set up IDE/agent hooks"
 fi
-
-success "Successfully installed git-ai into ${INSTALL_DIR}"
-success "You can now run 'git-ai' from your terminal"
 
 # Write JSON config at ~/.git-ai/config.json
 CONFIG_DIR="$HOME/.git-ai"
 CONFIG_JSON_PATH="$CONFIG_DIR/config.json"
 mkdir -p "$CONFIG_DIR"
-
-if [ -z "$STD_GIT_PATH" ]; then
-    echo -e "${RED}Warning:${NC} Could not detect a standard git binary on PATH.\nYou can manually set it in: $CONFIG_JSON_PATH" >&2
-fi
 
 TMP_CFG="$CONFIG_JSON_PATH.tmp.$$"
 cat >"$TMP_CFG" <<EOF
