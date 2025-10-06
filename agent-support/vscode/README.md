@@ -1,6 +1,6 @@
-# VSCode `git-ai` extension
+# VS Code `git-ai` extension
 
-# [Install `git-ai for VS Code here!`](https://open-vsx.org/extension/acunniffe/git-ai)
+# [Install `git-ai for VS Code here!`](https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode)
 
 Search for "git-ai for VS Code" in VS Code Extensions tab
 

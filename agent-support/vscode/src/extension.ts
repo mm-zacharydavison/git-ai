@@ -132,7 +132,7 @@ class AIEditManager {
       }
 
       exec(
-        `git-ai checkpoint ${author === "ai" ? "vscode" : ""}`,
+        `git-ai checkpoint ${author === "ai" ? "github-copilot" : ""}`,
         { cwd: workspaceRoot },
         (error) => {
           if (error) {
