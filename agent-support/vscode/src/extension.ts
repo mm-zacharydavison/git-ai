@@ -1,384 +1,268 @@
 import * as vscode from "vscode";
-import debounce from "lodash.debounce";
 import { exec } from "child_process";
 
-// Store the git-ai version for later use
-let gitAiVersion: string | null = null;
+class AIEditManager {
+  private gitAiVersion: string | null = null;
+  private hasShownGitAiMissingMessage = false;
+  private lastHumanCheckpointAt: Date | null = null;
+  private pendingSaves = new Map<string, {
+    timestamp: number;
+    timer: NodeJS.Timeout;
+  }>();
+  private snapshotOpenEvents = new Map<string, {
+    timestamp: number;
+    count: number;
+  }>();
+  private readonly SAVE_EVENT_DEBOUNCE_WINDOW_MS = 300;
+  private readonly HUMAN_CHECKPOINT_DEBOUNCE_MS = 500;
 
-// Function to get the stored git-ai version
-export function getGitAiVersion(): string | null {
-  return gitAiVersion;
-}
+  constructor() {}
 
-interface ChangeEvent {
-  timestamp: number;
-  contentChanges: readonly vscode.TextDocumentContentChangeEvent[];
-  isPaste: boolean;
-}
+  public handleSaveEvent(doc: vscode.TextDocument): void {
+    const filePath = doc.uri.fsPath;
 
-const showCheckpointMessage = () => {
-  const config = vscode.workspace.getConfiguration("vscodeGitAi");
-  return Boolean(config.get("enableCheckpointLogging"));
-};
-
-class AIDetector {
-  private recentChanges: ChangeEvent[] = [];
-  private lastPasteTime = 0;
-  private lastUndoTime = 0;
-  private lastRedoTime = 0;
-  private readonly PASTE_THRESHOLD = 50; // ms
-  private readonly UNDO_REDO_THRESHOLD = 50; // ms
-  private readonly CHANGE_HISTORY_WINDOW = 2000; // ms
-  private readonly MIN_LINES_FOR_AI = 2; // Minimum lines to consider AI insertion
-  private readonly MIN_CHARS_PER_LINE = 20; // Minimum chars per line to consider meaningful
-  private debouncedHumanEdit: (() => void) | null = null;
-  private humanEditTimeout: NodeJS.Timeout | null = null;
-  private aiDetectedRecently = false;
-
-  constructor() {
-    // Register our paste command that delegates to the original
-    vscode.commands.registerCommand(
-      "vscode-git-ai.pasteWithDetection",
-      async () => {
-        this.lastPasteTime = Date.now();
-        // Execute the original paste functionality
-        await vscode.commands.executeCommand(
-          "editor.action.clipboardPasteAction"
-        );
-      }
-    );
-
-    // Register undo command
-    vscode.commands.registerCommand(
-      "vscode-git-ai.undoWithDetection",
-      async () => {
-        this.lastUndoTime = Date.now();
-        // Execute the original undo functionality
-        await vscode.commands.executeCommand("undo");
-      }
-    );
-
-    // Register redo command
-    vscode.commands.registerCommand(
-      "vscode-git-ai.redoWithDetection",
-      async () => {
-        this.lastRedoTime = Date.now();
-        // Execute the original redo functionality
-        await vscode.commands.executeCommand("redo");
-      }
-    );
-  }
-
-  private isRecentPaste(): boolean {
-    return Date.now() - this.lastPasteTime < this.PASTE_THRESHOLD;
-  }
-
-  private isRecentUndo(): boolean {
-    return Date.now() - this.lastUndoTime < this.UNDO_REDO_THRESHOLD;
-  }
-
-  private isRecentRedo(): boolean {
-    return Date.now() - this.lastRedoTime < this.UNDO_REDO_THRESHOLD;
-  }
-
-  private isRecentUndoOrRedo(): boolean {
-    return this.isRecentUndo() || this.isRecentRedo();
-  }
-
-  private analyzeContentChanges(
-    changes: readonly vscode.TextDocumentContentChangeEvent[]
-  ): {
-    totalLines: number;
-    avgCharsPerLine: number;
-    hasNewlines: boolean;
-    isBulkInsertion: boolean;
-  } {
-    let totalLines = 0;
-    let totalChars = 0;
-    let hasNewlines = false;
-    let isBulkInsertion = false;
-
-    for (const change of changes) {
-      const text = change.text;
-      const lines = text.split("\n");
-      totalLines += lines.length;
-      totalChars += text.length;
-
-      if (text.includes("\n")) {
-        hasNewlines = true;
-      }
-
-      // Check if this looks like a bulk insertion (multiple lines with substantial content)
-      if (lines.length >= this.MIN_LINES_FOR_AI) {
-        const avgCharsPerLine = text.length / lines.length;
-        if (avgCharsPerLine >= this.MIN_CHARS_PER_LINE) {
-          isBulkInsertion = true;
-        }
-      }
+    // Clear any existing timer for this file
+    const existing = this.pendingSaves.get(filePath);
+    if (existing) {
+      clearTimeout(existing.timer);
     }
 
-    const avgCharsPerLine = totalLines > 0 ? totalChars / totalLines : 0;
+    // Set up new debounce timer
+    const timer = setTimeout(() => {
+      this.evaluateSaveForCheckpoint(filePath);
+    }, this.SAVE_EVENT_DEBOUNCE_WINDOW_MS);
 
-    return {
-      totalLines,
-      avgCharsPerLine,
-      hasNewlines,
-      isBulkInsertion,
-    };
-  }
-
-  private normalizeContent(text: string): string {
-    return text
-      .replace(/\s+/g, "") // Remove all whitespace (spaces, tabs, newlines)
-      .replace(/[;()]/g, "") // Remove semicolons and parentheses
-      .toLowerCase(); // Normalize case for comparison
-  }
-
-  private isFormattingChange(
-    changes: readonly vscode.TextDocumentContentChangeEvent[],
-    document: vscode.TextDocument
-  ): boolean {
-    for (const change of changes) {
-      const beforeText =
-        change.rangeLength > 0 ? document.getText(change.range) : "";
-      const beforeNormalized = this.normalizeContent(beforeText);
-      const afterNormalized = this.normalizeContent(change.text);
-
-      // If the normalized content is the same, it's just formatting
-      if (beforeNormalized === afterNormalized) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private isLikelyAIInsertion(
-    changes: readonly vscode.TextDocumentContentChangeEvent[],
-    document: vscode.TextDocument
-  ): boolean {
-    // If it's a recent paste, undo, or redo, it's probably not AI
-    if (this.isRecentPaste() || this.isRecentUndoOrRedo()) {
-      return false;
-    }
-
-    // Check if this is just a formatting change
-    if (this.isFormattingChange(changes, document)) {
-      return false;
-    }
-
-    const analysis = this.analyzeContentChanges(changes);
-
-    // Heuristic 1: Bulk insertion with multiple lines
-    if (analysis.isBulkInsertion) {
-      return true;
-    }
-
-    // Heuristic 2: Multiple lines with substantial content
-    if (
-      analysis.totalLines >= this.MIN_LINES_FOR_AI &&
-      analysis.avgCharsPerLine >= this.MIN_CHARS_PER_LINE
-    ) {
-      return true;
-    }
-
-    // Heuristic 3: Single large insertion (could be AI completing a line)
-    if (
-      changes.length === 1 &&
-      changes[0].text.length > 50 &&
-      !this.isRecentPaste() &&
-      !this.isRecentUndoOrRedo()
-    ) {
-      return true;
-    }
-
-    return false;
-  }
-
-  public async processChange(
-    event: vscode.TextDocumentChangeEvent
-  ): Promise<void> {
-    const changeEvent: ChangeEvent = {
+    this.pendingSaves.set(filePath, {
       timestamp: Date.now(),
-      contentChanges: event.contentChanges,
-      isPaste: this.isRecentPaste(),
-    };
+      timer
+    });
 
-    // Add to recent changes
-    this.recentChanges.push(changeEvent);
+    console.log('[git-ai] AIEditManager: Save event tracked for', filePath);
+  }
 
-    // Clean up old changes
-    this.recentChanges = this.recentChanges.filter(
-      (change) => Date.now() - change.timestamp < this.CHANGE_HISTORY_WINDOW
-    );
+  public handleOpenEvent(doc: vscode.TextDocument): void {
+    if (doc.uri.scheme === "chat-editing-snapshot-text-model") {
+      const filePath = doc.uri.fsPath;
+      const now = Date.now();
 
-    // Check if this looks like AI insertion
-    const isAI = this.isLikelyAIInsertion(event.contentChanges, event.document);
-
-    if (isAI) {
-      // Cancel any pending human edit notification
-      this.cancelHumanEditNotification();
-      this.aiDetectedRecently = true;
-      await this.onAIDetected(event);
-
-      // Reset the flag after 4.5 seconds to cover the full human edit timeout period plus a small buffer
-      // This prevents race conditions where human edits could trigger during the 4-second timeout window
-      setTimeout(() => {
-        this.aiDetectedRecently = false;
-      }, 4500);
-    } else {
-      // Only trigger human edit if AI hasn't been detected recently
-      if (!this.aiDetectedRecently) {
-        this.triggerHumanEditNotification();
+      const existing = this.snapshotOpenEvents.get(filePath);
+      if (existing) {
+        existing.count++;
+        existing.timestamp = now;
       } else {
-        // Log when human edits are suppressed due to recent AI detection
-        if (showCheckpointMessage()) {
-          console.log("Human edit suppressed due to recent AI detection");
+        this.snapshotOpenEvents.set(filePath, {
+          timestamp: now,
+          count: 1
+        });
+      }
+
+      console.log('[git-ai] AIEditManager: Snapshot open event tracked for', filePath, 'count:', this.snapshotOpenEvents.get(filePath)?.count);
+    }
+  }
+
+  public handleCloseEvent(doc: vscode.TextDocument): void {
+    if (doc.uri.scheme === "chat-editing-snapshot-text-model") {
+      console.log('[git-ai] AIEditManager: Snapshot close event detected, triggering human checkpoint');
+      this.checkpoint("human");
+    }
+  }
+
+  private evaluateSaveForCheckpoint(filePath: string): void {
+    const saveInfo = this.pendingSaves.get(filePath);
+    if (!saveInfo) {
+      return;
+    }
+
+    const snapshotInfo = this.snapshotOpenEvents.get(filePath);
+
+    // Check if we have 1+ snapshot open events within the debounce window
+    if (snapshotInfo && snapshotInfo.count >= 1) {
+      console.log('[git-ai] AIEditManager: AI edit detected for', filePath, '- triggering AI checkpoint');
+      this.checkpoint("ai");
+    } else {
+      console.log('[git-ai] AIEditManager: No AI pattern detected for', filePath, '- triggering human checkpoint');
+      this.checkpoint("human");
+    }
+
+    // Cleanup
+    this.pendingSaves.delete(filePath);
+    this.snapshotOpenEvents.delete(filePath);
+  }
+
+  public triggerInitialHumanCheckpoint(): void {
+    console.log('[git-ai] AIEditManager: Triggering initial human checkpoint');
+    this.checkpoint("human");
+  }
+
+  async checkpoint(author: "human" | "ai"): Promise<boolean> {
+    if (!(await this.checkGitAi())) {
+      return false;
+    }
+
+    // Throttle human checkpoints
+    if (author === "human") {
+      const now = new Date();
+      if (this.lastHumanCheckpointAt && (now.getTime() - this.lastHumanCheckpointAt.getTime()) < this.HUMAN_CHECKPOINT_DEBOUNCE_MS) {
+        console.log('[git-ai] AIEditManager: Skipping human checkpoint due to debounce');
+        return false;
+      }
+      this.lastHumanCheckpointAt = now;
+    }
+    
+    return new Promise<boolean>((resolve, reject) => {
+      let workspaceRoot: string | undefined;
+
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        const documentUri = activeEditor.document.uri;
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+        if (workspaceFolder) {
+          workspaceRoot = workspaceFolder.uri.fsPath;
         }
       }
-    }
-  }
 
-  private cancelHumanEditNotification(): void {
-    if (this.humanEditTimeout) {
-      clearTimeout(this.humanEditTimeout);
-      this.humanEditTimeout = null;
-    }
-  }
+      if (!workspaceRoot) {
+        workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      }
 
-  private triggerHumanEditNotification(): void {
-    // Cancel any existing timeout
-    this.cancelHumanEditNotification();
+      if (!workspaceRoot) {
+        vscode.window.showErrorMessage("No workspace root found");
+        resolve(false);
+        return;
+      }
 
-    this.humanEditTimeout = setTimeout(() => {
-      checkpoint("human");
-      this.humanEditTimeout = null;
-    }, 4000);
-  }
-
-  private async onAIDetected(
-    event: vscode.TextDocumentChangeEvent
-  ): Promise<void> {
-    const analysis = this.analyzeContentChanges(event.contentChanges);
-
-    // Save all open documents before creating checkpoint
-    await this.saveAllOpenDocuments();
-
-    checkpoint("ai");
-    // Only show notification if enabled in settings
-    if (showCheckpointMessage()) {
-      vscode.window.showInformationMessage(
-        `AI Code Insertion Detected! Added ${
-          analysis.totalLines
-        } lines with ${Math.round(analysis.avgCharsPerLine)} chars per line.`
+      exec(
+        `git-ai checkpoint ${author === "ai" ? "vscode" : ""}`,
+        { cwd: workspaceRoot },
+        (error) => {
+          if (error) {
+            const config = vscode.workspace.getConfiguration("gitai");
+            if (config.get("enableCheckpointLogging")) {
+              vscode.window.showInformationMessage(
+                "Error with checkpoint: " + error.message
+              );
+            }
+            resolve(false);
+          } else {
+            const config = vscode.workspace.getConfiguration("gitai");
+            if (config.get("enableCheckpointLogging")) {
+              vscode.window.showInformationMessage(
+                "Checkpoint created " + author
+              );
+            }
+            resolve(true);
+          }
+        }
       );
-    }
+    });
   }
 
-  private async saveAllOpenDocuments(): Promise<void> {
-    try {
-      // Get all open text editors
-      const openEditors = vscode.window.visibleTextEditors;
-
-      // Save all documents that have unsaved changes
-      const savePromises = openEditors
-        .filter((editor) => editor.document.isDirty)
-        .map((editor) => editor.document.save());
-
-      if (savePromises.length > 0) {
-        await Promise.all(savePromises);
-        if (showCheckpointMessage()) {
-          console.log(
-            `Saved ${savePromises.length} open documents before AI checkpoint`
-          );
-        }
-      }
-    } catch (error) {
-      console.error("Error saving documents:", error);
+  async checkGitAi(): Promise<boolean> {
+    if (this.gitAiVersion) {
+      return true;
     }
+    // TODO Consider only re-checking every X attempts
+
+
+
+    return new Promise((resolve) => {
+      exec("git-ai --version", (error, stdout, stderr) => {
+        if (error) {
+          if (!this.hasShownGitAiMissingMessage) {
+            // Show startup notification
+            vscode.window.showInformationMessage(
+              "git-ai not installed. Visit https://github.com/acunniffe/git-ai to install it."
+            );
+            this.hasShownGitAiMissingMessage = true;
+          }
+          // not installed. do nothing
+          resolve(false);
+        } else {
+          // Save the version for later use
+          this.gitAiVersion = stdout.trim();
+
+          // Show startup notification
+          vscode.window.showInformationMessage(
+            `🤖 AI Code Detector is now active! (git-ai v${this.gitAiVersion})`
+          );
+          resolve(true);
+        }
+      });
+    });
   }
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  // Check if git-ai CLI is installed
-  exec("git-ai --version", (error, stdout, stderr) => {
-    if (error) {
-      // Show startup notification
-      vscode.window.showInformationMessage(
-        "git-ai not installed. Visit https://github.com/acunniffe/git-ai to install it."
-      );
-      // not installed. do nothing
-    } else {
-      // Save the version for later use
-      gitAiVersion = stdout.split(" ")[1].trim();
+  console.log('[git-ai] extension activated');
 
-      const aiDetector = new AIDetector();
-      // Listen for text document changes
-      const textDocumentChangeDisposable =
-        vscode.workspace.onDidChangeTextDocument(async (event) => {
-          await aiDetector.processChange(event);
-        });
+  const aiEditManager = new AIEditManager();
 
-      context.subscriptions.push(textDocumentChangeDisposable);
-      // Show startup notification
-      vscode.window.showInformationMessage(
-        `🤖 AI Code Detector is now active! (git-ai v${gitAiVersion})`
-      );
-    }
+  // Trigger initial human checkpoint
+  aiEditManager.triggerInitialHumanCheckpoint();
+
+  // Log all initially open files
+  vscode.workspace.textDocuments.forEach(doc => {
+    console.log('[git-ai] initial open file', doc);
   });
+
+  // Change event
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      console.log('[git-ai] change event', event);
+    })
+  );
+
+  // Save event
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      console.log('[git-ai] save event', doc);
+      aiEditManager.handleSaveEvent(doc);
+    })
+  );
+
+  // Open event
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      console.log('[git-ai] open event', doc);
+      aiEditManager.handleOpenEvent(doc);
+    })
+  );
+
+  // Close event
+  context.subscriptions.push(
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      console.log('[git-ai] close event', doc);
+      aiEditManager.handleCloseEvent(doc);
+    })
+  );
+
+  // Will save event
+  context.subscriptions.push(
+    vscode.workspace.onWillSaveTextDocument((event) => {
+      console.log('[git-ai] will save event', event);
+    })
+  );
+
+  // Create event
+  context.subscriptions.push(
+    vscode.workspace.onDidCreateFiles((event) => {
+      console.log('[git-ai] create event', event);
+    })
+  );
+
+  // Delete event
+  context.subscriptions.push(
+    vscode.workspace.onDidDeleteFiles((event) => {
+      console.log('[git-ai] delete event', event);
+    })
+  );
+
+  // Rename event
+  context.subscriptions.push(
+    vscode.workspace.onDidRenameFiles((event) => {
+      console.log('[git-ai] rename event', event);
+    })
+  );
 }
 
-export function checkpoint(author: "human" | "ai") {
-  return new Promise<boolean>((resolve, reject) => {
-    // Get the workspace root directory for the current active editor
-    let workspaceRoot: string | undefined;
-
-    // Try to get workspace from active editor first
-    const activeEditor = vscode.window.activeTextEditor;
-    if (activeEditor) {
-      const documentUri = activeEditor.document.uri;
-      const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
-      if (workspaceFolder) {
-        workspaceRoot = workspaceFolder.uri.fsPath;
-      }
-    }
-
-    // Fallback to first workspace folder if no active editor or workspace folder found
-    if (!workspaceRoot) {
-      workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    }
-
-    if (!workspaceRoot) {
-      vscode.window.showErrorMessage("No workspace root found");
-      resolve(false);
-      return;
-    }
-
-    exec(
-      gitAiVersion?.startsWith("1.")
-        ? `git-ai checkpoint ${author === "ai" ? "vscode" : ""}`
-        : // legacy pre 1.0.0
-          `git-ai checkpoint ${author === "ai" ? "--author vscode" : ""}`,
-      { cwd: workspaceRoot },
-      (error, stdout, stderr) => {
-        if (error) {
-          if (showCheckpointMessage()) {
-            vscode.window.showInformationMessage(
-              "Error with checkpoint: " + error.message
-            );
-          }
-          resolve(false);
-        } else {
-          if (showCheckpointMessage()) {
-            vscode.window.showInformationMessage(
-              "Checkpoint created " + author
-            );
-          }
-          resolve(true);
-        }
-      }
-    );
-  });
-}
-
-// This method is called when your extension is deactivated
 export function deactivate() {}
