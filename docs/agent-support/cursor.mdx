@@ -1,0 +1,36 @@
+---
+title: Cursor
+---
+
+# Using Cursor with `git-ai`
+
+`git-ai` fully supports both authorship and prompt tracking for Cursor (IDE and CLI agent). To use `git-ai` with Cursor, just run `git-ai install-hooks`.
+
+If you'd like to verify that Cursor has picked up your hooks: 
+
+1. Cmd+Shift+P to open Cursor command input
+2. In the input box, type `Output: Show Output Channels`
+3. From the dropdown, select or type `Hooks`
+4. You should see in the logs a message like `Loaded 2 user hook(s) for steps: afterFileEdit, beforeSubmitPrompt` indicating that Cursor has loaded the hooks.
+
+## How it works
+
+`git-ai` adds hooks to your user-level Cursor Settings [`~/.cursor/hooks.json`](https://cursor.com/docs/agent/hooks). These hooks automatically call `git-ai` before and after file edit tool calls to ensure accurate AI authorship tracking.
+
+```json
+{
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "/Users/svarlamov/projects/git-ai/target/debug/git-ai checkpoint cursor --hook-input \"$(cat)\""
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "/Users/svarlamov/projects/git-ai/target/debug/git-ai checkpoint cursor --hook-input \"$(cat)\""
+      }
+    ]
+  },
+  "version": 1
+}
+```
