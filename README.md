@@ -51,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 ### How it works
 
-`git-ai` is implemented as a git CLI wrapper. It proxies commands, args, and flags to your `git` binary. You and your IDEs won't notice the difference, but all your code will be annotated with AI Authorship.
+`git-ai` is a git CLI wrapper. It proxies commands, args, and flags to your `git` binary. You and your IDEs won't notice the difference, but all your code will be annotated with AI Authorship.
 
 Internally, `git-ai` creates checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system, they call `checkpoint agent-name ...` to mark their contributions as AI-generated and to save the associated propmpts. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine. When you commit, `git-ai` compresses and packages the final authorship log and prompt transcripts into a git note attached to the commit.
 
