@@ -7,19 +7,23 @@ use crate::git::repository::Repository;
 
 #[derive(Debug, Clone)]
 pub struct CommitStats {
-    pub human_additions: u32,
-    pub ai_additions: u32,
+    pub human_additions: u32, // Lines written only by humans
+    pub mixed_additions: u32, // AI-generated lines that were edited by humans
+    pub ai_additions: u32,    // AI-generated lines with no human editingso
     pub ai_accepted: u32,
     pub time_waiting_for_ai: u64, // seconds
     pub git_diff_deleted_lines: u32,
     pub git_diff_added_lines: u32,
 }
 
-pub fn write_stats_to_terminal(stats: &CommitStats) {
+pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
+    let mut output = String::new();
+
     // Set maximum bar width to 40 characters
     let bar_width: usize = 40;
 
     // Calculate total additions for the progress bar
+    // Total = pure human + mixed (AI-edited-by-human) + pure AI
     let total_additions = stats.human_additions + stats.ai_additions;
 
     // Calculate AI acceptance percentage
@@ -29,7 +33,22 @@ pub fn write_stats_to_terminal(stats: &CommitStats) {
         0.0
     };
 
-    // Create progress bar
+    // Create progress bar with three categories
+    // Pure human = human_additions - mixed_additions (overridden lines)
+    let pure_human = stats.human_additions.saturating_sub(stats.mixed_additions);
+
+    let pure_human_bars = if total_additions > 0 {
+        ((pure_human as f64 / total_additions as f64) * bar_width as f64) as usize
+    } else {
+        0
+    };
+
+    let mixed_bars = if total_additions > 0 {
+        ((stats.mixed_additions as f64 / total_additions as f64) * bar_width as f64) as usize
+    } else {
+        0
+    };
+
     let ai_bars = if total_additions > 0 {
         ((stats.ai_additions as f64 / total_additions as f64) * bar_width as f64) as usize
     } else {
@@ -38,21 +57,38 @@ pub fn write_stats_to_terminal(stats: &CommitStats) {
 
     // Ensure human contributions get at least 2 visible blocks if they have more than 1 line
     let min_human_bars = if stats.human_additions > 1 { 2 } else { 0 };
-    let human_bars = if stats.human_additions > 1 {
-        bar_width.saturating_sub(ai_bars).max(min_human_bars)
+    let final_pure_human_bars = if stats.human_additions > 1 {
+        pure_human_bars.max(min_human_bars)
     } else {
-        bar_width.saturating_sub(ai_bars)
+        pure_human_bars
     };
 
-    // Adjust AI bars if we had to give more space to human
-    let final_ai_bars = bar_width.saturating_sub(human_bars);
+    // Adjust other bars if we had to give more space to human
+    let remaining_width = bar_width.saturating_sub(final_pure_human_bars);
+    let total_other_additions = stats.mixed_additions + stats.ai_additions;
 
-    // Build the progress bar with different characters for visual distinction
+    let final_mixed_bars = if total_other_additions > 0 {
+        ((stats.mixed_additions as f64 / total_other_additions as f64) * remaining_width as f64)
+            as usize
+    } else {
+        0
+    };
+
+    let final_ai_bars = remaining_width.saturating_sub(final_mixed_bars);
+
+    // Build the progress bar with three categories
     let mut progress_bar = String::new();
     progress_bar.push_str("you  ");
-    progress_bar.push_str(&"█".repeat(human_bars.saturating_sub(2 * human_bars / 3)));
-    progress_bar.push_str(&"▒".repeat(human_bars.saturating_sub(human_bars / 3)));
+
+    // Pure human bars (darkest)
+    progress_bar.push_str(&"█".repeat(final_pure_human_bars));
+
+    // Mixed bars (medium) - AI-generated but human-edited
+    progress_bar.push_str(&"▒".repeat(final_mixed_bars));
+
+    // AI bars (lightest) - pure AI, untouched
     progress_bar.push_str(&"░".repeat(final_ai_bars));
+
     progress_bar.push_str(" ai");
 
     // Format time waiting for AI
@@ -69,8 +105,13 @@ pub fn write_stats_to_terminal(stats: &CommitStats) {
     };
 
     // Calculate percentages for display
-    let human_percentage = if total_additions > 0 {
-        ((stats.human_additions as f64 / total_additions as f64) * 100.0).round() as u32
+    let pure_human_percentage = if total_additions > 0 {
+        ((pure_human as f64 / total_additions as f64) * 100.0).round() as u32
+    } else {
+        0
+    };
+    let mixed_percentage = if total_additions > 0 {
+        ((stats.mixed_additions as f64 / total_additions as f64) * 100.0).round() as u32
     } else {
         0
     };
@@ -79,54 +120,65 @@ pub fn write_stats_to_terminal(stats: &CommitStats) {
     } else {
         0
     };
-    let mixed_percentage = if stats.human_additions > 0 && stats.ai_additions > 0 {
-        Some(((stats.ai_additions as f64 / total_additions as f64) * 100.0).round() as u32)
-    } else {
-        None
-    };
 
     // Print the stats
+    output.push_str(&progress_bar);
+    output.push('\n');
     println!("{}", progress_bar);
 
     // Print percentage line with proper spacing (40 columns total)
     // "you  " (5) + 40 chars + " ai" (3) = 48 total
     // Human% left-aligned at left edge of bar, AI% right-aligned at right edge of bar
-    if let Some(mixed) = mixed_percentage {
-        // Show mixed percentage in the middle
-        println!(
+    if mixed_percentage > 0 {
+        // Show all three: human, mixed, ai
+        // Human% at left edge, mixed% in middle, AI% at right edge
+        let percentage_line = format!(
             "     {:<3}{:>12}mixed {:>3}%{:>12}{:>3}%",
-            format!("{}%", human_percentage),
+            format!("{}%", pure_human_percentage),
             "",
-            mixed,
+            mixed_percentage,
             "",
             ai_percentage
         );
+        output.push_str(&percentage_line);
+        output.push('\n');
+        println!("{}", percentage_line);
     } else {
-        // No mixed percentage, just show human and AI at bar edges
-        println!(
-            "     {:<3}{:>34}{:>3}%",
-            format!("{}%", human_percentage),
+        // No mixed, just show human and ai at bar edges
+        let percentage_line = format!(
+            "     {:<3}{:>33}{:>3}%",
+            format!("{}%", pure_human_percentage),
             "",
             ai_percentage
         );
+        output.push_str(&percentage_line);
+        output.push('\n');
+        println!("{}", percentage_line);
     }
 
-    let waiting_time_str = if stats.time_waiting_for_ai > 0 {
-        let minutes = stats.time_waiting_for_ai / 60;
-        let seconds = stats.time_waiting_for_ai % 60;
-        if minutes > 0 {
-            format!(" | waited {}m for ai", minutes)
+    // Only show AI stats if there was actually AI code
+    if stats.ai_additions > 0 {
+        let waiting_time_str = if stats.time_waiting_for_ai > 0 {
+            let minutes = stats.time_waiting_for_ai / 60;
+            let seconds = stats.time_waiting_for_ai % 60;
+            if minutes > 0 {
+                format!(" | waited {}m for ai", minutes)
+            } else {
+                format!(" | waited {}s for ai", seconds)
+            }
         } else {
-            format!(" | waited {}s for ai", seconds)
-        }
-    } else {
-        "".to_string()
-    };
+            "".to_string()
+        };
 
-    println!(
-        "     \x1b[90m{:.0}% AI code accepted{}\x1b[0m",
-        ai_acceptance_percentage, waiting_time_str
-    );
+        let ai_acceptance_str = format!(
+            "     \x1b[90m{:.0}% AI code accepted{}\x1b[0m",
+            ai_acceptance_percentage, waiting_time_str
+        );
+        output.push_str(&ai_acceptance_str);
+        output.push('\n');
+        println!("{}", ai_acceptance_str);
+    }
+    return output;
 }
 
 pub fn stats_for_commit_stats(
@@ -144,8 +196,13 @@ pub fn stats_for_commit_stats(
 
     // Step 3: For prompts with > 1 messages, sum all the time between user messages and AI messages.
     // if the last message is a human message, don't count anything
-    let (authorship_human_additions, ai_additions, ai_accepted, time_waiting_for_ai) =
-        analyze_authorship_log(&authorship_log)?;
+    let (
+        authorship_human_additions,
+        mixed_additions,
+        ai_additions,
+        ai_accepted,
+        time_waiting_for_ai,
+    ) = analyze_authorship_log(&authorship_log)?;
 
     // Calculate human additions as the difference between total git diff and AI additions
     // This handles cases where there are no AI-authored lines (authorship log is empty)
@@ -157,6 +214,7 @@ pub fn stats_for_commit_stats(
 
     Ok(CommitStats {
         human_additions,
+        mixed_additions,
         ai_additions,
         ai_accepted,
         time_waiting_for_ai,
@@ -229,8 +287,9 @@ fn get_authorship_log_for_commit(
 /// Analyze authorship log to extract statistics
 fn analyze_authorship_log(
     authorship_log: &AuthorshipLog,
-) -> Result<(u32, u32, u32, u64), GitAiError> {
+) -> Result<(u32, u32, u32, u32, u64), GitAiError> {
     let mut human_additions = 0u32;
+    let mut mixed_additions = 0u32;
     let mut ai_additions = 0u32;
     let mut ai_accepted = 0u32;
     let mut time_waiting_for_ai = 0u64;
@@ -250,7 +309,16 @@ fn analyze_authorship_log(
 
             // Check if this is an AI-generated entry
             if let Some(prompt_record) = authorship_log.metadata.prompts.get(&entry.hash) {
-                ai_additions += lines_in_entry;
+                // This is AI-generated code
+                // Check if it was overridden (edited by humans)
+                if prompt_record.overriden_lines > 0 {
+                    // Mixed: AI-generated but edited by humans
+                    mixed_additions += prompt_record.overriden_lines;
+                    ai_additions += lines_in_entry - prompt_record.overriden_lines;
+                } else {
+                    // Pure AI: no human editing
+                    ai_additions += lines_in_entry;
+                }
 
                 // Count accepted lines (this is a simplified approach)
                 // In a real implementation, you might want to track acceptance more precisely
@@ -271,22 +339,11 @@ fn analyze_authorship_log(
 
     Ok((
         human_additions,
+        mixed_additions,
         ai_additions,
         ai_accepted,
         time_waiting_for_ai,
     ))
-}
-
-/// Get terminal width, with fallback to 80
-fn terminal_width() -> Option<usize> {
-    // Try to get terminal width from environment or use a reasonable default
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .or_else(|| {
-            // Try to get from terminfo or use default
-            Some(80)
-        })
 }
 
 /// Calculate time waiting for AI from transcript messages
@@ -340,6 +397,8 @@ fn calculate_waiting_time(transcript: &crate::authorship::transcript::AiTranscri
 
 #[cfg(test)]
 mod tests {
+    use insta::assert_debug_snapshot;
+
     use super::*;
     use crate::git::test_utils::TmpRepo;
 
@@ -348,23 +407,21 @@ mod tests {
         // Test with mixed human/AI stats
         let stats = CommitStats {
             human_additions: 50,
-            ai_additions: 900,
+            mixed_additions: 40,
+            ai_additions: 100,
             ai_accepted: 25,
-            time_waiting_for_ai: 1900, // 1 minute 30 seconds
+            time_waiting_for_ai: 72009, // 1 minute 30 seconds
             git_diff_deleted_lines: 15,
             git_diff_added_lines: 80,
         };
 
-        // This test just ensures the function doesn't panic
-        // The actual output would be:
-        // you  ░░░░░░░░░░░░░░░░░░░░░▒▒▒▒▒▒▒ ai
-        // +80 -15 (git diff stat) 83% AI code accepted
-        // 1m 30s waiting for ai
-        write_stats_to_terminal(&stats);
+        let mixed_output = write_stats_to_terminal(&stats);
+        assert_debug_snapshot!(mixed_output);
 
         // Test with AI-only stats
         let ai_stats = CommitStats {
             human_additions: 0,
+            mixed_additions: 0,
             ai_additions: 100,
             ai_accepted: 95,
             time_waiting_for_ai: 45,
@@ -372,11 +429,13 @@ mod tests {
             git_diff_added_lines: 100,
         };
 
-        write_stats_to_terminal(&ai_stats);
+        let ai_only_output = write_stats_to_terminal(&ai_stats);
+        assert_debug_snapshot!(ai_only_output);
 
         // Test with human-only stats
         let human_stats = CommitStats {
             human_additions: 75,
+            mixed_additions: 0,
             ai_additions: 0,
             ai_accepted: 0,
             time_waiting_for_ai: 0,
@@ -384,11 +443,13 @@ mod tests {
             git_diff_added_lines: 75,
         };
 
-        write_stats_to_terminal(&human_stats);
+        let human_only_output = write_stats_to_terminal(&human_stats);
+        assert_debug_snapshot!(human_only_output);
 
         // Test with minimal human contribution (should get at least 2 blocks)
         let minimal_human_stats = CommitStats {
             human_additions: 2,
+            mixed_additions: 0,
             ai_additions: 100,
             ai_accepted: 95,
             time_waiting_for_ai: 30,
@@ -396,7 +457,8 @@ mod tests {
             git_diff_added_lines: 102,
         };
 
-        write_stats_to_terminal(&minimal_human_stats);
+        let minimal_human_output = write_stats_to_terminal(&minimal_human_stats);
+        assert_debug_snapshot!(minimal_human_output);
     }
 
     #[test]
