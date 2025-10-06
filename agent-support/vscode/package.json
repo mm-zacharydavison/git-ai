@@ -38,7 +38,10 @@
     "watch": "tsc -watch -p ./",
     "pretest": "yarn run compile && yarn run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "package": "yarn run copy-static && yarn run compile && vsce package",
+    "copy-static": "cp ../../assets/git-ai.png ./git-ai.png",
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "ovsx": "0.10.4",
