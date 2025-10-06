@@ -6,6 +6,7 @@ IFS=$'\n\t'
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 # GitHub repository details
@@ -15,6 +16,10 @@ REPO="acunniffe/git-ai"
 error() {
     echo -e "${RED}Error: $1${NC}" >&2
     exit 1
+}
+
+warn() {
+    echo -e "${YELLOW}Warning: $1${NC}" >&2
 }
 
 # Function to print success messages
@@ -67,8 +72,8 @@ detect_std_git() {
         git_path=$(which git 2>/dev/null || true)
     fi
 
-	# Ensure we never return a path for git that leads to ~/.git-ai (recursive)
-	if [ -n "$git_path" ] && [[ "$git_path" == *"/.git-ai/"* ]]; then
+	# Ensure we never return a path for git that contains git-ai (recursive)
+	if [ -n "$git_path" ] && [[ "$git_path" == *"git-ai"* ]]; then
 		git_path=""
 	fi
 
@@ -164,16 +169,16 @@ fi
 
 PATH_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
 
+success "Successfully installed git-ai into ${INSTALL_DIR}"
+success "You can now run 'git-ai' from your terminal"
+
 # Install hooks
 echo "Setting up IDE/agent hooks..."
 if ! ${INSTALL_DIR}/git-ai install-hooks; then
-    echo "Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks." >&2
+    warn "Warning: Failed to set up IDE/agent hooks. Please try running 'git-ai install-hooks' manually."
 else
     success "Successfully set up IDE/agent hooks"
 fi
-
-success "Successfully installed git-ai into ${INSTALL_DIR}"
-success "You can now run 'git-ai' from your terminal"
 
 # Write JSON config at ~/.git-ai/config.json
 CONFIG_DIR="$HOME/.git-ai"

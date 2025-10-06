@@ -16,6 +16,13 @@ function Write-Success {
     Write-Host $Message -ForegroundColor Green
 }
 
+function Write-Warning {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+    Write-Host $Message -ForegroundColor Yellow
+}
+
 # GitHub repository details
 $Repo = 'acunniffe/git-ai'
 
@@ -44,7 +51,8 @@ function Get-StdGitPath {
     $cmd = Get-Command git.exe -ErrorAction SilentlyContinue
     $gitPath = $null
     if ($cmd -and $cmd.Path) {
-        if ($cmd.Path -notmatch "\\\.git-ai\\") {
+        # Ensure we never return a path for git that contains git-ai (recursive)
+        if ($cmd.Path -notmatch "git-ai") {
             $gitPath = $cmd.Path
         }
     }
@@ -217,7 +225,7 @@ try {
     & $finalExe install-hooks | Out-Host
     Write-Success 'Successfully set up IDE/agent hooks'
 } catch {
-    Write-Host 'Warning: Failed to set up IDE/agent hooks; continuing without IDE/agent hooks.' -ForegroundColor Yellow
+    Write-Warning "Warning: Failed to set up IDE/agent hooks. Please try running 'git-ai install-hooks' manually."
 }
 
 # Update PATH so our shim takes precedence over any Git entries
