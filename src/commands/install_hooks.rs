@@ -653,7 +653,15 @@ fn is_vscode_extension_installed(id_or_vsix: &str) -> Result<bool, GitAiError> {
     // NOTE: We try up to 3 times, because the code CLI is very flaky (throws intermittent JS errors)
     let mut last_error_message: Option<String> = None;
     for attempt in 1..=3 {
-        match Command::new("code").args(["--list-extensions"]).output() {
+        #[cfg(windows)]
+        let cmd_result = Command::new("cmd")
+            .args(["/C", "code", "--list-extensions"])
+            .output();
+
+        #[cfg(not(windows))]
+        let cmd_result = Command::new("code").args(["--list-extensions"]).output();
+
+        match cmd_result {
             Ok(output) => {
                 if !output.status.success() {
                     last_error_message = Some(String::from_utf8_lossy(&output.stderr).to_string());
@@ -679,10 +687,17 @@ fn install_vscode_extension(id_or_vsix: &str) -> Result<(), GitAiError> {
     // NOTE: We try up to 3 times, because the code CLI is very flaky (throws intermittent JS errors)
     let mut last_error_message: Option<String> = None;
     for attempt in 1..=3 {
-        match Command::new("code")
+        #[cfg(windows)]
+        let cmd_status = Command::new("cmd")
+            .args(["/C", "code", "--install-extension", id_or_vsix, "--force"])
+            .status();
+
+        #[cfg(not(windows))]
+        let cmd_status = Command::new("code")
             .args(["--install-extension", id_or_vsix, "--force"])
-            .status()
-        {
+            .status();
+
+        match cmd_status {
             Ok(status) => {
                 if status.success() {
                     return Ok(());
