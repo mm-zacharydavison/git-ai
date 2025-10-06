@@ -57,15 +57,23 @@ function Get-StdGitPath {
         }
     }
 
+    # If detection failed or was our own shim, try to recover from saved config
     if (-not $gitPath) {
-        Write-ErrorAndExit "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+        try {
+            $cfgPath = Join-Path $HOME ".git-ai\config.json"
+            if (Test-Path -LiteralPath $cfgPath) {
+                $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+                if ($cfg -and $cfg.git_path -and ($cfg.git_path -notmatch 'git-ai') -and (Test-Path -LiteralPath $cfg.git_path)) {
+                    $gitPath = $cfg.git_path
+                }
+            }
+        } catch { }
     }
 
     try {
+        if (-not $gitPath) { throw 'missing' }
         & $gitPath --version | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
-        }
+        if ($LASTEXITCODE -ne 0) { throw 'bad' }
     } catch {
         Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
     }

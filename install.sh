@@ -77,6 +77,21 @@ detect_std_git() {
 		git_path=""
 	fi
 
+    # If detection failed or was our own shim, try to recover from saved config
+    if [ -z "$git_path" ]; then
+        local cfg_json="$HOME/.git-ai/config.json"
+        if [ -f "$cfg_json" ]; then
+            # Extract git_path value without jq
+            local cfg_git_path
+            cfg_git_path=$(sed -n 's/.*"git_path"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$cfg_json" | head -n1 || true)
+            if [ -n "$cfg_git_path" ] && [[ "$cfg_git_path" != *"git-ai"* ]]; then
+                if "$cfg_git_path" --version >/dev/null 2>&1; then
+                    git_path="$cfg_git_path"
+                fi
+            fi
+        fi
+    fi
+
     # Fail if we couldn't find a standard git
     if [ -z "$git_path" ]; then
         error "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
