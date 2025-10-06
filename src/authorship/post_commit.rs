@@ -74,11 +74,6 @@ pub fn post_commit(
 
     notes_add(repo, &commit_sha, &authorship_json)?;
 
-    println!(
-        "note restoration {:?}",
-        show_authorship_note(repo, &commit_sha)
-    );
-
     debug_log(&format!(
         "Authorship log written to notes/ai/{}",
         commit_sha

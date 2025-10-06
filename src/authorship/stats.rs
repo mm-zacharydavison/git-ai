@@ -22,6 +22,30 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
     // Set maximum bar width to 40 characters
     let bar_width: usize = 40;
 
+    // Handle deletion-only commits (no additions)
+    if stats.git_diff_added_lines == 0 && stats.git_diff_deleted_lines > 0 {
+        // Show gray bar for deletion-only commit
+        let mut progress_bar = String::new();
+        progress_bar.push_str("you  ");
+        progress_bar.push_str("\x1b[90m"); // Gray color
+        progress_bar.push_str(&" ".repeat(bar_width)); // Gray bar
+        progress_bar.push_str("\x1b[0m"); // Reset color
+        progress_bar.push_str(" ai");
+
+        output.push_str(&progress_bar);
+        output.push('\n');
+        println!("{}", progress_bar);
+
+        // Show "(no additions)" message below the bar
+        let no_additions_msg = format!("     \x1b[90m{:^40}\x1b[0m", "(no additions)");
+        output.push_str(&no_additions_msg);
+        output.push('\n');
+        println!("{}", no_additions_msg);
+
+        // No percentage line or AI stats for deletion-only commits
+        return output;
+    }
+
     // Calculate total additions for the progress bar
     // Total = pure human + mixed (AI-edited-by-human) + pure AI
     let total_additions = stats.human_additions + stats.ai_additions;
@@ -459,6 +483,20 @@ mod tests {
 
         let minimal_human_output = write_stats_to_terminal(&minimal_human_stats);
         assert_debug_snapshot!(minimal_human_output);
+
+        // Test with deletion-only commit (no additions)
+        let deletion_only_stats = CommitStats {
+            human_additions: 0,
+            mixed_additions: 0,
+            ai_additions: 0,
+            ai_accepted: 0,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 25,
+            git_diff_added_lines: 0,
+        };
+
+        let deletion_only_output = write_stats_to_terminal(&deletion_only_stats);
+        assert_debug_snapshot!(deletion_only_output);
     }
 
     #[test]
