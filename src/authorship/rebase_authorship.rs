@@ -237,7 +237,7 @@ pub fn prepare_working_log_after_squash(
     delete_hanging_commit(repo, &temp_commit.to_string())?;
 
     // Step 9: Convert authorship log to checkpoints
-    let checkpoints = new_authorship_log
+    let mut checkpoints = new_authorship_log
         .convert_to_checkpoints_for_squash(human_author)
         .map_err(|e| {
             GitAiError::Generic(format!(
@@ -245,6 +245,44 @@ pub fn prepare_working_log_after_squash(
                 e
             ))
         })?;
+
+    // Step 10: For each checkpoint, read the staged file content and save blobs
+    let working_log = repo
+        .storage
+        .working_log_for_base_commit(target_branch_head_sha);
+
+    for checkpoint in &mut checkpoints {
+        use sha2::{Digest, Sha256};
+        let mut file_hashes = Vec::new();
+
+        for entry in &mut checkpoint.entries {
+            // Read the staged version of the file using git show :path
+            let mut args = repo.global_args_for_exec();
+            args.push("show".to_string());
+            args.push(format!(":{}", entry.file));
+
+            let output = crate::git::repository::exec_git(&args)?;
+            let file_content = String::from_utf8(output.stdout).map_err(|_| {
+                GitAiError::Generic(format!("Failed to read staged file: {}", entry.file))
+            })?;
+
+            // Persist the blob and get its SHA
+            let blob_sha = working_log.persist_file_version(&file_content)?;
+            entry.blob_sha = blob_sha.clone();
+
+            // Collect file path and hash for combined hash calculation
+            file_hashes.push((entry.file.clone(), blob_sha));
+        }
+
+        // Compute combined hash for the checkpoint (same as normal checkpoint logic)
+        file_hashes.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut combined_hasher = Sha256::new();
+        for (file_path, hash) in &file_hashes {
+            combined_hasher.update(file_path.as_bytes());
+            combined_hasher.update(hash.as_bytes());
+        }
+        checkpoint.diff = format!("{:x}", combined_hasher.finalize());
+    }
 
     Ok(checkpoints)
 }
@@ -853,7 +891,7 @@ fn build_commit_path_to_base(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::test_utils::TmpRepo;
+    use crate::git::{find_repository_in_path, test_utils::TmpRepo};
     use insta::assert_debug_snapshot;
 
     // Test amending a commit by adding AI-authored lines at the top of the file.
@@ -1104,21 +1142,19 @@ mod tests {
         )
         .unwrap();
 
-        // Should have 2 checkpoints: 1 human + 1 AI
-        assert_eq!(checkpoints.len(), 2);
+        // Should have 1 checkpoint: 1 AI only (no human checkpoint)
+        assert_eq!(checkpoints.len(), 1);
 
-        // First checkpoint should be human
-        assert_eq!(checkpoints[0].author, "Test User <test@example.com>");
-        assert!(checkpoints[0].agent_id.is_none());
-        assert!(checkpoints[0].transcript.is_none());
+        // Checkpoint should be AI
+        assert_eq!(checkpoints[0].author, "ai");
+        assert!(checkpoints[0].agent_id.is_some());
+        assert!(checkpoints[0].transcript.is_some());
 
-        // Second checkpoint should be AI
-        assert_eq!(checkpoints[1].author, "ai");
-        assert!(checkpoints[1].agent_id.is_some());
-        assert!(checkpoints[1].transcript.is_some());
+        // Verify checkpoint has entries
+        assert!(!checkpoints[0].entries.is_empty());
 
-        // Verify checkpoint entries
-        assert!(!checkpoints[0].entries.is_empty() || !checkpoints[1].entries.is_empty());
+        // Verify blob is saved
+        assert!(!checkpoints[0].entries[0].blob_sha.is_empty());
     }
 
     /// Test merge --squash with out-of-band changes on master (handles 3-way merge)
@@ -1256,27 +1292,242 @@ mod tests {
         )
         .unwrap();
 
-        // Should have 3 checkpoints: 1 human + 2 AI sessions
-        assert_eq!(checkpoints.len(), 3);
+        // Should have 2 checkpoints: 2 AI sessions (no human checkpoint)
+        assert_eq!(checkpoints.len(), 2);
 
-        // Count AI checkpoints
+        // All checkpoints should be AI
         let ai_checkpoints: Vec<_> = checkpoints
             .iter()
             .filter(|c| c.agent_id.is_some())
             .collect();
         assert_eq!(ai_checkpoints.len(), 2);
 
-        // Count human checkpoints
+        // No human checkpoints
         let human_checkpoints: Vec<_> = checkpoints
             .iter()
             .filter(|c| c.agent_id.is_none())
             .collect();
-        assert_eq!(human_checkpoints.len(), 1);
+        assert_eq!(human_checkpoints.len(), 0);
 
         // Verify AI checkpoints have distinct session IDs
         assert_ne!(
             ai_checkpoints[0].agent_id.as_ref().unwrap().id,
             ai_checkpoints[1].agent_id.as_ref().unwrap().id
         );
+    }
+
+    /// Test merge --squash with multiple files modified by different AI sessions
+    #[test]
+    fn test_prepare_working_log_squash_multiple_files() {
+        let tmp_repo = TmpRepo::new().unwrap();
+
+        // Create master branch with multiple files
+        tmp_repo
+            .write_file(
+                "src/main.rs",
+                "fn main() {\n    println!(\"Hello\");\n}\n",
+                true,
+            )
+            .unwrap();
+        tmp_repo
+            .write_file(
+                "src/lib.rs",
+                "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+                true,
+            )
+            .unwrap();
+        tmp_repo
+            .write_file("README.md", "# My Project\n\nA simple project.\n", true)
+            .unwrap();
+        tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+        tmp_repo.commit_with_message("Initial commit").unwrap();
+        let master_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Create feature branch
+        tmp_repo.create_branch("feature").unwrap();
+
+        // First AI session modifies main.rs and lib.rs
+        tmp_repo
+            .write_file(
+                "src/main.rs",
+                "fn main() {\n    println!(\"Hello\");\n    // AI: Added logging\n    log::info!(\"Started\");\n}\n",
+                true,
+            )
+            .unwrap();
+        tmp_repo
+            .write_file(
+                "src/lib.rs",
+                "pub fn add(a: i32, b: i32) -> i32 {\n    // AI: Added validation\n    a + b\n}\n",
+                true,
+            )
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_session_1", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+        tmp_repo
+            .commit_with_message("AI: Add logging and validation")
+            .unwrap();
+
+        // Second AI session modifies README.md only
+        tmp_repo
+            .write_file(
+                "README.md",
+                "# My Project\n\nA simple project.\n\n## AI Generated Features\n- Logging\n- Validation\n",
+                true,
+            )
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_session_2", Some("claude"), Some("cursor"))
+            .unwrap();
+        tmp_repo.commit_with_message("AI: Update README").unwrap();
+
+        // Third AI session adds a new file
+        tmp_repo
+            .write_file("src/utils.rs", "// AI: Utility functions\npub fn log_message(msg: &str) {\n    println!(\"{}\", msg);\n}\n", true)
+            .unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_ai("ai_session_3", Some("gpt-4"), Some("cursor"))
+            .unwrap();
+        tmp_repo.commit_with_message("AI: Add utils").unwrap();
+        let feature_head = tmp_repo.get_head_commit_sha().unwrap();
+
+        // Squash merge into master
+        tmp_repo.checkout_branch("master").unwrap();
+        tmp_repo.merge_squash("feature").unwrap();
+
+        // Test prepare_working_log_after_squash
+        let checkpoints = prepare_working_log_after_squash(
+            &tmp_repo.gitai_repo(),
+            &feature_head,
+            &master_head,
+            "Test User <test@example.com>",
+        )
+        .unwrap();
+
+        // We should have checkpoints for each file modified by each session
+        // Session 1 touched 2 files (main.rs, lib.rs) = 2 checkpoints
+        // Session 2 touched 1 file (README.md) = 1 checkpoint
+        // Session 3 touched 1 file (utils.rs) = 1 checkpoint
+        // Total: 4 checkpoints
+        assert_eq!(
+            checkpoints.len(),
+            4,
+            "Should have 4 checkpoints (one per file per session)"
+        );
+
+        // All checkpoints should be AI
+        let ai_checkpoints: Vec<_> = checkpoints
+            .iter()
+            .filter(|c| c.agent_id.is_some())
+            .collect();
+        assert_eq!(ai_checkpoints.len(), 4, "All checkpoints should be AI");
+
+        // Each checkpoint should have exactly one entry
+        for checkpoint in &checkpoints {
+            assert_eq!(
+                checkpoint.entries.len(),
+                1,
+                "Each checkpoint should have exactly one file entry"
+            );
+        }
+
+        // Verify all checkpoints have non-empty blob_sha
+        for checkpoint in &checkpoints {
+            for entry in &checkpoint.entries {
+                assert!(
+                    !entry.blob_sha.is_empty(),
+                    "Blob SHA should be set for file: {}",
+                    entry.file
+                );
+            }
+        }
+
+        // Verify all checkpoints have non-empty diff hash
+        for checkpoint in &checkpoints {
+            assert!(
+                !checkpoint.diff.is_empty(),
+                "Diff hash should be set for checkpoint"
+            );
+        }
+
+        // Collect all modified files
+        let mut modified_files: Vec<String> = checkpoints
+            .iter()
+            .flat_map(|c| c.entries.iter().map(|e| e.file.clone()))
+            .collect();
+        modified_files.sort();
+        modified_files.dedup();
+
+        // Should have 4 unique files
+        assert_eq!(
+            modified_files.len(),
+            4,
+            "Should have 4 unique modified files"
+        );
+        assert!(modified_files.contains(&"src/main.rs".to_string()));
+        assert!(modified_files.contains(&"src/lib.rs".to_string()));
+        assert!(modified_files.contains(&"README.md".to_string()));
+        assert!(modified_files.contains(&"src/utils.rs".to_string()));
+
+        // Verify we have exactly 3 unique AI sessions
+        let mut session_ids: Vec<String> = checkpoints
+            .iter()
+            .filter_map(|c| c.agent_id.as_ref().map(|id| id.id.clone()))
+            .collect();
+        session_ids.sort();
+        session_ids.dedup();
+        assert_eq!(session_ids.len(), 3, "Should have 3 unique AI sessions");
+    }
+
+    #[test]
+    fn tmp_testing() {
+        let git_ai_path = "git";
+        let repo = find_repository_in_path("/Users/aidancunniffe/Desktop/empty-repo").unwrap();
+        let reset_output = std::process::Command::new(git_ai_path)
+            .arg("reset")
+            .arg("--hard")
+            .current_dir(repo.path().parent().unwrap())
+            .output()
+            .expect("Failed to execute reset command");
+
+        println!("resetting hard - status: {:?}", reset_output.status);
+        if !reset_output.status.success() {
+            println!(
+                "Reset stderr: {}",
+                String::from_utf8_lossy(&reset_output.stderr)
+            );
+            println!(
+                "Reset stdout: {}",
+                String::from_utf8_lossy(&reset_output.stdout)
+            );
+        }
+
+        let merge_output = std::process::Command::new(git_ai_path)
+            .arg("merge")
+            .arg("--squash")
+            .arg("add-titles")
+            .current_dir(repo.path().parent().unwrap())
+            .output()
+            .expect("Failed to execute merge command");
+
+        println!("merge output - status: {:?}", merge_output.status);
+        if !merge_output.status.success() {
+            println!(
+                "Merge stderr: {}",
+                String::from_utf8_lossy(&merge_output.stderr)
+            );
+            println!(
+                "Merge stdout: {}",
+                String::from_utf8_lossy(&merge_output.stdout)
+            );
+        }
+
+        let head = repo.head().unwrap().target().unwrap();
+        println!("head: {}", head);
+
+        let working_log = repo.storage.working_log_for_base_commit(&head);
+
+        let checkpoints = working_log.read_all_checkpoints().unwrap();
+        println!("checkpoints: {:?}", checkpoints);
     }
 }
