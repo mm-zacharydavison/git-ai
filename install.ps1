@@ -70,8 +70,12 @@ function Get-StdGitPath {
         } catch { }
     }
 
+    # If still not found, fail with a clear message
+    if (-not $gitPath) {
+        Write-ErrorAndExit "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    }
+
     try {
-        if (-not $gitPath) { throw 'missing' }
         & $gitPath --version | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'bad' }
     } catch {
