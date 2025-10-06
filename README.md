@@ -55,7 +55,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 Internally, `git-ai` creates checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system, they call `checkpoint agent-name ...` to mark their contributions as AI-generated and to save the associated propmpts. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine. When you commit, `git-ai` compresses and packages the final authorship log and prompt transcripts into a git note attached to the commit.
 
-### Known limitiaitons
+### Known limitations
 
 - Tab completions (from AI or traditional intellisense) are currently considered human edits.
 - Authorship logs will not survive rebase, unless the rebase operation is run without git-ai (for ex, if the rebase is done on GitHub, the authorship logs from the affected commits will be quietly lost).
