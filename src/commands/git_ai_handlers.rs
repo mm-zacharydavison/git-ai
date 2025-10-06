@@ -214,6 +214,18 @@ fn handle_checkpoint(args: &[String]) {
                     }
                 }
             }
+            "github-copilot" => {
+                agent_run_result = Some(AgentRunResult {
+                    agent_id: AgentId {
+                        tool: "github-copilot".to_string(),
+                        id: "unknown".to_string(),
+                        model: "unknown".to_string(),
+                    },
+                    is_human: false,
+                    transcript: None,
+                    repo_working_dir: None,
+                });
+            }
             "mock_ai" => {
                 agent_run_result = Some(AgentRunResult {
                     agent_id: AgentId {
