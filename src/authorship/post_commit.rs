@@ -75,7 +75,7 @@ pub fn post_commit(
     notes_add(repo, &commit_sha, &authorship_json)?;
 
     debug_log(&format!(
-        "Authorship log written to notes/ai/{}",
+        "Authorship log written. View with git notes --ref=ai show {}",
         commit_sha
     ));
 

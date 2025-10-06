@@ -43,6 +43,11 @@ pub fn stats_command(
         (target, name)
     };
 
+    eprintln!(
+        "[DEBUG] Stats command found commit: {} refname: {}",
+        target, refname
+    );
+
     let stats = stats_for_commit_stats(repo, &target, &refname)?;
 
     if json {
