@@ -215,8 +215,8 @@ try { Unblock-File -Path $gitShim -ErrorAction SilentlyContinue } catch { }
 
 # Create a shim so calling `git-og` invokes the standard Git
 $gitOgShim = Join-Path $installDir 'git-og.cmd'
-$gitOgShimContent = "@echo off`r`n\"$stdGitPath\" %*`r`n"
-Set-Content -Path $gitOgShim -Value $gitOgShimContent -Encoding ASCII
+$gitOgShimContent = "@echo off$([Environment]::NewLine)`"$stdGitPath`" %*$([Environment]::NewLine)"
+Set-Content -Path $gitOgShim -Value $gitOgShimContent -Encoding ASCII -Force
 try { Unblock-File -Path $gitOgShim -ErrorAction SilentlyContinue } catch { }
 
 # Install hooks
