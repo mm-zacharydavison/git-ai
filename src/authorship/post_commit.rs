@@ -1,5 +1,6 @@
 use crate::authorship::authorship_log::LineRange;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::stats::{stats_for_commit_stats, write_stats_to_terminal};
 use crate::authorship::working_log::Checkpoint;
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
@@ -140,6 +141,11 @@ pub fn post_commit(
             parent_sha, commit_sha
         ));
     }
+
+    let refname = repo.head()?.name().unwrap().to_string();
+    let stats = stats_for_commit_stats(repo, &commit_sha, &refname)?;
+
+    write_stats_to_terminal(&stats);
 
     Ok((commit_sha.to_string(), authorship_log))
 }

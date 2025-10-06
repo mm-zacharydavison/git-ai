@@ -4,8 +4,6 @@ use crate::authorship::transcript::Message;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
-use similar::{ChangeTag, TextDiff};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct CommitStats {
@@ -15,6 +13,63 @@ pub struct CommitStats {
     pub time_waiting_for_ai: u64, // seconds
     pub git_diff_deleted_lines: u32,
     pub git_diff_added_lines: u32,
+}
+
+pub fn write_stats_to_terminal(stats: &CommitStats) {
+    // Get terminal width, default to 80 if not available
+    let terminal_width = terminal_width().unwrap_or(80);
+    let bar_width = terminal_width.saturating_sub(10); // Leave some padding
+
+    // Calculate total additions for the progress bar
+    let total_additions = stats.human_additions + stats.ai_additions;
+
+    // Calculate AI acceptance percentage
+    let ai_acceptance_percentage = if stats.ai_additions > 0 {
+        (stats.ai_accepted as f64 / stats.ai_additions as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Create progress bar
+    let ai_bars = if total_additions > 0 {
+        ((stats.ai_additions as f64 / total_additions as f64) * bar_width as f64) as usize
+    } else {
+        0
+    };
+    let human_bars = bar_width.saturating_sub(ai_bars);
+
+    // Build the progress bar with different characters for visual distinction
+    let mut progress_bar = String::new();
+    progress_bar.push_str("you  ");
+    progress_bar.push_str(&"░".repeat(human_bars));
+    progress_bar.push_str(&"▒".repeat(ai_bars.saturating_sub(ai_bars / 3)));
+    progress_bar.push_str(&"█".repeat(ai_bars.saturating_sub(2 * ai_bars / 3)));
+    progress_bar.push_str(" ai");
+
+    // Format time waiting for AI
+    let waiting_time_str = if stats.time_waiting_for_ai > 0 {
+        let minutes = stats.time_waiting_for_ai / 60;
+        let seconds = stats.time_waiting_for_ai % 60;
+        if minutes > 0 {
+            format!("{}m {}s", minutes, seconds)
+        } else {
+            format!("{}s", seconds)
+        }
+    } else {
+        "0s".to_string()
+    };
+
+    // Print the stats
+    println!("{}", progress_bar);
+    println!(
+        "+{} -{} (git diff stat) {:.0}% AI code accepted",
+        stats.git_diff_added_lines, stats.git_diff_deleted_lines, ai_acceptance_percentage
+    );
+
+    // Only show waiting time if there was actual waiting
+    if stats.time_waiting_for_ai > 0 {
+        println!("{} waiting for ai", waiting_time_str);
+    }
 }
 
 pub fn stats_for_commit_stats(
@@ -55,205 +110,48 @@ pub fn stats_for_commit_stats(
 
 /// Get git diff statistics between commit and its parent
 fn get_git_diff_stats(repo: &Repository, commit_sha: &str) -> Result<(u32, u32), GitAiError> {
-    // Get the commit object
-    let commit = repo.find_commit(commit_sha.to_string())?;
-
-    // Get parent count
-    let parent_count = commit.parent_count()?;
-
-    if parent_count == 0 {
-        // Initial commit - everything is additions
-        // Get the tree and count all lines
-        let tree = commit.tree()?;
-        let total_lines = count_lines_in_tree(repo, &tree)?;
-        return Ok((total_lines, 0));
-    }
-
-    // For now, just compare with first parent (can be enhanced for merge commits)
-    let parent = commit.parent(0)?;
-    let parent_tree = parent.tree()?;
-    let current_tree = commit.tree()?;
-
-    // Get the diff between trees
-    let diff = get_tree_diff(repo, &parent_tree, &current_tree)?;
-
-    Ok((diff.0, diff.1))
-}
-
-/// Count lines in a git tree recursively
-fn count_lines_in_tree(
-    repo: &Repository,
-    tree: &crate::git::repository::Tree,
-) -> Result<u32, GitAiError> {
-    let mut total_lines = 0u32;
-
-    // Get list of files in tree using git ls-tree
+    // Use git show --numstat to get diff statistics
     let mut args = repo.global_args_for_exec();
-    args.push("ls-tree".to_string());
-    args.push("-r".to_string()); // recursive
-    args.push(tree.id().clone());
+    args.push("show".to_string());
+    args.push("--numstat".to_string());
+    args.push("--format=".to_string()); // No format, just the numstat
+    args.push(commit_sha.to_string());
 
     let output = crate::git::repository::exec_git(&args)?;
     let stdout = String::from_utf8(output.stdout)?;
 
+    let mut added_lines = 0u32;
+    let mut deleted_lines = 0u32;
+
+    // Parse numstat output
     for line in stdout.lines() {
         if line.trim().is_empty() {
             continue;
         }
 
-        // Parse git ls-tree output: mode type sha\tpath
+        // Skip the commit message lines (they don't start with numbers)
+        if !line.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            continue;
+        }
+
+        // Parse numstat format: "added\tdeleted\tfilename"
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 2 {
-            continue;
-        }
-
-        let meta = parts[0];
-        let _path = parts[1];
-
-        // Parse mode and type
-        let meta_parts: Vec<&str> = meta.split_whitespace().collect();
-        if meta_parts.len() < 3 {
-            continue;
-        }
-
-        let object_type = meta_parts[1];
-        let sha = meta_parts[2];
-
-        // Only count blob files
-        if object_type == "blob" {
-            let blob = repo.find_blob(sha.to_string())?;
-            let content = blob.content()?;
-            let content_str = String::from_utf8_lossy(&content);
-            total_lines += content_str.lines().count() as u32;
-        }
-    }
-
-    Ok(total_lines)
-}
-
-/// Get diff between two trees
-fn get_tree_diff(
-    repo: &Repository,
-    parent_tree: &crate::git::repository::Tree,
-    current_tree: &crate::git::repository::Tree,
-) -> Result<(u32, u32), GitAiError> {
-    let mut added_lines = 0u32;
-    let mut deleted_lines = 0u32;
-
-    // Get file lists from both trees
-    let parent_files = get_tree_files(repo, parent_tree)?;
-    let current_files = get_tree_files(repo, current_tree)?;
-
-    // Compare files
-    let all_files: std::collections::HashSet<String> = parent_files
-        .keys()
-        .chain(current_files.keys())
-        .cloned()
-        .collect();
-
-    for file_path in all_files {
-        let parent_content = parent_files.get(&file_path);
-        let current_content = current_files.get(&file_path);
-
-        match (parent_content, current_content) {
-            (None, Some(current)) => {
-                // File was added
-                added_lines += count_lines_in_content(current);
+        if parts.len() >= 2 {
+            // Parse added lines
+            if let Ok(added) = parts[0].parse::<u32>() {
+                added_lines += added;
             }
-            (Some(parent), None) => {
-                // File was deleted
-                deleted_lines += count_lines_in_content(parent);
-            }
-            (Some(parent), Some(current)) => {
-                // File was modified - get diff
-                if parent != current {
-                    let (added, deleted) = diff_content(parent, current);
-                    added_lines += added;
+
+            // Parse deleted lines (handle "-" for binary files)
+            if parts[1] != "-" {
+                if let Ok(deleted) = parts[1].parse::<u32>() {
                     deleted_lines += deleted;
                 }
-            }
-            (None, None) => {
-                // Should not happen
             }
         }
     }
 
     Ok((added_lines, deleted_lines))
-}
-
-/// Get all files in a tree with their content
-fn get_tree_files(
-    repo: &Repository,
-    tree: &crate::git::repository::Tree,
-) -> Result<HashMap<String, String>, GitAiError> {
-    let mut files = HashMap::new();
-
-    let mut args = repo.global_args_for_exec();
-    args.push("ls-tree".to_string());
-    args.push("-r".to_string());
-    args.push(tree.id().clone());
-
-    let output = crate::git::repository::exec_git(&args)?;
-    let stdout = String::from_utf8(output.stdout)?;
-
-    for line in stdout.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 2 {
-            continue;
-        }
-
-        let meta = parts[0];
-        let path = parts[1];
-
-        let meta_parts: Vec<&str> = meta.split_whitespace().collect();
-        if meta_parts.len() < 3 {
-            continue;
-        }
-
-        let object_type = meta_parts[1];
-        let sha = meta_parts[2];
-
-        if object_type == "blob" {
-            let blob = repo.find_blob(sha.to_string())?;
-            let content = blob.content()?;
-            let content_str = String::from_utf8_lossy(&content);
-            files.insert(path.to_string(), content_str.to_string());
-        }
-    }
-
-    Ok(files)
-}
-
-/// Count lines in content string
-fn count_lines_in_content(content: &str) -> u32 {
-    content.lines().count() as u32
-}
-
-/// Get diff between two content strings
-fn diff_content(parent: &str, current: &str) -> (u32, u32) {
-    let diff = TextDiff::from_lines(parent, current);
-    let mut added = 0u32;
-    let mut deleted = 0u32;
-
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Equal => {
-                // No change
-            }
-            ChangeTag::Insert => {
-                added += change.value().lines().count() as u32;
-            }
-            ChangeTag::Delete => {
-                deleted += change.value().lines().count() as u32;
-            }
-        }
-    }
-
-    (added, deleted)
 }
 
 /// Get authorship log for a commit
@@ -322,6 +220,18 @@ fn analyze_authorship_log(
     ))
 }
 
+/// Get terminal width, with fallback to 80
+fn terminal_width() -> Option<usize> {
+    // Try to get terminal width from environment or use a reasonable default
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            // Try to get from terminfo or use default
+            Some(80)
+        })
+}
+
 /// Calculate time waiting for AI from transcript messages
 fn calculate_waiting_time(transcript: &crate::authorship::transcript::AiTranscript) -> u64 {
     let mut total_waiting_time = 0u64;
@@ -377,6 +287,50 @@ mod tests {
     use crate::git::test_utils::TmpRepo;
 
     #[test]
+    fn test_terminal_stats_display() {
+        // Test with mixed human/AI stats
+        let stats = CommitStats {
+            human_additions: 50,
+            ai_additions: 30,
+            ai_accepted: 25,
+            time_waiting_for_ai: 90, // 1 minute 30 seconds
+            git_diff_deleted_lines: 15,
+            git_diff_added_lines: 80,
+        };
+
+        // This test just ensures the function doesn't panic
+        // The actual output would be:
+        // you  ░░░░░░░░░░░░░░░░░░░░░▒▒▒▒▒▒▒ ai
+        // +80 -15 (git diff stat) 83% AI code accepted
+        // 1m 30s waiting for ai
+        write_stats_to_terminal(&stats);
+
+        // Test with AI-only stats
+        let ai_stats = CommitStats {
+            human_additions: 0,
+            ai_additions: 100,
+            ai_accepted: 95,
+            time_waiting_for_ai: 45,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 100,
+        };
+
+        write_stats_to_terminal(&ai_stats);
+
+        // Test with human-only stats
+        let human_stats = CommitStats {
+            human_additions: 75,
+            ai_additions: 0,
+            ai_accepted: 0,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 10,
+            git_diff_added_lines: 75,
+        };
+
+        write_stats_to_terminal(&human_stats);
+    }
+
+    #[test]
     fn test_stats_for_simple_ai_commit() {
         let tmp_repo = TmpRepo::new().unwrap();
 
@@ -402,8 +356,6 @@ mod tests {
 
         // Test our stats function
         let stats = stats_for_commit_stats(&tmp_repo.gitai_repo(), &head_sha, "HEAD").unwrap();
-
-        println!("stats: {:?}", stats);
 
         // Verify the stats
         assert_eq!(
