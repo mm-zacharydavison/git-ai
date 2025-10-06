@@ -68,7 +68,7 @@ fn print_help() {
     eprintln!("Usage: git-ai <git or git-ai command> [args...]");
     eprintln!("");
     eprintln!("Commands:");
-    eprintln!("  checkpoint         [new] checkpoint working changes and specify author");
+    eprintln!("  checkpoint         checkpoint working changes and specify author");
     eprintln!("    Presets: claude, cursor. Debug/Testing presets mock_ai");
     eprintln!("    --show-working-log    Display current working log");
     eprintln!("    --reset               Reset working log");
@@ -76,11 +76,11 @@ fn print_help() {
     eprintln!(
         "  commit             [wrapper] pass through to 'git commit' with git-ai before/after hooks"
     );
-    eprintln!("  install-hooks      [new] Install git hooks for AI authorship tracking");
-    eprintln!("  squash-authorship  [new] Generate authorship from squashed commits");
-    eprintln!("  stats              [new] Show AI authorship statistics for a commit");
+    eprintln!("  stats              Show AI authorship statistics for a commit");
     eprintln!("    <commit>               Optional commit SHA (defaults to current HEAD)");
     eprintln!("    --json                 Output in JSON format");
+    eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
+    eprintln!("  squash-authorship  Generate authorship from squashed commits");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("");
