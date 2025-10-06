@@ -1,4 +1,5 @@
 use crate::error::GitAiError;
+use crate::utils::debug_log;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
 use similar::{ChangeTag, TextDiff};
@@ -113,8 +114,11 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                                 spinner.success("VS Code: Extension installed");
                             }
                             Err(e) => {
-                                spinner.error("VS Code: Failed to install extension");
-                                eprintln!("  Error: {}", e);
+                                debug_log(&format!(
+                                    "VS Code: Error automatically installing extension: {}",
+                                    e
+                                ));
+                                spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
                             }
                         }
                     }
