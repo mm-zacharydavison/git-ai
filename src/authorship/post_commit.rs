@@ -144,7 +144,7 @@ pub fn post_commit(
 
     let refname = repo.head()?.name().unwrap().to_string();
     let stats = stats_for_commit_stats(repo, &commit_sha, &refname)?;
-    println!("stats: {:?}", stats);
+    println!("stats output: {:?}", stats);
     write_stats_to_terminal(&stats);
 
     Ok((commit_sha.to_string(), authorship_log))
