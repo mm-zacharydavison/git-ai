@@ -48,6 +48,10 @@ pub fn stats_command(
         let json_str = serde_json::to_string(&stats)?;
         println!("{}", json_str);
     } else {
+        println!(
+            "Printing stats for commit: {} (refname: {})",
+            target, refname
+        );
         write_stats_to_terminal(&stats);
     }
     Ok(())
