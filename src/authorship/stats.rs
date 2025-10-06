@@ -94,9 +94,10 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
     // Total = pure human + mixed (AI-edited-by-human) + pure AI
     let total_additions = stats.human_additions + stats.ai_additions;
 
-    // Calculate AI acceptance percentage
+    // Calculate AI acceptance percentage (capped at 100%)
+    // It can go higher because AI can write on top of AI code. This feels reasonable for now
     let ai_acceptance_percentage = if stats.ai_additions > 0 {
-        (stats.ai_accepted as f64 / stats.ai_additions as f64) * 100.0
+        ((stats.ai_accepted as f64 / stats.ai_additions as f64) * 100.0).min(100.0)
     } else {
         0.0
     };
