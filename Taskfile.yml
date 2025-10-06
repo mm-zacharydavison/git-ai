@@ -37,19 +37,3 @@ tasks:
     cmds:
       - cp target/debug/git-ai ~/.local/bin/git-ai
       - chmod +x ~/.local/bin/git-ai
-
-  # Extensions
-  cursor:build:
-    desc: Build the cursor extension
-    dir: agent-support/cursor
-    cmds:
-      - yarn install
-      - yarn run compile
-  cursor:publish:
-    desc: publish the cursor extension
-    deps: [cursor:build]
-    dir: agent-support/cursor
-    cmds:
-      - cp ../../assets/git-ai.png git-ai.png
-      - npx vsce package --out cursor-git-ai.vsix
-      - npx ovsx publish cursor-git-ai.vsix -p $OVSX_TOKEN

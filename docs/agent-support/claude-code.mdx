@@ -1,0 +1,40 @@
+---
+title: Claude Code
+---
+
+# Using Claude Code with `git-ai`
+
+`git-ai` fully supports both authorship and prompt tracking for Claude Code. To use `git-ai` with Claude Code, run `git-ai install-hooks`.
+
+## How it works
+
+`git-ai` adds hooks to your user-level Claude Code Settings [`~/.claude/settings.json`](https://docs.anthropic.com/en/docs/claude-code/hooks). These hooks automatically call `git-ai` before and after file edit tool calls to ensure accurate AI authorship tracking.
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "git-ai checkpoint claude --hook-input \"$(cat)\" 2>/dev/null || true",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "git-ai checkpoint 2>/dev/null || true",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ]
+  }
+}
+```
