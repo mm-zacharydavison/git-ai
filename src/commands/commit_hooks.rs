@@ -36,6 +36,7 @@ pub fn commit_post_command_hook(
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
     repository: &mut Repository,
+    supress_output: bool,
 ) {
     if is_dry_run(&parsed_args.command_args) {
         return;
@@ -58,12 +59,14 @@ pub fn commit_post_command_hook(
         repository.handle_rewrite_log_event(
             RewriteLogEvent::commit_amend(original_commit.unwrap(), new_sha.unwrap()),
             commit_author,
+            supress_output,
             true,
         );
     } else {
         repository.handle_rewrite_log_event(
             RewriteLogEvent::commit(original_commit, new_sha.unwrap()),
             commit_author,
+            supress_output,
             true,
         );
     }

@@ -16,6 +16,7 @@ pub fn post_commit(
     base_commit: Option<String>,
     commit_sha: String,
     human_author: String,
+    supress_output: bool,
 ) -> Result<(String, AuthorshipLog), GitAiError> {
     // Use base_commit parameter if provided, otherwise use "initial" for empty repos
     // This matches the convention in checkpoint.rs
@@ -142,10 +143,11 @@ pub fn post_commit(
         ));
     }
 
-    let refname = repo.head()?.name().unwrap().to_string();
-    let stats = stats_for_commit_stats(repo, &commit_sha, &refname)?;
-    write_stats_to_terminal(&stats);
-
+    if !supress_output {
+        let refname = repo.head()?.name().unwrap().to_string();
+        let stats = stats_for_commit_stats(repo, &commit_sha, &refname)?;
+        write_stats_to_terminal(&stats);
+    }
     Ok((commit_sha.to_string(), authorship_log))
 }
 

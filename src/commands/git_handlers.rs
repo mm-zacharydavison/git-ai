@@ -133,7 +133,17 @@ fn run_post_command_hooks(
                     return;
                 }
             }
-            commit_hooks::commit_post_command_hook(parsed_args, exit_status, repository);
+            let supress_output = parsed_args.has_command_flag("--porcelain")
+                || parsed_args.has_command_flag("--quiet")
+                || parsed_args.has_command_flag("-q");
+            || parsed_args.has_command_flag("--no-status");
+
+            commit_hooks::commit_post_command_hook(
+                parsed_args,
+                exit_status,
+                repository,
+                supress_output,
+            );
         }
         Some("fetch") => fetch_hooks::fetch_post_command_hook(parsed_args, exit_status),
         Some("push") => push_hooks::push_post_command_hook(parsed_args, exit_status),
@@ -189,6 +199,7 @@ fn run_post_command_hooks(
                         base_head,
                     )),
                     commit_author,
+                    false,
                     true,
                 );
             }

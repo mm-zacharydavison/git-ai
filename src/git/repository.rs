@@ -489,6 +489,7 @@ impl Repository {
         &mut self,
         rewrite_log_event: RewriteLogEvent,
         commit_author: String,
+        supress_output: bool,
         apply_side_effects: bool,
     ) {
         let log = self
@@ -498,7 +499,13 @@ impl Repository {
             .expect("Error writing .git/ai/rewrite_log");
 
         if apply_side_effects {
-            match rewrite_authorship_if_needed(self, &rewrite_log_event, commit_author, &log) {
+            match rewrite_authorship_if_needed(
+                self,
+                &rewrite_log_event,
+                commit_author,
+                &log,
+                supress_output,
+            ) {
                 Ok(_) => (),
                 Err(_) => {}
             }
