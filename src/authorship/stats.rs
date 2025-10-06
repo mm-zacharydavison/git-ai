@@ -23,12 +23,17 @@ pub fn stats_command(
     commit_sha: Option<&str>,
     json: bool,
 ) -> Result<(), GitAiError> {
+    // tmp log
+    debug_log(&format!("Starting stats analysis, json={}", json));
     let (target, refname) = if let Some(sha) = commit_sha {
+        debug_log(&format!("Analyzing specific commit: {}", sha));
         // Validate that the commit exists using revparse_single
         match repo.revparse_single(sha) {
             Ok(commit_obj) => {
                 // For a specific commit, we don't have a refname, so use the commit SHA
-                (commit_obj.id(), format!("{}", sha))
+                let full_sha = commit_obj.id();
+                debug_log(&format!("Resolved commit SHA: {} -> {}", sha, full_sha));
+                (full_sha, format!("{}", sha))
             }
             Err(GitAiError::GitCliError { .. }) => {
                 return Err(GitAiError::Generic(format!("No commit found: {}", sha)));
@@ -37,20 +42,41 @@ pub fn stats_command(
         }
     } else {
         // Default behavior: use current HEAD
+        debug_log("Analyzing current HEAD commit");
         let head = repo.head()?;
         let target = head.target()?;
         let name = head.name().unwrap_or("HEAD").to_string();
+        debug_log(&format!("HEAD commit: {} (refname: {})", target, name));
         (target, name)
     };
 
+    debug_log(&format!(
+        "Calculating stats: {} (refname: {})",
+        target, refname
+    ));
     let stats = stats_for_commit_stats(repo, &target, &refname)?;
 
+    debug_log(&format!(
+        "Stats calculated - Human: {}, Mixed: {}, AI: {}, AI Accepted: {}, Time waiting: {}s, Git diff: +{}/-{}",
+        stats.human_additions,
+        stats.mixed_additions,
+        stats.ai_additions,
+        stats.ai_accepted,
+        stats.time_waiting_for_ai,
+        stats.git_diff_added_lines,
+        stats.git_diff_deleted_lines
+    ));
+
     if json {
+        debug_log("Outputting stats in JSON format");
         let json_str = serde_json::to_string(&stats)?;
         println!("{}", json_str);
     } else {
+        debug_log("Outputting stats in terminal format");
         write_stats_to_terminal(&stats);
     }
+
+    debug_log("Stats analysis completed successfully");
     Ok(())
 }
 
