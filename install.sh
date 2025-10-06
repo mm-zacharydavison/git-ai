@@ -72,8 +72,24 @@ detect_std_git() {
 		git_path=""
 	fi
 
+    # Fail if we couldn't find a standard git
+    if [ -z "$git_path" ]; then
+        error "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    fi
+
+    # Verify detected git is usable
+    if ! "$git_path" --version >/dev/null 2>&1; then
+        error "Detected git at $git_path is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    fi
+
     echo "$git_path"
 }
+
+# Detect shell and get alias information
+SHELL_INFO=$(detect_shell)
+SHELL_NAME=$(echo "$SHELL_INFO" | cut -d'|' -f1)
+CONFIG_FILE=$(echo "$SHELL_INFO" | cut -d'|' -f2)
+STD_GIT_PATH=$(detect_std_git)
 
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -138,16 +154,14 @@ chmod +x "${INSTALL_DIR}/git-ai"
 # Symlink git to git-ai
 ln -sf "${INSTALL_DIR}/git-ai" "${INSTALL_DIR}/git"
 
+# Symlink git-og to the detected standard git path
+ln -sf "$STD_GIT_PATH" "${INSTALL_DIR}/git-og"
+
 # Remove quarantine attribute on macOS
 if [ "$OS" = "macos" ]; then
     xattr -d com.apple.quarantine "${INSTALL_DIR}/git-ai" 2>/dev/null || true
 fi
 
-# Detect shell and get alias information
-SHELL_INFO=$(detect_shell)
-SHELL_NAME=$(echo "$SHELL_INFO" | cut -d'|' -f1)
-CONFIG_FILE=$(echo "$SHELL_INFO" | cut -d'|' -f2)
-STD_GIT_PATH=$(detect_std_git)
 PATH_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
 
 # Install hooks
@@ -165,10 +179,6 @@ success "You can now run 'git-ai' from your terminal"
 CONFIG_DIR="$HOME/.git-ai"
 CONFIG_JSON_PATH="$CONFIG_DIR/config.json"
 mkdir -p "$CONFIG_DIR"
-
-if [ -z "$STD_GIT_PATH" ]; then
-    echo -e "${RED}Warning:${NC} Could not detect a standard git binary on PATH.\nYou can manually set it in: $CONFIG_JSON_PATH" >&2
-fi
 
 TMP_CFG="$CONFIG_JSON_PATH.tmp.$$"
 cat >"$TMP_CFG" <<EOF

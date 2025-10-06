@@ -42,12 +42,27 @@ function Get-Architecture {
 
 function Get-StdGitPath {
     $cmd = Get-Command git.exe -ErrorAction SilentlyContinue
+    $gitPath = $null
     if ($cmd -and $cmd.Path) {
         if ($cmd.Path -notmatch "\\\.git-ai\\") {
-            return $cmd.Path
+            $gitPath = $cmd.Path
         }
     }
-    return $null
+
+    if (-not $gitPath) {
+        Write-ErrorAndExit "Could not detect a standard git binary on PATH. Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    }
+
+    try {
+        & $gitPath --version | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+        }
+    } catch {
+        Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/acunniffe/git-ai/issues."
+    }
+
+    return $gitPath
 }
 
 # Ensure $PathToAdd is inserted before any PATH entry that contains "git" (case-insensitive)
@@ -130,6 +145,9 @@ function Set-PathPrependBeforeGit {
     return $updatedScope
 }
 
+# Detect standard Git early and validate (fail-fast behavior)
+$stdGitPath = Get-StdGitPath
+
 # Detect architecture and OS
 $arch = Get-Architecture
 if (-not $arch) { Write-ErrorAndExit "Unsupported architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)" }
@@ -187,8 +205,11 @@ $gitShim = Join-Path $installDir 'git.exe'
 Copy-Item -Force -Path $finalExe -Destination $gitShim
 try { Unblock-File -Path $gitShim -ErrorAction SilentlyContinue } catch { }
 
-# Detect standard Git path to avoid recursion (used to seed JSON config)
-$stdGitPath = Get-StdGitPath
+# Create a shim so calling `git-og` invokes the standard Git
+$gitOgShim = Join-Path $installDir 'git-og.cmd'
+$gitOgShimContent = "@echo off`r`n\"$stdGitPath\" %*`r`n"
+Set-Content -Path $gitOgShim -Value $gitOgShimContent -Encoding ASCII
+try { Unblock-File -Path $gitOgShim -ErrorAction SilentlyContinue } catch { }
 
 # Install hooks
 Write-Host 'Setting up IDE/agent hooks...'
@@ -215,10 +236,6 @@ try {
     $configDir = Join-Path $HOME '.git-ai'
     $configJsonPath = Join-Path $configDir 'config.json'
     New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-
-    if (-not $stdGitPath) {
-        Write-Host "Warning: Could not detect a standard git binary on PATH.`nYou can manually set it in: $configJsonPath" -ForegroundColor Yellow
-    }
 
     $cfg = @{ git_path = $stdGitPath; ignore_prompts = $false } | ConvertTo-Json -Compress
     $cfg | Out-File -FilePath $configJsonPath -Encoding UTF8 -Force
