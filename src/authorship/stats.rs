@@ -4,6 +4,7 @@ use crate::authorship::transcript::Message;
 use crate::error::GitAiError;
 use crate::git::refs::get_authorship;
 use crate::git::repository::Repository;
+use crate::utils::debug_log;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,10 +49,6 @@ pub fn stats_command(
         let json_str = serde_json::to_string(&stats)?;
         println!("{}", json_str);
     } else {
-        println!(
-            "Printing stats for commit: {} (refname: {})",
-            target, refname
-        );
         write_stats_to_terminal(&stats);
     }
     Ok(())
