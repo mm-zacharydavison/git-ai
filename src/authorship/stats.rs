@@ -367,8 +367,11 @@ fn analyze_authorship_log(
                 // Check if it was overridden (edited by humans)
                 if prompt_record.overriden_lines > 0 {
                     // Mixed: AI-generated but edited by humans
-                    mixed_additions += prompt_record.overriden_lines;
-                    ai_additions += lines_in_entry - prompt_record.overriden_lines;
+                    // Ensure we don't have more overridden lines than total lines
+                    let overriden_lines =
+                        std::cmp::min(prompt_record.overriden_lines, lines_in_entry);
+                    mixed_additions += overriden_lines;
+                    ai_additions += lines_in_entry - overriden_lines;
                 } else {
                     // Pure AI: no human editing
                     ai_additions += lines_in_entry;
