@@ -4,7 +4,7 @@ use crate::authorship::stats::{stats_for_commit_stats, write_stats_to_terminal};
 use crate::authorship::working_log::Checkpoint;
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
-use crate::git::refs::notes_add;
+use crate::git::refs::{notes_add, show_authorship_note};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
 use crate::utils::debug_log;
@@ -73,6 +73,11 @@ pub fn post_commit(
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
     notes_add(repo, &commit_sha, &authorship_json)?;
+
+    println!(
+        "note restoration {:?}",
+        show_authorship_note(repo, &commit_sha)
+    );
 
     debug_log(&format!(
         "Authorship log written to notes/ai/{}",
