@@ -51,11 +51,74 @@ pub fn post_commit(
     // We need to keep ONLY lines that are in the commit, not filter out unstaged lines
     let committed_hunks = collect_committed_hunks(repo, &parent_sha, &commit_sha)?;
 
-    // Keep only the lines that were actually committed
+    // Convert authorship log line numbers from working directory coordinates to commit coordinates
+    // The working log uses working directory coordinates (which includes unstaged changes),
+    // but the authorship log should store commit coordinates (line numbers as they appear in the commit tree)
+    let unstaged_hunks = collect_unstaged_hunks(repo, &commit_sha)?;
+
+    debug_log(&format!("Committed hunks: {:?}", committed_hunks));
+    debug_log(&format!("Unstaged hunks: {:?}", unstaged_hunks));
+    debug_log(&format!(
+        "Authorship log files before conversion: {}",
+        authorship_log.attestations.len()
+    ));
+    for file in &authorship_log.attestations {
+        debug_log(&format!(
+            "  File: {}, entries: {}",
+            file.file_path,
+            file.entries.len()
+        ));
+        for entry in &file.entries {
+            debug_log(&format!(
+                "    Entry hash: {}, lines: {:?}",
+                entry.hash, entry.line_ranges
+            ));
+        }
+    }
+
+    // Convert working directory line numbers to commit line numbers
+    convert_authorship_log_to_commit_coordinates(&mut authorship_log, &unstaged_hunks);
+
+    debug_log(&format!(
+        "Authorship log files after conversion: {}",
+        authorship_log.attestations.len()
+    ));
+    for file in &authorship_log.attestations {
+        debug_log(&format!(
+            "  File: {}, entries: {}",
+            file.file_path,
+            file.entries.len()
+        ));
+        for entry in &file.entries {
+            debug_log(&format!(
+                "    Entry hash: {}, lines: {:?}",
+                entry.hash, entry.line_ranges
+            ));
+        }
+    }
+
+    // Now filter to only include committed lines
     authorship_log.filter_to_committed_lines(&committed_hunks);
 
+    debug_log(&format!(
+        "Authorship log files after filtering: {}",
+        authorship_log.attestations.len()
+    ));
+    for file in &authorship_log.attestations {
+        debug_log(&format!(
+            "  File: {}, entries: {}",
+            file.file_path,
+            file.entries.len()
+        ));
+        for entry in &file.entries {
+            debug_log(&format!(
+                "    Entry hash: {}, lines: {:?}",
+                entry.hash, entry.line_ranges
+            ));
+        }
+    }
+
     // Check if there are unstaged AI-authored lines to preserve in working log
-    let unstaged_hunks = collect_unstaged_hunks(repo, &commit_sha)?;
     let has_unstaged_ai_lines = if !unstaged_hunks.is_empty() {
         // Check if any unstaged lines match the working log
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
@@ -83,12 +146,9 @@ pub fn post_commit(
     // Only delete the working log if there are no unstaged AI-authored lines
     // If there are unstaged AI lines, filter and transfer the working log to the new commit
     if !has_unstaged_ai_lines {
-        repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
-
-        debug_log(&format!(
-            "Working log deleted for base commit: {}",
-            parent_sha
-        ));
+        if !cfg!(debug_assertions) {
+            repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
+        }
     } else {
         // Filter the working log to remove committed lines, keeping only unstaged ones
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
@@ -134,9 +194,10 @@ pub fn post_commit(
             }
         }
 
-        // Delete the old working log
-        repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
-
+        // Delete the old working log, but keep it in debug mode
+        if !cfg!(debug_assertions) {
+            repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
+        }
         debug_log(&format!(
             "Working log filtered and transferred from {} to {} (unstaged AI lines only)",
             parent_sha, commit_sha
@@ -341,21 +402,57 @@ fn collect_committed_hunks(
         for change in diff.iter_all_changes() {
             match change.tag() {
                 ChangeTag::Equal => {
-                    current_line += change.value().lines().count() as u32;
+                    // Use the number of lines in the change, accounting for whether it ends with newline
+                    let line_count = if change.value().is_empty() {
+                        0
+                    } else if change.value().ends_with('\n') {
+                        change.value().matches('\n').count() as u32
+                    } else {
+                        change.value().matches('\n').count() as u32 + 1
+                    };
+                    debug_log(&format!(
+                        "Equal: current_line={}, line_count={}, value={:?}",
+                        current_line,
+                        line_count,
+                        change.value()
+                    ));
+                    current_line += line_count;
                 }
                 ChangeTag::Delete => {
                     // Deletions don't add lines to the current commit
+                    debug_log(&format!(
+                        "Delete: current_line={}, value={:?}",
+                        current_line,
+                        change.value()
+                    ));
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
-                    let insert_count = change.value().lines().count() as u32;
-                    for i in 0..insert_count {
+                    let line_count = if change.value().is_empty() {
+                        0
+                    } else if change.value().ends_with('\n') {
+                        change.value().matches('\n').count() as u32
+                    } else {
+                        change.value().matches('\n').count() as u32 + 1
+                    };
+                    debug_log(&format!(
+                        "Insert: insert_start={}, line_count={}, value={:?}",
+                        insert_start,
+                        line_count,
+                        change.value()
+                    ));
+                    for i in 0..line_count {
                         modified_lines.push(insert_start + i);
                     }
-                    current_line += insert_count;
+                    current_line += line_count;
                 }
             }
         }
+
+        debug_log(&format!(
+            "Committed hunks for {}: {:?}",
+            file_path, modified_lines
+        ));
 
         if !modified_lines.is_empty() {
             modified_lines.sort_unstable();
@@ -472,6 +569,68 @@ fn collect_unstaged_hunks(
     }
 
     Ok(unstaged_hunks)
+}
+
+/// Convert authorship log line numbers from working directory coordinates to commit coordinates
+///
+/// The working log records line numbers in working directory coordinates (which includes unstaged changes),
+/// but the authorship log should store commit coordinates (line numbers as they appear in the commit tree).
+/// This function adjusts all line numbers in the authorship log by subtracting the number of unstaged lines
+/// above each line.
+///
+/// For example, if there's an unstaged line at position 1, then working directory line 22 becomes commit line 21,
+/// and working directory line 31 becomes commit line 30.
+fn convert_authorship_log_to_commit_coordinates(
+    authorship_log: &mut AuthorshipLog,
+    unstaged_hunks: &HashMap<String, Vec<LineRange>>,
+) {
+    for file_attestation in &mut authorship_log.attestations {
+        if let Some(unstaged_ranges) = unstaged_hunks.get(&file_attestation.file_path) {
+            // Expand unstaged ranges to individual line numbers for easier comparison
+            let mut unstaged_lines: Vec<u32> = Vec::new();
+            for range in unstaged_ranges {
+                unstaged_lines.extend(range.expand());
+            }
+            unstaged_lines.sort_unstable();
+
+            // For each attestation entry, convert working directory line numbers to commit line numbers
+            for entry in &mut file_attestation.entries {
+                // Expand entry's line ranges to individual lines
+                let mut entry_lines: Vec<u32> = Vec::new();
+                for range in &entry.line_ranges {
+                    entry_lines.extend(range.expand());
+                }
+
+                // Convert each line from working directory coordinates to commit coordinates
+                let mut converted_lines: Vec<u32> = Vec::new();
+                for workdir_line in entry_lines {
+                    // Count how many unstaged lines are strictly before this line
+                    let adjustment =
+                        unstaged_lines.iter().filter(|&&l| l < workdir_line).count() as u32;
+                    let commit_line = workdir_line - adjustment;
+                    converted_lines.push(commit_line);
+                }
+
+                if !converted_lines.is_empty() {
+                    converted_lines.sort_unstable();
+                    converted_lines.dedup();
+                    entry.line_ranges = LineRange::compress_lines(&converted_lines);
+                } else {
+                    entry.line_ranges.clear();
+                }
+            }
+
+            // Remove entries that have no line ranges left
+            file_attestation
+                .entries
+                .retain(|entry| !entry.line_ranges.is_empty());
+        }
+    }
+
+    // Remove file attestations that have no entries left
+    authorship_log
+        .attestations
+        .retain(|file| !file.entries.is_empty());
 }
 
 #[cfg(test)]

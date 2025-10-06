@@ -627,6 +627,98 @@ fn test_interleaved_staged_unstaged_hunks() {
 }
 
 #[test]
+fn test_unstaged_line_at_top_shifts_coordinates() {
+    // Regression test: unstaged line at beginning shifts all subsequent line numbers
+    // This is the LOTR scenario - line 1 unstaged, lines 21,30 staged
+    let tmp_repo = TmpRepo::new().unwrap();
+
+    // Create a file with 20 lines
+    let mut content = String::new();
+    for i in 1..=20 {
+        content.push_str(&format!("line{}\n", i));
+    }
+    let mut file = tmp_repo.write_file("test.ts", &content, true).unwrap();
+
+    tmp_repo
+        .trigger_checkpoint_with_author("test_user")
+        .unwrap();
+
+    tmp_repo.commit_with_message("Initial commit").unwrap();
+
+    // AI adds a comment at line 1 (top of file) - will be UNSTAGED
+    file.prepend("// Top comment\n").unwrap();
+
+    // AI adds comments at what will be lines 21 and 30 in the commit
+    // (but lines 22 and 31 in the working directory due to the prepended line)
+    file.append("// Middle comment\n").unwrap(); // Line 21 in commit, 22 in workdir
+    for i in 22..=29 {
+        file.append(&format!("line{}\n", i)).unwrap();
+    }
+    file.append("// Bottom comment\n").unwrap(); // Line 30 in commit, 31 in workdir
+
+    tmp_repo
+        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+        .unwrap();
+
+    // Stage the middle comment and all lines including the bottom comment (lines 22-31 in working directory)
+    // These correspond to lines 21-30 in the commit
+    // But we leave line 1 (the top comment) unstaged
+    tmp_repo.stage_lines_from_file(&file, &[(22, 31)]).unwrap();
+
+    let authorship_log = tmp_repo
+        .commit_staged_with_message("Add comments in middle and bottom")
+        .unwrap();
+
+    // The authorship log should store line numbers relative to the COMMIT, not working directory
+    // So it should be lines 21-30, NOT 22-31
+    assert_eq!(authorship_log.attestations.len(), 1);
+    let file_att = &authorship_log.attestations[0];
+    assert_eq!(file_att.entries.len(), 1);
+
+    let entry = &file_att.entries[0];
+
+    // Expand all line ranges and verify they're 21-30
+    let mut all_lines: Vec<u32> = Vec::new();
+    for range in &entry.line_ranges {
+        match range {
+            LineRange::Single(l) => all_lines.push(*l),
+            LineRange::Range(start, end) => {
+                for l in *start..=*end {
+                    all_lines.push(l);
+                }
+            }
+        }
+    }
+    all_lines.sort();
+
+    let expected: Vec<u32> = (21..=30).collect();
+    assert_eq!(
+        all_lines, expected,
+        "Authorship log should store commit coordinates (21-30), not working directory coordinates (22-31)"
+    );
+
+    assert_debug_snapshot!(authorship_log);
+
+    // Verify blame shows correct attribution
+    // In the working directory, AI lines are at 22-31
+    let blame = tmp_repo.blame_for_file(&file, Some((1, 31))).unwrap();
+
+    // Line 1 (unstaged) should not be committed yet
+    assert!(blame.contains_key(&1));
+    let line1_author = blame.get(&1).unwrap();
+    assert_eq!(line1_author, "Not Committed Yet");
+
+    // Lines 22-31 (workdir) = lines 21-30 (commit) should be AI-authored
+    for line_num in 22..=31 {
+        assert!(blame.contains_key(&line_num));
+        let author = blame.get(&line_num).unwrap();
+        assert_eq!(author, "cursor", "Line {} should be AI-authored", line_num);
+    }
+
+    assert_debug_snapshot!(blame);
+}
+
+#[test]
 fn test_unstaged_ai_lines_saved_to_working_log() {
     // Test that unstaged AI-authored lines are saved to the working log for the next commit
     let tmp_repo = TmpRepo::new().unwrap();
