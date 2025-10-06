@@ -549,7 +549,7 @@ impl AuthorshipLog {
             prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
             prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
             prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
-            // overriden_lines will be calculated in apply_checkpoint and accumulated here
+            // overriden_lines is calculated and accumulated in apply_checkpoint, don't reset it here
         }
     }
 
@@ -593,12 +593,12 @@ impl AuthorshipLog {
 
     /// Detect lines that were originally authored by AI but are now being modified by humans
     fn detect_overridden_lines(&mut self, file: &str, deleted_lines: &[u32]) {
-        // First, collect the session hashes that need to be updated
-        let mut sessions_to_update: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-
         // Find the file attestation and check for overridden lines
         if let Some(file_attestation) = self.attestations.iter().find(|f| f.file_path == file) {
+            // For each session, count how many of its lines were overridden
+            let mut session_overridden_counts: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+
             // For each deleted line, check if it was previously attributed to AI
             for &line in deleted_lines {
                 for attestation_entry in &file_attestation.entries {
@@ -609,32 +609,18 @@ impl AuthorshipLog {
                         .any(|range| range.contains(line))
                     {
                         // This line was AI-authored and is now being deleted by a human
-                        sessions_to_update.insert(attestation_entry.hash.clone());
+                        *session_overridden_counts
+                            .entry(attestation_entry.hash.clone())
+                            .or_insert(0) += 1;
                     }
                 }
             }
-        }
 
-        // Now update the overriden_lines count for each affected session
-        // Count the number of deleted lines that were AI-authored
-        let mut overridden_count = 0;
-        if let Some(file_attestation) = self.attestations.iter().find(|f| f.file_path == file) {
-            for &line in deleted_lines {
-                for attestation_entry in &file_attestation.entries {
-                    if attestation_entry
-                        .line_ranges
-                        .iter()
-                        .any(|range| range.contains(line))
-                    {
-                        overridden_count += 1;
-                    }
+            // Update the overriden_lines count for each affected session
+            for (session_hash, overridden_count) in session_overridden_counts {
+                if let Some(prompt_record) = self.metadata.prompts.get_mut(&session_hash) {
+                    prompt_record.overriden_lines += overridden_count;
                 }
-            }
-        }
-
-        for session_hash in sessions_to_update {
-            if let Some(prompt_record) = self.metadata.prompts.get_mut(&session_hash) {
-                prompt_record.overriden_lines += overridden_count;
             }
         }
     }

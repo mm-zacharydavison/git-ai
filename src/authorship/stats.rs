@@ -2,10 +2,11 @@ use crate::authorship::authorship_log::LineRange;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::transcript::Message;
 use crate::error::GitAiError;
-use crate::git::refs::get_reference_as_authorship_log_v3;
+use crate::git::refs::get_authorship;
 use crate::git::repository::Repository;
+use serde::Serialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CommitStats {
     pub human_additions: u32, // Lines written only by humans
     pub mixed_additions: u32, // AI-generated lines that were edited by humans
@@ -14,6 +15,42 @@ pub struct CommitStats {
     pub time_waiting_for_ai: u64, // seconds
     pub git_diff_deleted_lines: u32,
     pub git_diff_added_lines: u32,
+}
+
+pub fn stats_command(
+    repo: &Repository,
+    commit_sha: Option<&str>,
+    json: bool,
+) -> Result<(), GitAiError> {
+    let (target, refname) = if let Some(sha) = commit_sha {
+        // Validate that the commit exists using revparse_single
+        match repo.revparse_single(sha) {
+            Ok(commit_obj) => {
+                // For a specific commit, we don't have a refname, so use the commit SHA
+                (commit_obj.id(), format!("{}", sha))
+            }
+            Err(GitAiError::GitCliError { .. }) => {
+                return Err(GitAiError::Generic(format!("No commit found: {}", sha)));
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        // Default behavior: use current HEAD
+        let head = repo.head()?;
+        let target = head.target()?;
+        let name = head.name().unwrap_or("HEAD").to_string();
+        (target, name)
+    };
+
+    let stats = stats_for_commit_stats(repo, &target, &refname)?;
+
+    if json {
+        let json_str = serde_json::to_string(&stats)?;
+        println!("{}", json_str);
+    } else {
+        write_stats_to_terminal(&stats);
+    }
+    Ok(())
 }
 
 pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
@@ -67,12 +104,14 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
         0
     };
 
+    #[allow(unused_variables)]
     let mixed_bars = if total_additions > 0 {
         ((stats.mixed_additions as f64 / total_additions as f64) * bar_width as f64) as usize
     } else {
         0
     };
 
+    #[allow(unused_variables)]
     let ai_bars = if total_additions > 0 {
         ((stats.ai_additions as f64 / total_additions as f64) * bar_width as f64) as usize
     } else {
@@ -116,6 +155,7 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
     progress_bar.push_str(" ai");
 
     // Format time waiting for AI
+    #[allow(unused_variables)]
     let waiting_time_str = if stats.time_waiting_for_ai > 0 {
         let minutes = stats.time_waiting_for_ai / 60;
         let seconds = stats.time_waiting_for_ai % 60;
@@ -216,7 +256,7 @@ pub fn stats_for_commit_stats(
     let (git_diff_added_lines, git_diff_deleted_lines) = get_git_diff_stats(repo, commit_sha)?;
 
     // Step 2: get the authorship log for this commit
-    let authorship_log = get_authorship_log_for_commit(repo, commit_sha)?;
+    let authorship_log = get_authorship(repo, &commit_sha);
 
     // Step 3: For prompts with > 1 messages, sum all the time between user messages and AI messages.
     // if the last message is a human message, don't count anything
@@ -226,7 +266,12 @@ pub fn stats_for_commit_stats(
         ai_additions,
         ai_accepted,
         time_waiting_for_ai,
-    ) = analyze_authorship_log(&authorship_log)?;
+    ) = if let Some(log) = &authorship_log {
+        analyze_authorship_log(log)?
+    } else {
+        // No authorship log means no AI-authored lines
+        (0, 0, 0, 0, 0)
+    };
 
     // Calculate human additions as the difference between total git diff and AI additions
     // This handles cases where there are no AI-authored lines (authorship log is empty)
@@ -291,21 +336,6 @@ fn get_git_diff_stats(repo: &Repository, commit_sha: &str) -> Result<(u32, u32),
     }
 
     Ok((added_lines, deleted_lines))
-}
-
-/// Get authorship log for a commit
-fn get_authorship_log_for_commit(
-    repo: &Repository,
-    commit_sha: &str,
-) -> Result<AuthorshipLog, GitAiError> {
-    let ref_name = format!("ai/authorship/{}", commit_sha);
-    match get_reference_as_authorship_log_v3(repo, &ref_name) {
-        Ok(log) => Ok(log),
-        Err(_) => {
-            // No authorship log found - return empty log
-            Ok(AuthorshipLog::new())
-        }
-    }
 }
 
 /// Analyze authorship log to extract statistics

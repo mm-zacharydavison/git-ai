@@ -1,3 +1,4 @@
+use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::AgentId;
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_preset::{
@@ -24,6 +25,9 @@ pub fn handle_git_ai(args: &[String]) {
         "stats-delta" => {
             handle_stats_delta(&args[1..]);
         }
+        "stats" => {
+            handle_stats(&args[1..]);
+        }
         "checkpoint" => {
             handle_checkpoint(&args[1..]);
         }
@@ -47,6 +51,7 @@ pub fn handle_git_ai(args: &[String]) {
                 std::process::exit(1);
             }
         }
+
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
@@ -73,6 +78,9 @@ fn print_help() {
     );
     eprintln!("  install-hooks      [new] Install git hooks for AI authorship tracking");
     eprintln!("  squash-authorship  [new] Generate authorship from squashed commits");
+    eprintln!("  stats              [new] Show AI authorship statistics for a commit");
+    eprintln!("    <commit>               Optional commit SHA (defaults to current HEAD)");
+    eprintln!("    --json                 Output in JSON format");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("");
@@ -332,6 +340,53 @@ fn handle_ai_blame(args: &[String]) {
 
     if let Err(e) = repo.blame(&file_path, &options) {
         eprintln!("Blame failed: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn handle_stats(args: &[String]) {
+    // Parse stats-specific arguments
+    let mut json_output = false;
+    let mut commit_sha = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => {
+                json_output = true;
+                i += 1;
+            }
+            _ => {
+                // First non-flag argument is treated as commit SHA
+                if commit_sha.is_none() {
+                    commit_sha = Some(args[i].clone());
+                    i += 1;
+                } else {
+                    eprintln!("Unknown stats argument: {}", args[i]);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // Find the git repository
+    let repo = match find_repository(&Vec::<String>::new()) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = stats_command(&repo, commit_sha.as_deref(), json_output) {
+        match e {
+            crate::error::GitAiError::Generic(msg) if msg.starts_with("No commit found:") => {
+                eprintln!("{}", msg);
+            }
+            _ => {
+                eprintln!("Stats failed: {}", e);
+            }
+        }
         std::process::exit(1);
     }
 }
