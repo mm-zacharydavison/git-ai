@@ -40,12 +40,6 @@ pub fn handle_git_ai(args: &[String]) {
             std::process::exit(0);
         }
         "install-hooks" => {
-            // This command is not ready for production - only allow in debug builds
-            if !cfg!(debug_assertions) {
-                eprintln!("Error: install-hooks command is not ready for production");
-                std::process::exit(1);
-            }
-
             if let Err(e) = commands::install_hooks::run(&args[1..]) {
                 eprintln!("Install hooks failed: {}", e);
                 std::process::exit(1);
