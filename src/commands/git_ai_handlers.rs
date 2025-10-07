@@ -2,7 +2,8 @@ use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::AgentId;
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_preset::{
-    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset, GithubCopilotPreset,
+    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
+    GithubCopilotPreset,
 };
 use crate::config;
 use crate::git::find_repository;
