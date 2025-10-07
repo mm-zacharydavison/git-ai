@@ -115,8 +115,7 @@ There two behavior changes `git-ai` introduces:
 
 1. After commits, `git-ai` adds an AI Authorship log linked to the commit in `notes/ai` and print this visualization for developers: 
 
-you  ██▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ai
-     7%             mixed  27%             67%
+![alt](docs/graph.jpg)
 
 2. In Git, notes do not sync by default. `git-ai` will append the refspec for `notes/ai` to `fetch` / `push` calls so they are always synced. 
 

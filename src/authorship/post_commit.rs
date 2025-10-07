@@ -32,11 +32,6 @@ pub fn post_commit(
     // Filter out untracked files from the working log
     let mut filtered_working_log = filter_untracked_files(repo, &parent_working_log, &commit_sha)?;
 
-    debug_log(&format!(
-        "Working log entries: {}",
-        filtered_working_log.len()
-    ));
-
     // mutates inline
     CursorPreset::update_cursor_conversations_to_latest(&mut filtered_working_log)?;
 
@@ -56,67 +51,11 @@ pub fn post_commit(
     // but the authorship log should store commit coordinates (line numbers as they appear in the commit tree)
     let unstaged_hunks = collect_unstaged_hunks(repo, &commit_sha)?;
 
-    debug_log(&format!("Committed hunks: {:?}", committed_hunks));
-    debug_log(&format!("Unstaged hunks: {:?}", unstaged_hunks));
-    debug_log(&format!(
-        "Authorship log files before conversion: {}",
-        authorship_log.attestations.len()
-    ));
-    for file in &authorship_log.attestations {
-        debug_log(&format!(
-            "  File: {}, entries: {}",
-            file.file_path,
-            file.entries.len()
-        ));
-        for entry in &file.entries {
-            debug_log(&format!(
-                "    Entry hash: {}, lines: {:?}",
-                entry.hash, entry.line_ranges
-            ));
-        }
-    }
-
     // Convert working directory line numbers to commit line numbers
     convert_authorship_log_to_commit_coordinates(&mut authorship_log, &unstaged_hunks);
 
-    debug_log(&format!(
-        "Authorship log files after conversion: {}",
-        authorship_log.attestations.len()
-    ));
-    for file in &authorship_log.attestations {
-        debug_log(&format!(
-            "  File: {}, entries: {}",
-            file.file_path,
-            file.entries.len()
-        ));
-        for entry in &file.entries {
-            debug_log(&format!(
-                "    Entry hash: {}, lines: {:?}",
-                entry.hash, entry.line_ranges
-            ));
-        }
-    }
-
     // Now filter to only include committed lines
     authorship_log.filter_to_committed_lines(&committed_hunks);
-
-    debug_log(&format!(
-        "Authorship log files after filtering: {}",
-        authorship_log.attestations.len()
-    ));
-    for file in &authorship_log.attestations {
-        debug_log(&format!(
-            "  File: {}, entries: {}",
-            file.file_path,
-            file.entries.len()
-        ));
-        for entry in &file.entries {
-            debug_log(&format!(
-                "    Entry hash: {}, lines: {:?}",
-                entry.hash, entry.line_ranges
-            ));
-        }
-    }
 
     // Check if there are unstaged AI-authored lines to preserve in working log
     let has_unstaged_ai_lines = if !unstaged_hunks.is_empty() {
@@ -137,11 +76,6 @@ pub fn post_commit(
         .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
 
     notes_add(repo, &commit_sha, &authorship_json)?;
-
-    debug_log(&format!(
-        "Authorship log written. View with git notes --ref=ai show {}",
-        commit_sha
-    ));
 
     // Only delete the working log if there are no unstaged AI-authored lines
     // If there are unstaged AI lines, filter and transfer the working log to the new commit
@@ -198,10 +132,6 @@ pub fn post_commit(
         if !cfg!(debug_assertions) {
             repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
         }
-        debug_log(&format!(
-            "Working log filtered and transferred from {} to {} (unstaged AI lines only)",
-            parent_sha, commit_sha
-        ));
     }
 
     if !supress_output {
@@ -410,21 +340,10 @@ fn collect_committed_hunks(
                     } else {
                         change.value().matches('\n').count() as u32 + 1
                     };
-                    debug_log(&format!(
-                        "Equal: current_line={}, line_count={}, value={:?}",
-                        current_line,
-                        line_count,
-                        change.value()
-                    ));
                     current_line += line_count;
                 }
                 ChangeTag::Delete => {
                     // Deletions don't add lines to the current commit
-                    debug_log(&format!(
-                        "Delete: current_line={}, value={:?}",
-                        current_line,
-                        change.value()
-                    ));
                 }
                 ChangeTag::Insert => {
                     let insert_start = current_line;
@@ -435,12 +354,6 @@ fn collect_committed_hunks(
                     } else {
                         change.value().matches('\n').count() as u32 + 1
                     };
-                    debug_log(&format!(
-                        "Insert: insert_start={}, line_count={}, value={:?}",
-                        insert_start,
-                        line_count,
-                        change.value()
-                    ));
                     for i in 0..line_count {
                         modified_lines.push(insert_start + i);
                     }
@@ -448,11 +361,6 @@ fn collect_committed_hunks(
                 }
             }
         }
-
-        debug_log(&format!(
-            "Committed hunks for {}: {:?}",
-            file_path, modified_lines
-        ));
 
         if !modified_lines.is_empty() {
             modified_lines.sort_unstable();
@@ -477,7 +385,6 @@ fn collect_unstaged_hunks(
 
     // Get all files with unstaged changes
     let statuses = repo.status()?;
-    debug_log(&format!("Git status found {} entries", statuses.len()));
 
     // Get the HEAD commit tree (what was just committed)
     let head_commit = repo.find_commit(commit_sha.to_string())?;
@@ -486,10 +393,6 @@ fn collect_unstaged_hunks(
     let repo_workdir = repo.workdir()?;
 
     for entry in &statuses {
-        debug_log(&format!(
-            "Status entry: {} staged={:?} unstaged={:?}",
-            entry.path, entry.staged, entry.unstaged
-        ));
         // Skip files without unstaged changes
         if entry.unstaged == StatusCode::Unmodified || entry.kind == EntryKind::Ignored {
             continue;
@@ -513,15 +416,6 @@ fn collect_unstaged_hunks(
 
         // Get content from working directory
         let working_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
-
-        debug_log(&format!(
-            "HEAD content lines: {}",
-            head_content.lines().count()
-        ));
-        debug_log(&format!(
-            "Working content lines: {}",
-            working_content.lines().count()
-        ));
 
         // Normalize trailing newlines
         let head_norm = if head_content.ends_with('\n') {
