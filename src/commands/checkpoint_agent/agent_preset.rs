@@ -613,6 +613,11 @@ impl GithubCopilotPreset {
         let mut detected_model: Option<String> = None;
 
         for request in requests {
+            // Parse the human timestamp once per request (unix ms and RFC3339)
+            let user_ts_ms = request.get("timestamp").and_then(|v| v.as_i64());
+            let user_ts_rfc3339 = user_ts_ms
+                .and_then(|ms| Utc.timestamp_millis_opt(ms).single().map(|dt| dt.to_rfc3339()));
+
             // Add the human's message
             if let Some(user_text) = request
                 .get("message")
@@ -621,19 +626,9 @@ impl GithubCopilotPreset {
             {
                 let trimmed = user_text.trim();
                 if !trimmed.is_empty() {
-                    // Use request.timestamp (unix ms) converted to ISO 8601 UTC string to match Claude format
-                    let user_ts = request
-                        .get("timestamp")
-                        .and_then(|v| v.as_i64())
-                        .map(|ms| {
-                            Utc.timestamp_millis_opt(ms)
-                                .single()
-                                .map(|dt| dt.to_rfc3339())
-                        })
-                        .flatten();
                     transcript.add_message(Message::User {
                         text: trimmed.to_string(),
-                        timestamp: user_ts,
+                        timestamp: user_ts_rfc3339.clone(),
                     });
                 }
             }
@@ -761,9 +756,23 @@ impl GithubCopilotPreset {
                 }
 
                 if !assistant_text_accumulator.trim().is_empty() {
-                    transcript.add_message(Message::assistant(
-                        assistant_text_accumulator.trim().to_string(),
-                    ));
+                    // Set assistant timestamp to user_ts + totalElapsed if available
+                    let assistant_ts = request
+                        .get("result")
+                        .and_then(|r| r.get("timings"))
+                        .and_then(|t| t.get("totalElapsed"))
+                        .and_then(|v| v.as_i64())
+                        .and_then(|elapsed| user_ts_ms.map(|ums| ums + elapsed))
+                        .and_then(|ms| {
+                            Utc.timestamp_millis_opt(ms)
+                                .single()
+                                .map(|dt| dt.to_rfc3339())
+                        });
+
+                    transcript.add_message(Message::Assistant {
+                        text: assistant_text_accumulator.trim().to_string(),
+                        timestamp: assistant_ts,
+                    });
                 }
             }
 
@@ -1681,7 +1690,7 @@ mod tests {
             },
             Message::Assistant {
                 text: "I'm GitHub Copilot, and I can help you with a wide range of programming and development tasks! Based on your current workspace, I can see you have a TypeScript project with an @/Users/svarlamov/projects/testing-git/index.ts file that prints \"Bonjour\" and numbers 1-10.\n\nHere are some ways I can assist you:\n\n## Code Development\n- **Write, edit, and refactor code** in various languages (TypeScript, JavaScript, Python, Java, C#, Go, Rust, and many more)\n- **Debug and fix issues** in your existing code\n- **Add new features** or modify existing functionality\n- **Optimize performance** and improve code quality\n\n## Project Management\n- **Set up new projects** and workspaces from scratch\n- **Configure build systems** and development environments\n- **Manage dependencies** and package installations\n- **Create and modify configuration files**\n\n## Git and Version Control\n- **Commit changes** and manage your Git workflow\n- **Create branches** and handle merges\n- **View git history** and resolve conflicts\n- **Work with pull requests** and issues\n\n## Development Tools\n- **Run terminal commands** and scripts\n- **Install and configure VS Code extensions**\n- **Set up debugging configurations**\n- **Work with databases** (PostgreSQL support available)\n\n## Documentation and Testing\n- **Write documentation** and README files\n- **Create and run tests**\n- **Generate code comments** and API documentation\n\nFor your current TypeScript project, I could help you:\n- Add error handling and input validation\n- Convert it to a proper CLI tool with argument parsing\n- Add TypeScript configurations and build scripts\n- Set up testing frameworks\n- Add more sophisticated functionality\n\nWhat specific task would you like help with today?".to_string(),
-                timestamp: None,
+                timestamp: Some("2025-10-07T13:51:26.196+00:00".to_string()),
             },
             Message::User {
                 text: "Change Bonjour World to hello world".to_string(),
@@ -1726,7 +1735,7 @@ mod tests {
             },
             Message::Assistant {
                 text: "I'll change \"Bonjour World\" to \"hello world\" in your selected text. ``` @/Users/svarlamov/projects/testing-git/index.ts ``` Done! I've changed \"Bonjour World\" to \"hello world\" in line 10 of your @/Users/svarlamov/projects/testing-git/index.ts file.".to_string(),
-                timestamp: None,
+                timestamp: Some("2025-10-07T13:51:50.791+00:00".to_string()),
             },
             Message::User {
                 text: "Search for any other mentions of Bonjour".to_string(),
@@ -1747,7 +1756,7 @@ mod tests {
             },
             Message::Assistant {
                 text: "I'll search for any other mentions of \"Bonjour\" in your workspace. I found one more mention of \"Bonjour\" in your code! It's on line 1 of @/Users/svarlamov/projects/testing-git/index.ts :\n\n```typescript\nconsole.log('Bonjour');\n```\n\nWould you like me to change this one to \"hello\" as well to make it consistent?".to_string(),
-                timestamp: None,
+                timestamp: Some("2025-10-07T15:15:59.544+00:00".to_string()),
             },
         ];
 
