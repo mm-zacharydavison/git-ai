@@ -124,6 +124,7 @@ There two behavior changes `git-ai` introduces:
 
 - Tab completions (from AI or traditional intellisense) are currently considered human edits.
 - Authorship logs will not survive rebase, unless the rebase operation is run without git-ai (for ex, if the rebase is done on GitHub, the authorship logs from the affected commits will be quietly lost).
+- AI deletions are not measured, only AI Additions and Total AI Line Count in the repo
 
 ## Developing `git-ai`
 
