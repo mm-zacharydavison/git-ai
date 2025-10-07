@@ -55,6 +55,72 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 Internally, `git-ai` creates checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system, they call `checkpoint agent-name ...` to mark their contributions as AI-generated and to save the associated propmpts. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine. When you commit, `git-ai` compresses and packages the final authorship log and prompt transcripts into a git note attached to the commit.
 
+
+#### `git-ai` commands
+
+All `git-ai` commands follow this pattern:
+
+```bash
+git-ai <command> [options]
+```
+##### `stats`
+
+Show AI authorship statistics for a commit. Displays how much code was written by humans vs AI.
+
+```bash
+# Show stats for current HEAD
+git-ai stats
+
+# Show stats for specific commit
+git-ai stats <commit-sha>
+
+# Output in JSON format
+git-ai stats --json
+git-ai stats <commit-sha> --json
+```
+
+**Options:**
+- `<commit-sha>` - Optional commit SHA (defaults to HEAD)
+- `--json` - Output statistics in JSON format
+
+##### `blame`
+
+Enhanced version of `git blame` that shows AI authorship attribution alongside traditional git blame.
+
+```bash
+git-ai blame <file>
+```
+
+**Arguments:**
+- `<file>` - Path to the file to blame (required)
+
+**Options:**
+Mostly API Compatible, supports same options as [`git blame`](https://git-scm.com/docs/git-blame). 
+
+##### `install-hooks`
+
+Automatically configure Claude Code, Cursor and GitHub Copilot to send authorship information to the `git-ai` binary 
+
+```bash
+git-ai install-hooks
+```
+
+#### `git` proxy behavior 
+
+After the `git-ai` binary is installed and put on the `$PATH`, it handles all invocations of `git` and `git-ai`. 
+
+`git-ai` aims to be a transparent proxy with an unnoticeable performance impact. We reguarly run builds against [`git`'s unit tests](https://github.com/git/git/tree/master/t) to maximize cross platform compatibility and test the performance of our AI checkpointing code.
+
+There two behavior changes `git-ai` introduces:
+
+1. After commits, `git-ai` adds an AI Authorship log linked to the commit in `notes/ai` and print this visualization for developers: 
+
+you  ██▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ai
+     7%             mixed  27%             67%
+
+2. In Git, notes do not sync by default. `git-ai` will append the refspec for `notes/ai` to `fetch` / `push` calls so they are always synced. 
+
+
 ### Known limitations
 
 - Tab completions (from AI or traditional intellisense) are currently considered human edits.
