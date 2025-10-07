@@ -348,8 +348,6 @@ impl TmpRepo {
             false, // show_working_log
             false, // reset
             true,
-            None, // model
-            None, // human_author
             None, // agent_run_result
         )
     }
@@ -401,8 +399,6 @@ impl TmpRepo {
             false, // show_working_log
             false, // reset
             true,
-            model,
-            None, // human_author
             Some(agent_run_result),
         )
     }
