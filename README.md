@@ -21,7 +21,7 @@ To install (or update) `git-ai` run the install script for your platform. The sc
 ### Mac, Linux, Windows (WSL)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh | bash
+curl -sSL https://www.gitai.run/install | bash
 ```
 
 ### Windows (non-WSL)
