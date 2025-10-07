@@ -56,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 Internally, `git-ai` creates checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system, they call `checkpoint agent-name ...` to mark their contributions as AI-generated and to save the associated propmpts. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine. When you commit, `git-ai` compresses and packages the final authorship log and prompt transcripts into a git note attached to the commit.
 
 
-#### `git-ai` commands
+### `git-ai` commands
 
 All `git-ai` commands follow this pattern:
 
@@ -105,7 +105,7 @@ Automatically configure Claude Code, Cursor and GitHub Copilot to send authorshi
 git-ai install-hooks
 ```
 
-#### `git` proxy behavior 
+### `git` proxy behavior 
 
 After the `git-ai` binary is installed and put on the `$PATH`, it handles all invocations of `git` and `git-ai`. 
 
