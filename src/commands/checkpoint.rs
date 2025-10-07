@@ -215,6 +215,11 @@ fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
             continue;
         }
 
+        // Skip unmerged/conflicted files - we'll track them once the conflict is resolved
+        if entry.kind == EntryKind::Unmerged {
+            continue;
+        }
+
         // Include files that have any change (staged or unstaged) or are untracked
         let has_change = entry.staged != StatusCode::Unmodified
             || entry.unstaged != StatusCode::Unmodified
@@ -618,7 +623,7 @@ mod tests {
     #[test]
     fn test_checkpoint_with_unstaged_changes() {
         // Create a repo with an initial commit
-        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+        let (tmp_repo, file, _) = TmpRepo::new_with_base_commit().unwrap();
 
         // Make changes to the file BUT keep them unstaged
         // We need to manually write to the file without staging
@@ -762,6 +767,134 @@ mod tests {
         assert_eq!(
             entries_len_2, 0,
             "Second checkpoint: no NEW changes, so no new entry (already checkpointed)"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_skips_conflicted_files() {
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Get the current branch name (whatever the default is)
+        let base_branch = tmp_repo.current_branch().unwrap();
+
+        // Create a branch and make different changes on each branch to create a conflict
+        tmp_repo.create_branch("feature-branch").unwrap();
+
+        // On feature branch, modify the file
+        file.append("Feature branch change\n").unwrap();
+        tmp_repo
+            .trigger_checkpoint_with_author("FeatureUser")
+            .unwrap();
+        tmp_repo.commit_with_message("Feature commit").unwrap();
+
+        // Switch back to base branch and make conflicting changes
+        tmp_repo.switch_branch(&base_branch).unwrap();
+        file.append("Main branch change\n").unwrap();
+        tmp_repo.trigger_checkpoint_with_author("MainUser").unwrap();
+        tmp_repo.commit_with_message("Main commit").unwrap();
+
+        // Attempt to merge feature-branch into base branch - this should create a conflict
+        let has_conflicts = tmp_repo.merge_with_conflicts("feature-branch").unwrap();
+        assert!(has_conflicts, "Should have merge conflicts");
+
+        // Try to checkpoint while there are conflicts
+        let (entries_len, files_len, _) = tmp_repo.trigger_checkpoint_with_author("Human").unwrap();
+
+        // Checkpoint should skip conflicted files
+        assert_eq!(
+            files_len, 0,
+            "Should have 0 files (conflicted file should be skipped)"
+        );
+        assert_eq!(
+            entries_len, 0,
+            "Should have 0 entries (conflicted file should be skipped)"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_works_after_conflict_resolution_maintains_authorship() {
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Get the current branch name (whatever the default is)
+        let base_branch = tmp_repo.current_branch().unwrap();
+
+        // Checkpoint initial state to track the base authorship
+        let file_path = file.path();
+        let initial_content = std::fs::read_to_string(&file_path).unwrap();
+        println!("Initial content:\n{}", initial_content);
+
+        // Create a branch and make changes
+        tmp_repo.create_branch("feature-branch").unwrap();
+        file.append("Feature line 1\n").unwrap();
+        file.append("Feature line 2\n").unwrap();
+        tmp_repo.trigger_checkpoint_with_author("AI_Agent").unwrap();
+        tmp_repo.commit_with_message("Feature commit").unwrap();
+
+        // Switch back to base branch and make conflicting changes
+        tmp_repo.switch_branch(&base_branch).unwrap();
+        file.append("Main line 1\n").unwrap();
+        file.append("Main line 2\n").unwrap();
+        tmp_repo.trigger_checkpoint_with_author("Human").unwrap();
+        tmp_repo.commit_with_message("Main commit").unwrap();
+
+        // Attempt to merge feature-branch into base branch - this should create a conflict
+        let has_conflicts = tmp_repo.merge_with_conflicts("feature-branch").unwrap();
+        assert!(has_conflicts, "Should have merge conflicts");
+
+        // While there are conflicts, checkpoint should skip the file
+        let (entries_len_conflict, files_len_conflict, _) =
+            tmp_repo.trigger_checkpoint_with_author("Human").unwrap();
+        assert_eq!(
+            files_len_conflict, 0,
+            "Should skip conflicted files during conflict"
+        );
+        assert_eq!(
+            entries_len_conflict, 0,
+            "Should not create entries for conflicted files"
+        );
+
+        // Resolve the conflict by choosing "ours" (base branch)
+        tmp_repo.resolve_conflict(file.filename(), "ours").unwrap();
+
+        // Verify content to ensure the resolution was applied correctly
+        let resolved_content = std::fs::read_to_string(&file_path).unwrap();
+        println!("Resolved content after resolution:\n{}", resolved_content);
+        assert!(
+            resolved_content.contains("Main line 1"),
+            "Should contain base branch content (we chose 'ours')"
+        );
+        assert!(
+            resolved_content.contains("Main line 2"),
+            "Should contain base branch content (we chose 'ours')"
+        );
+        assert!(
+            !resolved_content.contains("Feature line 1"),
+            "Should not contain feature branch content (we chose 'ours')"
+        );
+
+        // After resolution, make additional changes to test that checkpointing works again
+        file.append("Post-resolution line 1\n").unwrap();
+        file.append("Post-resolution line 2\n").unwrap();
+
+        // Now checkpoint should work and track the new changes
+        let (entries_len_after, files_len_after, _) =
+            tmp_repo.trigger_checkpoint_with_author("Human").unwrap();
+
+        println!(
+            "After resolution and new changes: entries_len={}, files_len={}",
+            entries_len_after, files_len_after
+        );
+
+        // The file should be tracked with the new changes
+        assert_eq!(
+            files_len_after, 1,
+            "Should detect 1 file with new changes after conflict resolution"
+        );
+        assert_eq!(
+            entries_len_after, 1,
+            "Should create 1 entry for new changes after conflict resolution"
         );
     }
 }
