@@ -24,19 +24,13 @@ pub enum Message {
 
 impl Message {
     /// Create a user message
-    pub fn user(text: String) -> Self {
-        Message::User {
-            text,
-            timestamp: None,
-        }
+    pub fn user(text: String, timestamp: Option<String>) -> Self {
+        Message::User { text, timestamp }
     }
 
     /// Create an assistant message
-    pub fn assistant(text: String) -> Self {
-        Message::Assistant {
-            text,
-            timestamp: None,
-        }
+    pub fn assistant(text: String, timestamp: Option<String>) -> Self {
+        Message::Assistant { text, timestamp }
     }
 
     /// Create a tool use message

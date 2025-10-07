@@ -285,9 +285,12 @@ mod tests {
             vec![],
         );
 
-        let user_message = Message::user("Please add error handling to this function".to_string());
+        let user_message = Message::user(
+            "Please add error handling to this function".to_string(),
+            None,
+        );
         let assistant_message =
-            Message::assistant("I'll add error handling to the function.".to_string());
+            Message::assistant("I'll add error handling to the function.".to_string(), None);
 
         let mut transcript = AiTranscript::new();
         transcript.add_message(user_message);

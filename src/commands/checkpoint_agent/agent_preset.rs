@@ -372,15 +372,27 @@ impl CursorPreset {
                 if let Ok(Some(bubble_content)) =
                     Self::fetch_bubble_content_from_db(global_db_path, composer_id, bubble_id)
                 {
+                    // Get bubble created at (ISO 8601 UTC string)
+                    let bubble_created_at = bubble_content
+                        .get("createdAt")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
                     // Extract text from bubble
                     if let Some(text) = bubble_content.get("text").and_then(|v| v.as_str()) {
                         let trimmed = text.trim();
                         if !trimmed.is_empty() {
                             let role = header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
                             if role == 1 {
-                                transcript.add_message(Message::user(trimmed.to_string()));
+                                transcript.add_message(Message::user(
+                                    trimmed.to_string(),
+                                    bubble_created_at.clone(),
+                                ));
                             } else {
-                                transcript.add_message(Message::assistant(trimmed.to_string()));
+                                transcript.add_message(Message::assistant(
+                                    trimmed.to_string(),
+                                    bubble_created_at.clone(),
+                                ));
                             }
                         }
                     }
@@ -402,10 +414,12 @@ impl CursorPreset {
                                             if role == 1 {
                                                 transcript.add_message(Message::user(
                                                     trimmed.to_string(),
+                                                    bubble_created_at.clone(),
                                                 ));
                                             } else {
                                                 transcript.add_message(Message::assistant(
                                                     trimmed.to_string(),
+                                                    bubble_created_at.clone(),
                                                 ));
                                             }
                                         }
