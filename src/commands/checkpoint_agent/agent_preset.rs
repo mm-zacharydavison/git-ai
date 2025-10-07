@@ -615,8 +615,11 @@ impl GithubCopilotPreset {
         for request in requests {
             // Parse the human timestamp once per request (unix ms and RFC3339)
             let user_ts_ms = request.get("timestamp").and_then(|v| v.as_i64());
-            let user_ts_rfc3339 = user_ts_ms
-                .and_then(|ms| Utc.timestamp_millis_opt(ms).single().map(|dt| dt.to_rfc3339()));
+            let user_ts_rfc3339 = user_ts_ms.and_then(|ms| {
+                Utc.timestamp_millis_opt(ms)
+                    .single()
+                    .map(|dt| dt.to_rfc3339())
+            });
 
             // Add the human's message
             if let Some(user_text) = request
