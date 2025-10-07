@@ -15,8 +15,6 @@ pub fn run(
     show_working_log: bool,
     reset: bool,
     quiet: bool,
-    _model: Option<&str>,
-    _human_author: Option<&str>,
     agent_run_result: Option<AgentRunResult>,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos

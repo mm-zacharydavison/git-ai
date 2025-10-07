@@ -2,7 +2,7 @@ use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::AgentId;
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_preset::{
-    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
+    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset, GithubCopilotPreset,
 };
 use crate::config;
 use crate::git::find_repository;
@@ -97,9 +97,6 @@ fn handle_checkpoint(args: &[String]) {
     let mut author = None;
     let mut show_working_log = false;
     let mut reset = false;
-    let mut model = None;
-    let mut _prompt_json = None;
-    let mut _prompt_path = None;
     let mut prompt_id = None;
     let mut hook_input = None;
 
@@ -122,33 +119,6 @@ fn handle_checkpoint(args: &[String]) {
             "--reset" => {
                 reset = true;
                 i += 1;
-            }
-            "--model" => {
-                if i + 1 < args.len() {
-                    model = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --model requires a value");
-                    std::process::exit(1);
-                }
-            }
-            "--prompt" => {
-                if i + 1 < args.len() {
-                    _prompt_json = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --prompt requires a JSON value");
-                    std::process::exit(1);
-                }
-            }
-            "--prompt-path" => {
-                if i + 1 < args.len() {
-                    _prompt_path = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --prompt-path requires a value");
-                    std::process::exit(1);
-                }
             }
             "--prompt-id" => {
                 if i + 1 < args.len() {
@@ -215,16 +185,18 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "github-copilot" => {
-                agent_run_result = Some(AgentRunResult {
-                    agent_id: AgentId {
-                        tool: "github-copilot".to_string(),
-                        id: "unknown".to_string(),
-                        model: "unknown".to_string(),
-                    },
-                    is_human: false,
-                    transcript: None,
-                    repo_working_dir: None,
-                });
+                match GithubCopilotPreset.run(AgentCheckpointFlags {
+                    prompt_id: prompt_id.clone(),
+                    hook_input: hook_input.clone(),
+                }) {
+                    Ok(agent_run) => {
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Github Copilot preset error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
             "mock_ai" => {
                 agent_run_result = Some(AgentRunResult {
@@ -272,8 +244,6 @@ fn handle_checkpoint(args: &[String]) {
         show_working_log,
         reset,
         false,
-        model.as_deref(),
-        Some(&default_user_name),
         agent_run_result,
     ) {
         eprintln!("Checkpoint failed: {}", e);

@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { exec } from "child_process";
 
 class AIEditManager {
+  private workspaceBaseStoragePath: string | null = null;
   private gitAiVersion: string | null = null;
   private hasShownGitAiMissingMessage = false;
   private lastHumanCheckpointAt: Date | null = null;
@@ -12,11 +14,19 @@ class AIEditManager {
   private snapshotOpenEvents = new Map<string, {
     timestamp: number;
     count: number;
+    uri: vscode.Uri;
   }>();
   private readonly SAVE_EVENT_DEBOUNCE_WINDOW_MS = 300;
   private readonly HUMAN_CHECKPOINT_DEBOUNCE_MS = 500;
 
-  constructor() {}
+  constructor(context: vscode.ExtensionContext) {    
+    if (context.storageUri?.fsPath) {
+      this.workspaceBaseStoragePath = path.dirname(context.storageUri.fsPath);  
+    } else {
+      // No workspace active (extension will be re-activated when a workspace is opened)
+      console.warn('[git-ai] No workspace storage URI available');
+    }
+  }
 
   public handleSaveEvent(doc: vscode.TextDocument): void {
     const filePath = doc.uri.fsPath;
@@ -52,7 +62,8 @@ class AIEditManager {
       } else {
         this.snapshotOpenEvents.set(filePath, {
           timestamp: now,
-          count: 1
+          count: 1,
+          uri: doc.uri // TODO Should we just let first writer wins for URI?
         });
       }
 
@@ -75,10 +86,34 @@ class AIEditManager {
 
     const snapshotInfo = this.snapshotOpenEvents.get(filePath);
 
-    // Check if we have 1+ snapshot open events within the debounce window
-    if (snapshotInfo && snapshotInfo.count >= 1) {
-      console.log('[git-ai] AIEditManager: AI edit detected for', filePath, '- triggering AI checkpoint');
-      this.checkpoint("ai");
+    // Check if we have 1+ valid snapshot open events within the debounce window
+    if (snapshotInfo && snapshotInfo.count >= 1 && snapshotInfo.uri?.query) {
+      try {
+        if (!this.workspaceBaseStoragePath) {
+          throw new Error('No workspace base storage path found');
+        }
+        const params = JSON.parse(snapshotInfo.uri.query);
+        if (!params.sessionId || !params.requestId) {
+          throw new Error('Missing required parameters in snapshot URI query');
+        }
+        let sessionId = params.sessionId || null;
+        let requestId = params.requestId || null;
+        let chatSessionPath = path.join(this.workspaceBaseStoragePath, 'chatSessions', sessionId+'.json');
+        // Get the workspace folder for the file, fallback to workspaceBaseStoragePath if not found
+        let workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+        if (!workspaceFolder) {
+          throw new Error('No workspace folder found for file path: ' + filePath);
+        }
+        console.log('[git-ai] AIEditManager: AI edit detected for', filePath, '- triggering AI checkpoint (sessionId:', sessionId, ', requestId:', requestId, ', chatSessionPath:', chatSessionPath, ', workspaceFolder:', workspaceFolder.uri.fsPath, ')');
+        this.checkpoint("ai", JSON.stringify({
+          chatSessionPath,
+          sessionId,
+          requestId,
+          workspaceFolder: workspaceFolder.uri.fsPath,
+        }));
+      } catch (e) {
+        console.error('[git-ai] AIEditManager: Failed to parse snapshot URI query as JSON. Unable to trigger AI checkpoint', e);
+      }
     } else {
       console.log('[git-ai] AIEditManager: No AI pattern detected for', filePath, '- triggering human checkpoint');
       this.checkpoint("human");
@@ -94,7 +129,7 @@ class AIEditManager {
     this.checkpoint("human");
   }
 
-  async checkpoint(author: "human" | "ai"): Promise<boolean> {
+  async checkpoint(author: "human" | "ai", hookInput?: string): Promise<boolean> {
     if (!(await this.checkGitAi())) {
       return false;
     }
@@ -132,7 +167,8 @@ class AIEditManager {
       }
 
       exec(
-        `git-ai checkpoint ${author === "ai" ? "github-copilot" : ""}`,
+        // NOTE: The single quotes should be safe for the kind of data we have
+        `git-ai checkpoint ${author === "ai" ? "github-copilot" : ""} ${hookInput ? `--hook-input '${hookInput}'` : ""}`,
         { cwd: workspaceRoot },
         (error) => {
           if (error) {
@@ -195,7 +231,7 @@ class AIEditManager {
 export function activate(context: vscode.ExtensionContext) {
   console.log('[git-ai] extension activated');
 
-  const aiEditManager = new AIEditManager();
+  const aiEditManager = new AIEditManager(context);
 
   // Trigger initial human checkpoint
   aiEditManager.triggerInitialHumanCheckpoint();

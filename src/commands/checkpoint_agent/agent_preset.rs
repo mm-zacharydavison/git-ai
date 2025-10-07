@@ -530,6 +530,172 @@ impl CursorPreset {
     }
 }
 
+pub struct GithubCopilotPreset;
+
+impl AgentCheckpointPreset for GithubCopilotPreset {
+    fn run(&self, flags: AgentCheckpointFlags) -> Result<AgentRunResult, GitAiError> {
+        // Parse hook_input JSON to extract chat session information
+        let hook_input_json = flags.hook_input.ok_or_else(|| {
+            GitAiError::PresetError("hook_input is required for GitHub Copilot preset".to_string())
+        })?;
+
+        let hook_data: serde_json::Value = serde_json::from_str(&hook_input_json)
+            .map_err(|e| GitAiError::PresetError(format!("Invalid JSON in hook_input: {}", e)))?;
+
+        let chat_session_path = hook_data
+            .get("chatSessionPath")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError(
+                    "chatSessionPath not found in hook_input".to_string(),
+                )
+            })?;
+
+        // Accept either chatSessionId (old) or sessionId (from VS Code extension)
+        let chat_session_id = hook_data
+            .get("chatSessionId")
+            .and_then(|v| v.as_str())
+            .or_else(|| hook_data.get("sessionId").and_then(|v| v.as_str()))
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Read the Copilot chat session JSON
+        let session_content =
+            std::fs::read_to_string(chat_session_path).map_err(|e| GitAiError::IoError(e))?;
+        let session_json: serde_json::Value =
+            serde_json::from_str(&session_content).map_err(|e| GitAiError::JsonError(e))?;
+
+        // Extract the requests array which represents the conversation from start to finish
+        let requests = session_json
+            .get("requests")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                GitAiError::PresetError(
+                    "requests array not found in Copilot chat session".to_string(),
+                )
+            })?;
+
+        let mut transcript = AiTranscript::new();
+        let mut detected_model: Option<String> = None;
+        // Required working directory provided by the extension
+        let repo_working_dir: String = hook_data
+            .get("workspaceFolder")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                GitAiError::PresetError(
+                    "workspaceFolder not found in hook_input for GitHub Copilot preset".to_string(),
+                )
+            })?
+            .to_string();
+
+        for request in requests {
+            // Add the human's message
+            if let Some(user_text) = request
+                .get("message")
+                .and_then(|m| m.get("text"))
+                .and_then(|v| v.as_str())
+            {
+                let trimmed = user_text.trim();
+                if !trimmed.is_empty() {
+                    transcript.add_message(Message::user(trimmed.to_string()));
+                }
+            }
+
+            // Process the agent's response items: tool invocations, edits, and text
+            if let Some(response_items) = request.get("response").and_then(|v| v.as_array()) {
+                let mut assistant_text_accumulator = String::new();
+
+                for item in response_items {
+                    // Capture tool invocations and other structured actions as tool_use
+                    if let Some(kind) = item.get("kind").and_then(|v| v.as_str()) {
+                        match kind {
+                            // Primary tool invocation entries
+                            "toolInvocationSerialized" => {
+                                let tool_name = item
+                                    .get("toolId")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("tool");
+                                transcript.add_message(Message::tool_use(
+                                    tool_name.to_string(),
+                                    item.clone(),
+                                ));
+                            }
+                            // Other structured response elements worth capturing
+                            "textEditGroup" | "codeblockUri" | "inlineReference" | "undoStop"
+                            | "prepareToolInvocation" => {
+                                transcript.add_message(Message::tool_use(
+                                    kind.to_string(),
+                                    item.clone(),
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Accumulate visible assistant text snippets
+                    if let Some(val) = item.get("value").and_then(|v| v.as_str()) {
+                        let t = val.trim();
+                        if !t.is_empty() {
+                            if !assistant_text_accumulator.is_empty() {
+                                assistant_text_accumulator.push(' ');
+                            }
+                            assistant_text_accumulator.push_str(t);
+                        }
+                    }
+                }
+
+                if !assistant_text_accumulator.trim().is_empty() {
+                    transcript.add_message(Message::assistant(
+                        assistant_text_accumulator.trim().to_string(),
+                    ));
+                }
+            }
+
+            // Detect model from request metadata if available
+            if detected_model.is_none() {
+                if let Some(details) = request
+                    .get("result")
+                    .and_then(|r| r.get("details"))
+                    .and_then(|v| v.as_str())
+                {
+                    // Typically looks like "GPT-4.1 • 0x"; take the model name before the bullet
+                    if let Some(name) = details.split('•').next() {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            detected_model = Some(name.to_string());
+                        }
+                    }
+                }
+
+                if detected_model.is_none() {
+                    if let Some(model_id) = request
+                        .get("result")
+                        .and_then(|r| r.get("modelId"))
+                        .and_then(|v| v.as_str())
+                    {
+                        detected_model = Some(model_id.to_string());
+                    }
+                }
+            }
+
+            // No repo working dir inference; it's required in hook input
+        }
+
+        let agent_id = AgentId {
+            tool: "github-copilot".to_string(),
+            id: chat_session_id,
+            model: detected_model.unwrap_or_else(|| "unknown".to_string()),
+        };
+
+        Ok(AgentRunResult {
+            agent_id,
+            is_human: false,
+            transcript: Some(transcript),
+            repo_working_dir: Some(repo_working_dir),
+        })
+    }
+}
+
 // HARD TO TEST IN CI. We need to figure out a way to get cursor and some known good data into the cursor dir.
 // #[cfg(test)]
 // mod tests {
