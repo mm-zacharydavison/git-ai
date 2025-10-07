@@ -38,9 +38,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 | Agent/IDE | Authorship | Prompts |
 | --- | --- | --- |
-| [Cursor via Hooks](https://usegitai.com/docs/agent-support/cursor) | ✅ | ✅ |
-| [Claude Code via Hooks](https://usegitai.com/docs/agent-support/claude-code) | ✅ | ✅ |
-| [VS Code & GitHub Copilot via Extension](https://usegitai.com/docs/agent-support/vs-code-github-copilot) | ✅ | Coming soon |
+| [Cursor >1.7](https://usegitai.com/docs/agent-support/cursor) | ✅ | ✅ |
+| [Claude Code](https://usegitai.com/docs/agent-support/claude-code) | ✅ | ✅ |
+| [GitHub Copilot in VSCode via Extension](https://usegitai.com/docs/agent-support/vs-code-github-copilot) | ✅ | Coming soon |
 | OpenAI Codex (waiting on [openai/codex #2904](https://github.com/openai/codex/pull/2904)) |  |  |
 | Sourcegraph Cody + Amp |  |  |
 | Windsurf |  |  |
