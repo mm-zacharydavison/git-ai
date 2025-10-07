@@ -1,0 +1,58 @@
+---
+title: Compatibility and Limitations 
+---
+
+## Supported Agents
+
+| Agent | Authorship | Prompts |
+| --- | --- | --- |
+| [Cursor >1.7](https://usegitai.com/docs/agent-support/cursor) | ✅ | ✅ |
+| [Claude Code](https://usegitai.com/docs/agent-support/claude-code) | ✅ | ✅ |
+| [GitHub Copilot in VSCode via Extension](https://usegitai.com/docs/agent-support/vs-code-github-copilot) | ✅ | Coming soon |
+
+## Capabilities
+
+| Category | Feature | Status |
+| --- | --- | --- |
+| **Agent Mode** | Attribute LOC added with Write \| Edit \| MultiEdit tools (default) | ✅ |
+| **Agent Mode** | Attribute edits from agents running shell commands / scripts | ❌ |
+| **Tab Completion** | Attribute LOC from tab completions | ❌ |
+| **Editing** | Human edits of AI LOC move attribution to that developer | ✅ |
+| **Editing** | AI edits of human LOC move attribution to the AI | ✅ |
+| **Editing** | Adding code before or after AI Hunks does not break attribution (line shifting works) | ✅ |
+| **Editing** | Undo / Redo operations correctly preserve attribution | ❌ |
+| **Editing** | Restoring to a local checkpoint in your IDE restores that file's attribution to its old state | ❌ |
+| **Editing** | Copy / Pasting AI LOC keeps them attributed to AI | ❌ |
+| **Editing** | Code Formatting tools do not break attribution | ❌ |
+
+## Supported Git Workflows
+
+### Local
+
+| Git Operation | Status |
+| --- | --- |
+| Merging branches correctly merges attribution | ✅ |
+| Merging branches with `--squash` correctly merges attribution | ✅ |
+| `reset --hard` resets attribution to the base commit | ✅ |
+| git replace maintains correct attribution | ✅ |
+| git worktrees maintains correct attribution | ✅ |
+| Amending commits correctly preserves attribution | ✅ |
+| Rebase correctly merges attribution | ❌ |
+| Cherrypick correctly merges attribution | ❌ |
+| reset `--soft` and `--mixed` maintains correct attribution | ❌ |
+| `mv` (move or rename files) moves AI attribution to the new file | ❌ |
+| Stash / Pop maintain correct attribution | ❌ |
+
+### Server-Side
+
+Because Authorship Logs are linked to commit hashes, server-side operations that create new commits will not have logs attached. You'll have to manually run `git-ai squash-authorship` after the squash or merge operation to update the attribution. 
+
+We'll be publishing CI scripts and Apps to assist with this soon. 
+
+
+| Platform | Operation | Status |
+| --- | --- | --- |
+| GitHub | Rebase / Merge | ⚠️ Requires GitHub Action or Webhook |
+| GitHub | Squash and Merge | ⚠️ Requires GitHub Action or Webhook |
+| GitLab | Squash and Merge | ⚠️ Requires CI Runner or Webhook |
+| BitBucket Cloud | Squash and Merge | ⚠️ Requires CI Runner or Webhook |
