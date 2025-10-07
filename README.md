@@ -69,6 +69,15 @@ cargo build
 cargo test
 ```
 
+Putting a development build of `git-ai` on your path
+
+```
+sh scripts/dev-symlinks.sh
+task debug:local 
+```
+_you'll need to install [taskfile_](https://taskfile.dev/docs/installation)_
+
+
 ### License
 
 MIT
