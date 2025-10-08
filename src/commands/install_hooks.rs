@@ -8,6 +8,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Minimum version requirements
+const MIN_CURSOR_VERSION: (u32, u32) = (1, 7);
+const MIN_CODE_VERSION: (u32, u32) = (1, 99);
+const MIN_CLAUDE_VERSION: (u32, u32) = (2, 0);
+
 // Command patterns for hooks (after "git-ai")
 // Claude Code hooks (uses shell, so relative path works)
 const CLAUDE_PRE_TOOL_CMD: &str = "checkpoint 2>/dev/null || true";
@@ -37,99 +42,139 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
     let mut any_checked = false;
     let mut has_changes = false;
 
-    if check_claude_code() {
-        any_checked = true;
-        // Install/update Claude Code hooks
-        let spinner = Spinner::new("Claude code: checking hooks");
-        spinner.start();
+    match check_claude_code() {
+        Ok(true) => {
+            any_checked = true;
+            // Install/update Claude Code hooks
+            let spinner = Spinner::new("Claude code: checking hooks");
+            spinner.start();
 
-        match install_claude_code_hooks(dry_run) {
-            Ok(Some(diff)) => {
-                if dry_run {
-                    spinner.pending("Claude code: Pending updates");
-                } else {
-                    spinner.success("Claude code: Hooks updated");
-                }
-                println!(); // Blank line before diff
-                print_diff(&diff);
-                has_changes = true;
-            }
-            Ok(None) => {
-                spinner.success("Claude code: Hooks already up to date");
-            }
-            Err(e) => {
-                spinner.error("Claude code: Failed to update hooks");
-                eprintln!("  Error: {}", e);
-                eprintln!("  Check that ~/.claude/settings.json is valid JSON");
-            }
-        }
-    }
-
-    if check_cursor() {
-        any_checked = true;
-        // Install/update Cursor hooks
-        let spinner = Spinner::new("Cursor: checking hooks");
-        spinner.start();
-
-        match install_cursor_hooks(&binary_path, dry_run) {
-            Ok(Some(diff)) => {
-                if dry_run {
-                    spinner.pending("Cursor: Pending updates");
-                } else {
-                    spinner.success("Cursor: Hooks updated");
-                }
-                println!(); // Blank line before diff
-                print_diff(&diff);
-                has_changes = true;
-            }
-            Ok(None) => {
-                spinner.success("Cursor: Hooks already up to date");
-            }
-            Err(e) => {
-                spinner.error("Cursor: Failed to update hooks");
-                eprintln!("  Error: {}", e);
-                eprintln!("  Check that ~/.cursor/hooks.json is valid JSON");
-            }
-        }
-    }
-
-    if check_vscode() {
-        any_checked = true;
-        // Install/update VS Code hooks
-        let spinner = Spinner::new("VS Code: installing extension");
-        spinner.start();
-
-        if binary_exists("code") {
-            // Install/update VS Code extension
-            match is_vscode_extension_installed("git-ai.git-ai-vscode") {
-                Ok(true) => {
-                    spinner.success("VS Code: Extension installed");
-                }
-                Ok(false) => {
+            match install_claude_code_hooks(dry_run) {
+                Ok(Some(diff)) => {
                     if dry_run {
-                        spinner.pending("VS Code: Pending extension install (git-ai for VS Code)");
+                        spinner.pending("Claude code: Pending updates");
                     } else {
-                        match install_vscode_extension("git-ai.git-ai-vscode") {
-                            Ok(()) => {
-                                spinner.success("VS Code: Extension installed");
-                            }
-                            Err(e) => {
-                                debug_log(&format!(
-                                    "VS Code: Error automatically installing extension: {}",
-                                    e
-                                ));
-                                spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+                        spinner.success("Claude code: Hooks updated");
+                    }
+                    println!(); // Blank line before diff
+                    print_diff(&diff);
+                    has_changes = true;
+                }
+                Ok(None) => {
+                    spinner.success("Claude code: Hooks already up to date");
+                }
+                Err(e) => {
+                    spinner.error("Claude code: Failed to update hooks");
+                    eprintln!("  Error: {}", e);
+                    eprintln!("  Check that ~/.claude/settings.json is valid JSON");
+                }
+            }
+        }
+        Ok(false) => {
+            // Claude Code not detected
+        }
+        Err(version_error) => {
+            any_checked = true;
+            let spinner = Spinner::new("Claude code: checking version");
+            spinner.start();
+            spinner.error("Claude code: Version check failed");
+            eprintln!("  Error: {}", version_error);
+            eprintln!("  Please update Claude Code to continue using git-ai hooks");
+        }
+    }
+
+    match check_cursor() {
+        Ok(true) => {
+            any_checked = true;
+            // Install/update Cursor hooks
+            let spinner = Spinner::new("Cursor: checking hooks");
+            spinner.start();
+
+            match install_cursor_hooks(&binary_path, dry_run) {
+                Ok(Some(diff)) => {
+                    if dry_run {
+                        spinner.pending("Cursor: Pending updates");
+                    } else {
+                        spinner.success("Cursor: Hooks updated");
+                    }
+                    println!(); // Blank line before diff
+                    print_diff(&diff);
+                    has_changes = true;
+                }
+                Ok(None) => {
+                    spinner.success("Cursor: Hooks already up to date");
+                }
+                Err(e) => {
+                    spinner.error("Cursor: Failed to update hooks");
+                    eprintln!("  Error: {}", e);
+                    eprintln!("  Check that ~/.cursor/hooks.json is valid JSON");
+                }
+            }
+        }
+        Ok(false) => {
+            // Cursor not detected
+        }
+        Err(version_error) => {
+            any_checked = true;
+            let spinner = Spinner::new("Cursor: checking version");
+            spinner.start();
+            spinner.error("Cursor: Version check failed");
+            eprintln!("  Error: {}", version_error);
+            eprintln!("  Please update Cursor to continue using git-ai hooks");
+        }
+    }
+
+    match check_vscode() {
+        Ok(true) => {
+            any_checked = true;
+            // Install/update VS Code hooks
+            let spinner = Spinner::new("VS Code: installing extension");
+            spinner.start();
+
+            if binary_exists("code") {
+                // Install/update VS Code extension
+                match is_vscode_extension_installed("git-ai.git-ai-vscode") {
+                    Ok(true) => {
+                        spinner.success("VS Code: Extension installed");
+                    }
+                    Ok(false) => {
+                        if dry_run {
+                            spinner
+                                .pending("VS Code: Pending extension install (git-ai for VS Code)");
+                        } else {
+                            match install_vscode_extension("git-ai.git-ai-vscode") {
+                                Ok(()) => {
+                                    spinner.success("VS Code: Extension installed");
+                                }
+                                Err(e) => {
+                                    debug_log(&format!(
+                                        "VS Code: Error automatically installing extension: {}",
+                                        e
+                                    ));
+                                    spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+                                }
                             }
                         }
                     }
+                    Err(e) => {
+                        spinner.error("VS Code: Failed to check extension");
+                        eprintln!("  Error: {}", e);
+                    }
                 }
-                Err(e) => {
-                    spinner.error("VS Code: Failed to check extension");
-                    eprintln!("  Error: {}", e);
-                }
+            } else {
+                spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
             }
-        } else {
-            spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+        }
+        Ok(false) => {
+            // VS Code not detected
+        }
+        Err(version_error) => {
+            any_checked = true;
+            let spinner = Spinner::new("VS Code: checking version");
+            spinner.start();
+            spinner.error("VS Code: Version check failed");
+            eprintln!("  Error: {}", version_error);
+            eprintln!("  Please update VS Code to continue using git-ai hooks");
         }
     }
 
@@ -167,43 +212,157 @@ fn print_diff(diff_text: &str) {
     println!(); // Blank line after diff
 }
 
-fn check_claude_code() -> bool {
-    if binary_exists("claude") {
-        return true;
+fn check_claude_code() -> Result<bool, String> {
+    let has_binary = binary_exists("claude");
+    let has_dotfiles = {
+        let home = home_dir();
+        home.join(".claude").exists()
+    };
+
+    if !has_binary && !has_dotfiles {
+        return Ok(false);
     }
 
-    // Sometimes the binary won't be in the PATH, but the dotfiles will be
-    let home = home_dir();
-    return home.join(".claude").exists();
+    // If we have the binary, check version
+    if has_binary {
+        match get_binary_version("claude") {
+            Ok(version_str) => {
+                if let Some(version) = parse_version(&version_str) {
+                    if !version_meets_requirement(version, MIN_CLAUDE_VERSION) {
+                        return Err(format!(
+                            "Claude Code version {}.{} detected, but minimum version {}.{} is required",
+                            version.0, version.1, MIN_CLAUDE_VERSION.0, MIN_CLAUDE_VERSION.1
+                        ));
+                    }
+                }
+                // If we can't parse, continue anyway (be permissive)
+            }
+            Err(_) => {
+                // If version check fails, continue anyway (be permissive)
+            }
+        }
+    }
+
+    Ok(true)
 }
 
-fn check_cursor() -> bool {
-    // TODO: Also check if dotfiles for cursor exist (windows?)
-    if binary_exists("cursor") {
-        return true;
+fn check_cursor() -> Result<bool, String> {
+    let has_binary = binary_exists("cursor");
+    let has_dotfiles = {
+        let home = home_dir();
+        home.join(".cursor").exists()
+    };
+
+    if !has_binary && !has_dotfiles {
+        return Ok(false);
     }
 
-    // TODO Approach for Windows?
+    // If we have the binary, check version
+    if has_binary {
+        match get_binary_version("cursor") {
+            Ok(version_str) => {
+                if let Some(version) = parse_version(&version_str) {
+                    if !version_meets_requirement(version, MIN_CURSOR_VERSION) {
+                        return Err(format!(
+                            "Cursor version {}.{} detected, but minimum version {}.{} is required",
+                            version.0, version.1, MIN_CURSOR_VERSION.0, MIN_CURSOR_VERSION.1
+                        ));
+                    }
+                }
+                // If we can't parse, continue anyway (be permissive)
+            }
+            Err(_) => {
+                // If version check fails, continue anyway (be permissive)
+            }
+        }
+    }
 
-    // Sometimes the binary won't be in the PATH, but the dotfiles will be
-    let home = home_dir();
-    return home.join(".cursor").exists();
+    Ok(true)
 }
 
-fn check_vscode() -> bool {
-    // TODO: Also check if dotfiles for code exist (windows?)
-    if binary_exists("code") {
-        return true;
+fn check_vscode() -> Result<bool, String> {
+    let has_binary = binary_exists("code");
+    let has_dotfiles = {
+        let home = home_dir();
+        home.join(".vscode").exists()
+    };
+
+    if !has_binary && !has_dotfiles {
+        return Ok(false);
     }
 
-    // TODO Approach for Windows?
+    // If we have the binary, check version
+    if has_binary {
+        match get_binary_version("code") {
+            Ok(version_str) => {
+                if let Some(version) = parse_version(&version_str) {
+                    if !version_meets_requirement(version, MIN_CODE_VERSION) {
+                        return Err(format!(
+                            "VS Code version {}.{} detected, but minimum version {}.{} is required",
+                            version.0, version.1, MIN_CODE_VERSION.0, MIN_CODE_VERSION.1
+                        ));
+                    }
+                }
+                // If we can't parse, continue anyway (be permissive)
+            }
+            Err(_) => {
+                // If version check fails, continue anyway (be permissive)
+            }
+        }
+    }
 
-    // Sometimes the binary won't be in the PATH, but the dotfiles will be
-    let home = home_dir();
-    return home.join(".vscode").exists();
+    Ok(true)
 }
 
 // Shared utilities
+
+/// Get version from a binary's --version output
+fn get_binary_version(binary: &str) -> Result<String, GitAiError> {
+    let output = Command::new(binary)
+        .arg("--version")
+        .output()
+        .map_err(|e| GitAiError::Generic(format!("Failed to run {} --version: {}", binary, e)))?;
+
+    if !output.status.success() {
+        return Err(GitAiError::Generic(format!(
+            "{} --version failed with status: {}",
+            binary, output.status
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim().to_string())
+}
+
+/// Parse version string to extract major.minor version
+/// Handles formats like "1.7.38", "1.104.3", "2.0.8 (Claude Code)"
+fn parse_version(version_str: &str) -> Option<(u32, u32)> {
+    // Split by whitespace and take the first part (handles "2.0.8 (Claude Code)")
+    let version_part = version_str.split_whitespace().next()?;
+
+    // Split by dots and take first two numbers
+    let parts: Vec<&str> = version_part.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let major = parts[0].parse::<u32>().ok()?;
+    let minor = parts[1].parse::<u32>().ok()?;
+
+    Some((major, minor))
+}
+
+/// Compare version against minimum requirement
+/// Returns true if version >= min_version
+fn version_meets_requirement(version: (u32, u32), min_version: (u32, u32)) -> bool {
+    if version.0 > min_version.0 {
+        return true;
+    }
+    if version.0 == min_version.0 && version.1 >= min_version.1 {
+        return true;
+    }
+    false
+}
 
 /// Check if a binary with the given name exists in the system PATH
 fn binary_exists(name: &str) -> bool {
@@ -1558,6 +1717,83 @@ mod tests {
             post_hooks[0].get("command").unwrap().as_str().unwrap(),
             "prettier --write"
         );
+    }
+
+    #[test]
+    fn test_parse_version() {
+        // Test standard versions
+        assert_eq!(parse_version("1.7.38"), Some((1, 7)));
+        assert_eq!(parse_version("1.104.3"), Some((1, 104)));
+        assert_eq!(parse_version("2.0.8"), Some((2, 0)));
+
+        // Test version with extra text
+        assert_eq!(parse_version("2.0.8 (Claude Code)"), Some((2, 0)));
+
+        // Test edge cases
+        assert_eq!(parse_version("1.0"), Some((1, 0)));
+        assert_eq!(parse_version("10.20.30.40"), Some((10, 20)));
+
+        // Test invalid versions
+        assert_eq!(parse_version("1"), None);
+        assert_eq!(parse_version("invalid"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn test_version_meets_requirement() {
+        // Test exact match
+        assert!(version_meets_requirement((1, 7), (1, 7)));
+
+        // Test higher major version
+        assert!(version_meets_requirement((2, 0), (1, 7)));
+
+        // Test same major, higher minor
+        assert!(version_meets_requirement((1, 8), (1, 7)));
+
+        // Test lower major version
+        assert!(!version_meets_requirement((0, 99), (1, 7)));
+
+        // Test same major, lower minor
+        assert!(!version_meets_requirement((1, 6), (1, 7)));
+
+        // Test large numbers
+        assert!(version_meets_requirement((1, 104), (1, 99)));
+        assert!(!version_meets_requirement((1, 98), (1, 99)));
+    }
+
+    #[test]
+    fn test_version_requirements() {
+        // Test minimum version requirements against example versions from user
+
+        // Cursor 1.7.38 should meet requirement of 1.7
+        let cursor_version = parse_version("1.7.38").unwrap();
+        assert!(version_meets_requirement(
+            cursor_version,
+            MIN_CURSOR_VERSION
+        ));
+
+        // Cursor 1.6.x should fail
+        let old_cursor = parse_version("1.6.99").unwrap();
+        assert!(!version_meets_requirement(old_cursor, MIN_CURSOR_VERSION));
+
+        // VS Code 1.104.3 should meet requirement of 1.99
+        let code_version = parse_version("1.104.3").unwrap();
+        assert!(version_meets_requirement(code_version, MIN_CODE_VERSION));
+
+        // VS Code 1.98.x should fail
+        let old_code = parse_version("1.98.5").unwrap();
+        assert!(!version_meets_requirement(old_code, MIN_CODE_VERSION));
+
+        // Claude Code 2.0.8 should meet requirement of 2.0
+        let claude_version = parse_version("2.0.8 (Claude Code)").unwrap();
+        assert!(version_meets_requirement(
+            claude_version,
+            MIN_CLAUDE_VERSION
+        ));
+
+        // Claude Code 1.x should fail
+        let old_claude = parse_version("1.9.9").unwrap();
+        assert!(!version_meets_requirement(old_claude, MIN_CLAUDE_VERSION));
     }
 
     #[test]
