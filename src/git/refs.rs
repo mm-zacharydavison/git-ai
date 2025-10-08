@@ -2,10 +2,12 @@ use crate::authorship::authorship_log_serialization::{AUTHORSHIP_LOG_VERSION, Au
 use crate::authorship::working_log::Checkpoint;
 use crate::error::GitAiError;
 use crate::git::repository::{Repository, exec_git, exec_git_stdin};
+use crate::utils::debug_log;
 use serde_json;
-use std::fs;
 
-pub const AI_AUTHORSHIP_REFSPEC: &str = "+refs/notes/ai:refs/notes/ai";
+// Modern refspecs without force to enable proper merging
+pub const AI_AUTHORSHIP_REFNAME: &str = "ai";
+pub const AI_AUTHORSHIP_PUSH_REFSPEC: &str = "refs/notes/ai:refs/notes/ai";
 
 pub fn notes_add(
     repo: &Repository,
@@ -131,4 +133,65 @@ mod tests {
         );
         assert!(non_existent_content.is_none());
     }
+}
+
+/// Sanitize a remote name to create a safe ref name
+/// Replaces special characters with underscores to ensure valid ref names
+fn sanitize_remote_name(remote: &str) -> String {
+    remote
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Generate a tracking ref name for notes from a specific remote
+/// Returns a ref like "refs/notes/ai-remote/origin"
+pub fn tracking_ref_for_remote(remote_name: &str) -> String {
+    format!("refs/notes/ai-remote/{}", sanitize_remote_name(remote_name))
+}
+
+/// Check if a ref exists in the repository
+pub fn ref_exists(repo: &Repository, ref_name: &str) -> bool {
+    let mut args = repo.global_args_for_exec();
+    args.push("show-ref".to_string());
+    args.push("--verify".to_string());
+    args.push("--quiet".to_string());
+    args.push(ref_name.to_string());
+
+    exec_git(&args).is_ok()
+}
+
+/// Merge notes from a source ref into refs/notes/ai
+/// Uses the 'union' strategy to combine notes without data loss
+pub fn merge_notes_from_ref(repo: &Repository, source_ref: &str) -> Result<(), GitAiError> {
+    let mut args = repo.global_args_for_exec();
+    args.push("notes".to_string());
+    args.push(format!("--ref={}", AI_AUTHORSHIP_REFNAME));
+    args.push("merge".to_string());
+    args.push("-s".to_string());
+    args.push("union".to_string());
+    args.push("--quiet".to_string());
+    args.push(source_ref.to_string());
+
+    debug_log(&format!("Merging notes from {} into refs/notes/ai", source_ref));
+    exec_git(&args)?;
+    Ok(())
+}
+
+/// Copy a ref to another location (used for initial setup of local notes from tracking ref)
+pub fn copy_ref(repo: &Repository, source_ref: &str, dest_ref: &str) -> Result<(), GitAiError> {
+    let mut args = repo.global_args_for_exec();
+    args.push("update-ref".to_string());
+    args.push(dest_ref.to_string());
+    args.push(source_ref.to_string());
+
+    debug_log(&format!("Copying ref {} to {}", source_ref, dest_ref));
+    exec_git(&args)?;
+    Ok(())
 }
