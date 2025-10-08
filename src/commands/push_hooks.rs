@@ -1,6 +1,8 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::find_repository;
-use crate::git::refs::{tracking_ref_for_remote, ref_exists, merge_notes_from_ref, copy_ref, AI_AUTHORSHIP_PUSH_REFSPEC};
+use crate::git::refs::{
+    AI_AUTHORSHIP_PUSH_REFSPEC, copy_ref, merge_notes_from_ref, ref_exists, tracking_ref_for_remote,
+};
 use crate::git::repository::exec_git;
 use crate::utils::debug_log;
 
@@ -71,7 +73,10 @@ pub fn push_post_command_hook(
         fetch_before_push.push(remote.clone());
         fetch_before_push.push(fetch_refspec);
 
-        debug_log(&format!("pre-push authorship fetch: {:?}", &fetch_before_push));
+        debug_log(&format!(
+            "pre-push authorship fetch: {:?}",
+            &fetch_before_push
+        ));
 
         // Fetch is best-effort; if it fails (e.g., no remote notes yet), continue
         if exec_git(&fetch_before_push).is_ok() {
@@ -81,13 +86,19 @@ pub fn push_post_command_hook(
             if ref_exists(&repo, &tracking_ref) {
                 if ref_exists(&repo, local_notes_ref) {
                     // Both exist - merge them
-                    debug_log(&format!("pre-push: merging {} into {}", tracking_ref, local_notes_ref));
+                    debug_log(&format!(
+                        "pre-push: merging {} into {}",
+                        tracking_ref, local_notes_ref
+                    ));
                     if let Err(e) = merge_notes_from_ref(&repo, &tracking_ref) {
                         debug_log(&format!("pre-push notes merge failed: {}", e));
                     }
                 } else {
                     // Only tracking ref exists - copy it to local
-                    debug_log(&format!("pre-push: initializing {} from {}", local_notes_ref, tracking_ref));
+                    debug_log(&format!(
+                        "pre-push: initializing {} from {}",
+                        local_notes_ref, tracking_ref
+                    ));
                     if let Err(e) = copy_ref(&repo, &tracking_ref, local_notes_ref) {
                         debug_log(&format!("pre-push notes copy failed: {}", e));
                     }
@@ -106,7 +117,10 @@ pub fn push_post_command_hook(
         push_authorship.push(remote);
         push_authorship.push(AI_AUTHORSHIP_PUSH_REFSPEC.to_string());
 
-        debug_log(&format!("pushing authorship refs (no force): {:?}", &push_authorship));
+        debug_log(&format!(
+            "pushing authorship refs (no force): {:?}",
+            &push_authorship
+        ));
         if let Err(e) = exec_git(&push_authorship) {
             // Best-effort; don't fail user operation due to authorship sync issues
             debug_log(&format!("authorship push skipped due to error: {}", e));

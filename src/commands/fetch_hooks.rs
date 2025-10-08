@@ -1,6 +1,6 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::find_repository;
-use crate::git::refs::{tracking_ref_for_remote, ref_exists, merge_notes_from_ref, copy_ref};
+use crate::git::refs::{copy_ref, merge_notes_from_ref, ref_exists, tracking_ref_for_remote};
 use crate::git::repository::exec_git;
 use crate::utils::debug_log;
 
@@ -65,7 +65,10 @@ pub fn fetch_post_command_hook(
         fetch_authorship.push(remote.clone());
         fetch_authorship.push(fetch_refspec.clone());
 
-        debug_log(&format!("fetching authorship refs: {:?}", &fetch_authorship));
+        debug_log(&format!(
+            "fetching authorship refs: {:?}",
+            &fetch_authorship
+        ));
 
         if let Err(e) = exec_git(&fetch_authorship) {
             // Treat as best-effort; do not fail the user command if authorship sync fails
@@ -79,13 +82,19 @@ pub fn fetch_post_command_hook(
         if ref_exists(&repo, &tracking_ref) {
             if ref_exists(&repo, local_notes_ref) {
                 // Both exist - merge them
-                debug_log(&format!("merging {} into {}", tracking_ref, local_notes_ref));
+                debug_log(&format!(
+                    "merging {} into {}",
+                    tracking_ref, local_notes_ref
+                ));
                 if let Err(e) = merge_notes_from_ref(&repo, &tracking_ref) {
                     debug_log(&format!("notes merge failed: {}", e));
                 }
             } else {
                 // Only tracking ref exists - copy it to local
-                debug_log(&format!("initializing {} from {}", local_notes_ref, tracking_ref));
+                debug_log(&format!(
+                    "initializing {} from {}",
+                    local_notes_ref, tracking_ref
+                ));
                 if let Err(e) = copy_ref(&repo, &tracking_ref, local_notes_ref) {
                     debug_log(&format!("notes copy failed: {}", e));
                 }
