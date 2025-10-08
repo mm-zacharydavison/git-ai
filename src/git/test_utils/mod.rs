@@ -991,6 +991,88 @@ impl TmpRepo {
 
         Ok(())
     }
+
+    /// Merges a branch into the current branch, allowing conflicts to remain unresolved
+    /// Returns Ok(true) if there are conflicts, Ok(false) if merge succeeded without conflicts
+    pub fn merge_with_conflicts(&self, branch_name: &str) -> Result<bool, GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["merge", branch_name, "--no-commit"])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git merge: {}", e)))?;
+
+        // Exit code 1 with "conflict" in output means there are merge conflicts
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        if !output.status.success()
+            && (stderr.contains("conflict")
+                || stdout.contains("conflict")
+                || stderr.contains("CONFLICT")
+                || stdout.contains("CONFLICT"))
+        {
+            // Conflicts exist - this is expected
+            return Ok(true);
+        }
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git merge failed unexpectedly: {}",
+                stderr
+            )));
+        }
+
+        // Merge succeeded without conflicts
+        Ok(false)
+    }
+
+    /// Resolves a conflicted file by choosing one version (ours or theirs)
+    pub fn resolve_conflict(&self, filename: &str, choose: &str) -> Result<(), GitAiError> {
+        match choose {
+            "ours" => {
+                let output = Command::new(crate::config::Config::get().git_cmd())
+                    .current_dir(&self.path)
+                    .args(&["checkout", "--ours", filename])
+                    .output()
+                    .map_err(|e| {
+                        GitAiError::Generic(format!("Failed to checkout --ours: {}", e))
+                    })?;
+
+                if !output.status.success() {
+                    return Err(GitAiError::Generic(format!(
+                        "git checkout --ours failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+            }
+            "theirs" => {
+                let output = Command::new(crate::config::Config::get().git_cmd())
+                    .current_dir(&self.path)
+                    .args(&["checkout", "--theirs", filename])
+                    .output()
+                    .map_err(|e| {
+                        GitAiError::Generic(format!("Failed to checkout --theirs: {}", e))
+                    })?;
+
+                if !output.status.success() {
+                    return Err(GitAiError::Generic(format!(
+                        "git checkout --theirs failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+            }
+            _ => {
+                return Err(GitAiError::Generic(format!(
+                    "Invalid choice: {}. Use 'ours' or 'theirs'",
+                    choose
+                )));
+            }
+        }
+
+        // Stage the resolved file
+        self.stage_file(filename)?;
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
