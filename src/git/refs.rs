@@ -152,6 +152,13 @@ fn sanitize_remote_name(remote: &str) -> String {
 
 /// Generate a tracking ref name for notes from a specific remote
 /// Returns a ref like "refs/notes/ai-remote/origin"
+///
+/// SAFETY: These tracking refs are stored under refs/notes/ai-remote/* which:
+/// - Won't be pushed by `git push` (only pushes refs/heads/* by default)
+/// - Won't be pushed by `git push --all` (only pushes refs/heads/*)
+/// - Won't be pushed by `git push --tags` (only pushes refs/tags/*)
+/// - **WILL** be pushed by `git push --mirror` (usually only used for backups, etc.)
+/// - **WILL** be pushed if user explicitly specifies refs/notes/ai-remote/* (extremely rare)
 pub fn tracking_ref_for_remote(remote_name: &str) -> String {
     format!("refs/notes/ai-remote/{}", sanitize_remote_name(remote_name))
 }
