@@ -171,9 +171,9 @@ impl AgentCheckpointPreset for CursorPreset {
             )));
         }
 
-        // Fetch the composer data and extract transcript
+        // Fetch the composer data and extract transcript + model
         let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
-        let transcript = Self::transcript_from_composer_payload(
+        let (transcript, model) = Self::transcript_data_from_composer_payload(
             &payload,
             &global_db,
             &composer_id,
@@ -181,15 +181,12 @@ impl AgentCheckpointPreset for CursorPreset {
         .unwrap_or_else(|| {
             // Return empty transcript as default
             // There's a race condition causing new threads to sometimes not show up.
-            // We refresh and grab all the messages in post-commit so we're ok with returning an empty (placeholder)transcript here and not throwing
+            // We refresh and grab all the messages in post-commit so we're ok with returning an empty (placeholder) transcript here and not throwing
             println!(
                 "[Warning] Could not extract transcript from Cursor composer. Retrying at commit."
             );
-            AiTranscript::new()
+            (AiTranscript::new(), "unknown".to_string())
         });
-
-        // Extract model information from the Cursor data
-        let model = Self::extract_model_from_cursor_data(&payload, &global_db, &composer_id)?;
 
         let agent_id = AgentId {
             tool: "cursor".to_string(),
@@ -272,15 +269,10 @@ impl CursorPreset {
         let composer_payload = Self::fetch_composer_payload(&global_db, conversation_id)?;
 
         // Extract transcript and model
-        let transcript =
-            Self::transcript_from_composer_payload(&composer_payload, &global_db, conversation_id)?;
-        let model =
-            Self::extract_model_from_cursor_data(&composer_payload, &global_db, conversation_id)?;
+        let transcript_data =
+            Self::transcript_data_from_composer_payload(&composer_payload, &global_db, conversation_id)?;
 
-        match transcript {
-            Some(transcript) => Ok(Some((transcript, model))),
-            None => Ok(None),
-        }
+        Ok(transcript_data)
     }
 
     fn cursor_user_dir() -> Result<PathBuf, GitAiError> {
@@ -349,11 +341,11 @@ impl CursorPreset {
         ))
     }
 
-    fn transcript_from_composer_payload(
+    fn transcript_data_from_composer_payload(
         data: &serde_json::Value,
         global_db_path: &Path,
         composer_id: &str,
-    ) -> Result<Option<AiTranscript>, GitAiError> {
+    ) -> Result<Option<(AiTranscript, String)>, GitAiError> {
         // Only support fullConversationHeadersOnly (bubbles format) - the current Cursor format
         // All conversations since April 2025 use this format exclusively
         let conv = data
@@ -366,6 +358,7 @@ impl CursorPreset {
             })?;
 
         let mut transcript = AiTranscript::new();
+        let mut model = None;
 
         for header in conv.iter() {
             if let Some(bubble_id) = header.get("bubbleId").and_then(|v| v.as_str()) {
@@ -377,6 +370,15 @@ impl CursorPreset {
                         .get("createdAt")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
+
+                    // Extract model from bubble (first value wins)
+                    if model.is_none() {
+                        if let Some(model_info) = bubble_content.get("modelInfo") {
+                            if let Some(model_name) = model_info.get("modelName") {
+                                model = Some(model_name.to_string());
+                            }
+                        }
+                    }
 
                     // Extract text from bubble
                     if let Some(text) = bubble_content.get("text").and_then(|v| v.as_str()) {
@@ -444,7 +446,7 @@ impl CursorPreset {
         }
 
         if !transcript.messages.is_empty() {
-            Ok(Some(transcript))
+            Ok(Some((transcript, model.unwrap_or("unknown".to_string()))))
         } else {
             Ok(None)
         }
@@ -479,69 +481,6 @@ impl CursorPreset {
         }
 
         Ok(None)
-    }
-
-    fn extract_model_from_cursor_data(
-        composer_payload: &serde_json::Value,
-        global_db_path: &Path,
-        composer_id: &str,
-    ) -> Result<String, GitAiError> {
-        // @todo Aidan run some tests once we get cursor support and confirm these mappings are correct
-        // First, check if the composer payload has capabilityType
-        if let Some(capability_type) = composer_payload.get("capabilityType") {
-            if let Some(cap_num) = capability_type.as_i64() {
-                // let model = match cap_num {
-                //     15 => "claude-3.5-sonnet", // Based on observed capabilityType value
-                //     14 => "claude-3-sonnet",
-                //     13 => "claude-3-haiku",
-                //     12 => "gpt-4",
-                //     11 => "gpt-4-turbo",
-                //     10 => "gpt-3.5-turbo",
-                //     _ => "unknown",
-                // };
-                return Ok(cap_num.to_string());
-            }
-        }
-
-        // If not found in composer payload, check bubble content for model info
-        if let Some(conv) = composer_payload
-            .get("fullConversationHeadersOnly")
-            .and_then(|v| v.as_array())
-        {
-            for header in conv.iter() {
-                if let Some(bubble_id) = header.get("bubbleId").and_then(|v| v.as_str()) {
-                    if let Ok(Some(bubble_content)) =
-                        Self::fetch_bubble_content_from_db(global_db_path, composer_id, bubble_id)
-                    {
-                        // Check capabilityType in bubble
-                        if let Some(capability_type) = bubble_content.get("capabilityType") {
-                            if let Some(cap_num) = capability_type.as_i64() {
-                                let model = match cap_num {
-                                    // @todo Aidan to figure out the rest of these mappings
-                                    30 => "gpt-5-codex",
-                                    15 => "claude-3.5-sonnet",
-                                    _ => return Ok(cap_num.to_string()),
-                                };
-                                return Ok(model.to_string());
-                            }
-                        }
-
-                        // Check toolFormerData for model information
-                        if let Some(tool_former_data) = bubble_content.get("toolFormerData") {
-                            // Look for model information in the toolFormerData
-                            if let Some(_model_call_id) = tool_former_data.get("modelCallId") {
-                                // The presence of modelCallId suggests this is an AI interaction
-                                // We can infer the model from other context or use a default
-                                return Ok("claude-3.5-sonnet".to_string()); // Default for Cursor AI interactions
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fallback: return a default model for Cursor
-        Ok("claude-3.5-sonnet".to_string())
     }
 }
 
