@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -5,10 +6,13 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+use crate::git::repository::Repository;
+
 /// Centralized configuration for the application
 pub struct Config {
     git_path: String,
     ignore_prompts: bool,
+    allow_repositories: HashSet<String>,
 }
 #[derive(Deserialize)]
 struct FileConfig {
@@ -16,6 +20,8 @@ struct FileConfig {
     git_path: Option<String>,
     #[serde(default)]
     ignore_prompts: Option<bool>,
+    #[serde(default)]
+    allow_repositories: Option<Vec<String>>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -42,6 +48,25 @@ impl Config {
         self.ignore_prompts
     }
 
+    pub fn is_allowed_repository(&self, repository: &Option<Repository>) -> bool {
+        // If allowlist is empty, allow everything
+        if self.allow_repositories.is_empty() {
+            return true;
+        }
+
+        // If allowlist is defined, only allow repos whose remotes match the list
+        if let Some(repository) = repository {
+            match repository.remotes().ok() {
+                Some(remotes) => remotes
+                    .iter()
+                    .any(|remote| self.allow_repositories.contains(remote)),
+                None => false, // Can't verify, deny by default when allowlist is active
+            }
+        } else {
+            false // No repository provided, deny by default when allowlist is active
+        }
+    }
+
     /// Returns whether prompts should be ignored (currently unused by internal APIs).
     #[allow(dead_code)]
     pub fn ignore_prompts(&self) -> bool {
@@ -55,12 +80,19 @@ fn build_config() -> Config {
         .as_ref()
         .and_then(|c| c.ignore_prompts)
         .unwrap_or(false);
+    let allow_repositories = file_cfg
+        .as_ref()
+        .and_then(|c| c.allow_repositories.clone())
+        .unwrap_or(vec![])
+        .into_iter()
+        .collect();
 
     let git_path = resolve_git_path(&file_cfg);
 
     Config {
         git_path,
         ignore_prompts,
+        allow_repositories,
     }
 }
 

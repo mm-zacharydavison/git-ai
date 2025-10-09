@@ -81,8 +81,17 @@ pub fn handle_git(args: &[String]) {
     // println!("command_args: {:?}", parsed_args.command_args);
     // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
 
+    let config = config::Config::get();
+
+    let skip_hooks = !config.is_allowed_repository(&repository_option);
+    if skip_hooks {
+        debug_log(
+            "Skipping git-ai hooks because repository does not have at least one remote in allow_repositories list",
+        );
+    }
+
     // run with hooks
-    let exit_status = if !parsed_args.is_help && has_repo {
+    let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
         let repository = repository_option.as_mut().unwrap();
         run_pre_command_hooks(&mut command_hooks_context, &parsed_args, repository);
         let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
