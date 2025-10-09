@@ -56,10 +56,13 @@ impl Config {
 
         // If allowlist is defined, only allow repos whose remotes match the list
         if let Some(repository) = repository {
-            match repository.remotes().ok() {
-                Some(remotes) => remotes
-                    .iter()
-                    .any(|remote| self.allow_repositories.contains(remote)),
+            match repository.remotes_with_urls().ok() {
+                Some(remotes) => {
+                    println!("{:?}", remotes);
+                    remotes
+                        .iter()
+                        .any(|remote| self.allow_repositories.contains(&remote.1))
+                }
                 None => false, // Can't verify, deny by default when allowlist is active
             }
         } else {
