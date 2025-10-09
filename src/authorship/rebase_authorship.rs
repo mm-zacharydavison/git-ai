@@ -67,6 +67,21 @@ pub fn rewrite_authorship_if_needed(
                 merge_squash.source_branch, merge_squash.base_branch
             ));
         }
+        RewriteLogEvent::RebaseComplete { rebase_complete } => {
+            rewrite_authorship_after_rebase(
+                repo,
+                &rebase_complete.original_commits,
+                &rebase_complete.new_commits,
+                &commit_author,
+            )?;
+
+            if !supress_output {
+                println!(
+                    "✓ Rewrote authorship for {} rebased commits",
+                    rebase_complete.new_commits.len()
+                );
+            }
+        }
         _ => {}
     }
 
@@ -285,6 +300,139 @@ pub fn prepare_working_log_after_squash(
     }
 
     Ok(checkpoints)
+}
+
+/// Rewrite authorship logs after a rebase operation
+///
+/// This function processes each commit mapping from a rebase and either copies
+/// or reconstructs the authorship log depending on whether the tree changed.
+///
+/// # Arguments
+/// * `repo` - Git repository
+/// * `original_commits` - Vector of original commit SHAs (before rebase)
+/// * `new_commits` - Vector of new commit SHAs (after rebase)
+/// * `human_author` - The human author identifier
+///
+/// # Returns
+/// Ok if all commits were processed successfully
+pub fn rewrite_authorship_after_rebase(
+    repo: &Repository,
+    original_commits: &[String],
+    new_commits: &[String],
+    human_author: &str,
+) -> Result<(), GitAiError> {
+    // Process each old -> new commit mapping
+    for (old_sha, new_sha) in original_commits.iter().zip(new_commits.iter()) {
+        rewrite_single_commit_authorship(repo, old_sha, new_sha, human_author)?;
+    }
+    Ok(())
+}
+
+/// Rewrite authorship for a single commit after rebase
+///
+/// Fast path: If trees are identical, just copy the authorship log
+/// Slow path: If trees differ, reconstruct via blame in hanging commit context
+fn rewrite_single_commit_authorship(
+    repo: &Repository,
+    old_sha: &str,
+    new_sha: &str,
+    _human_author: &str,
+) -> Result<(), GitAiError> {
+    let old_commit = repo.find_commit(old_sha.to_string())?;
+    let new_commit = repo.find_commit(new_sha.to_string())?;
+
+    // Fast path: Check if trees are identical
+    if trees_identical(&old_commit, &new_commit)? {
+        // Trees are the same, just copy the authorship log with new SHA
+        copy_authorship_log(repo, old_sha, new_sha)?;
+        debug_log(&format!(
+            "Copied authorship log from {} to {} (trees identical)",
+            old_sha, new_sha
+        ));
+        return Ok(());
+    }
+
+    // Slow path: Trees differ, need reconstruction
+    debug_log(&format!(
+        "Reconstructing authorship for {} -> {} (trees differ)",
+        old_sha, new_sha
+    ));
+
+    let new_authorship_log = reconstruct_authorship_for_commit(repo, old_sha, new_sha)?;
+
+    // Save the reconstructed log
+    let authorship_json = new_authorship_log
+        .serialize_to_string()
+        .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
+
+    crate::git::refs::notes_add(repo, new_sha, &authorship_json)?;
+
+    Ok(())
+}
+
+/// Check if two commits have identical trees
+fn trees_identical(commit1: &Commit, commit2: &Commit) -> Result<bool, GitAiError> {
+    let tree1 = commit1.tree()?;
+    let tree2 = commit2.tree()?;
+    Ok(tree1.id() == tree2.id())
+}
+
+/// Copy authorship log from one commit to another
+fn copy_authorship_log(repo: &Repository, from_sha: &str, to_sha: &str) -> Result<(), GitAiError> {
+    // Try to get the authorship log from the old commit
+    match get_reference_as_authorship_log_v3(repo, from_sha) {
+        Ok(mut log) => {
+            // Update the base_commit_sha to the new commit
+            log.metadata.base_commit_sha = to_sha.to_string();
+
+            // Save to the new commit
+            let authorship_json = log.serialize_to_string().map_err(|_| {
+                GitAiError::Generic("Failed to serialize authorship log".to_string())
+            })?;
+
+            crate::git::refs::notes_add(repo, to_sha, &authorship_json)?;
+            Ok(())
+        }
+        Err(_) => {
+            // No authorship log exists for the old commit, that's ok
+            debug_log(&format!("No authorship log found for {}", from_sha));
+            Ok(())
+        }
+    }
+}
+
+/// Reconstruct authorship for a single commit that changed during rebase
+fn reconstruct_authorship_for_commit(
+    repo: &Repository,
+    old_sha: &str,
+    new_sha: &str,
+) -> Result<AuthorshipLog, GitAiError> {
+    // Get commits
+    let old_commit = repo.find_commit(old_sha.to_string())?;
+    let new_commit = repo.find_commit(new_sha.to_string())?;
+    let new_parent = new_commit.parent(0)?;
+    let old_parent = old_commit.parent(0)?;
+
+    // Create "hanging commit" for blame context
+    // This applies the changes from (old_parent -> new_parent) onto old_commit
+    let hanging_commit_sha = apply_diff_as_merge_commit(
+        repo,
+        &old_parent.id().to_string(),
+        &new_parent.id().to_string(),
+        old_sha,
+    )?;
+
+    // Reconstruct authorship by running blame in hanging commit context
+    let mut reconstructed_log =
+        reconstruct_authorship_from_diff(repo, &new_commit, &new_parent, &hanging_commit_sha)?;
+
+    // Set the base_commit_sha to the new commit
+    reconstructed_log.metadata.base_commit_sha = new_sha.to_string();
+
+    // Cleanup
+    delete_hanging_commit(repo, &hanging_commit_sha)?;
+
+    Ok(reconstructed_log)
 }
 
 #[allow(dead_code)]

@@ -11,11 +11,14 @@ pub enum RewriteLogEvent {
     MergeSquash {
         merge_squash: MergeSquashEvent,
     },
-    RebaseInteractive {
-        rebase_interactive: RebaseInteractiveEvent,
+    RebaseStart {
+        rebase_start: RebaseStartEvent,
     },
-    Rebase {
-        rebase: RebaseEvent,
+    RebaseComplete {
+        rebase_complete: RebaseCompleteEvent,
+    },
+    RebaseAbort {
+        rebase_abort: RebaseAbortEvent,
     },
     CherryPick {
         cherry_pick: CherryPickEvent,
@@ -69,16 +72,22 @@ impl RewriteLogEvent {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn rebase_interactive(event: RebaseInteractiveEvent) -> Self {
-        Self::RebaseInteractive {
-            rebase_interactive: event,
+    pub fn rebase_start(event: RebaseStartEvent) -> Self {
+        Self::RebaseStart {
+            rebase_start: event,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn rebase(event: RebaseEvent) -> Self {
-        Self::Rebase { rebase: event }
+    pub fn rebase_complete(event: RebaseCompleteEvent) -> Self {
+        Self::RebaseComplete {
+            rebase_complete: event,
+        }
+    }
+
+    pub fn rebase_abort(event: RebaseAbortEvent) -> Self {
+        Self::RebaseAbort {
+            rebase_abort: event,
+        }
     }
 
     #[allow(dead_code)]
@@ -182,27 +191,41 @@ impl MergeSquashEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RebaseInteractiveEvent {
-    pub base_commit: String,
-    pub commit_count: u32,
-    pub state: RebaseState,
+pub struct RebaseStartEvent {
+    pub original_head: String,
+    pub is_interactive: bool,
+}
+
+impl RebaseStartEvent {
+    pub fn new(original_head: String, is_interactive: bool) -> Self {
+        Self {
+            original_head,
+            is_interactive,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RebaseCompleteEvent {
+    pub original_head: String,
+    pub new_head: String,
+    pub is_interactive: bool,
     pub original_commits: Vec<String>,
     pub new_commits: Vec<String>,
 }
 
-impl RebaseInteractiveEvent {
-    #[allow(dead_code)]
+impl RebaseCompleteEvent {
     pub fn new(
-        base_commit: String,
-        commit_count: u32,
-        state: RebaseState,
+        original_head: String,
+        new_head: String,
+        is_interactive: bool,
         original_commits: Vec<String>,
         new_commits: Vec<String>,
     ) -> Self {
         Self {
-            base_commit,
-            commit_count,
-            state,
+            original_head,
+            new_head,
+            is_interactive,
             original_commits,
             new_commits,
         }
@@ -210,33 +233,13 @@ impl RebaseInteractiveEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RebaseEvent {
-    pub base_commit: String,
-    pub state: RebaseState,
-    pub commit_count: u32,
-    pub current_commit: Option<String>,
-    pub original_commits: Vec<String>,
-    pub new_commits: Vec<String>,
+pub struct RebaseAbortEvent {
+    pub original_head: String,
 }
 
-impl RebaseEvent {
-    #[allow(dead_code)]
-    pub fn new(
-        base_commit: String,
-        state: RebaseState,
-        commit_count: u32,
-        current_commit: Option<String>,
-        original_commits: Vec<String>,
-        new_commits: Vec<String>,
-    ) -> Self {
-        Self {
-            base_commit,
-            state,
-            commit_count,
-            current_commit,
-            original_commits,
-            new_commits,
-        }
+impl RebaseAbortEvent {
+    pub fn new(original_head: String) -> Self {
+        Self { original_head }
     }
 }
 
@@ -398,21 +401,6 @@ impl AuthorshipLogsSyncedEvent {
                 .as_secs(),
         }
     }
-}
-
-/// Rebase state tracking
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum RebaseState {
-    /// Rebase started
-    Start,
-    /// Rebase in progress
-    InProgress,
-    /// Rebase continued after conflict resolution
-    Continue,
-    /// Rebase aborted
-    Abort,
-    /// Rebase completed successfully
-    Complete,
 }
 
 /// Stash operation types
