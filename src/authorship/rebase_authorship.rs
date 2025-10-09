@@ -145,12 +145,15 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // hanging_commit_sha
     // That way we can get the authorship log pre-squash.
     // Aggregate the results in a variable, then we'll dump a new authorship log.
-    let new_authorship_log = reconstruct_authorship_from_diff(
+    let mut new_authorship_log = reconstruct_authorship_from_diff(
         repo,
         &new_commit,
         &new_commit_parent,
         &hanging_commit_sha,
     )?;
+
+    // Set the base_commit_sha to the new commit
+    new_authorship_log.metadata.base_commit_sha = new_sha.to_string();
 
     // println!("Reconstructed authorship log with {:?}", new_authorship_log);
 
@@ -307,10 +310,14 @@ pub fn prepare_working_log_after_squash(
 /// This function processes each commit mapping from a rebase and either copies
 /// or reconstructs the authorship log depending on whether the tree changed.
 ///
+/// Handles different scenarios:
+/// - 1:1 mapping (normal rebase): Direct commit-to-commit authorship copy/reconstruction
+/// - N:M mapping where N > M (squashing/dropping): Reconstructs authorship from all original commits
+///
 /// # Arguments
 /// * `repo` - Git repository
-/// * `original_commits` - Vector of original commit SHAs (before rebase)
-/// * `new_commits` - Vector of new commit SHAs (after rebase)
+/// * `original_commits` - Vector of original commit SHAs (before rebase), oldest first
+/// * `new_commits` - Vector of new commit SHAs (after rebase), oldest first
 /// * `human_author` - The human author identifier
 ///
 /// # Returns
@@ -321,10 +328,155 @@ pub fn rewrite_authorship_after_rebase(
     new_commits: &[String],
     human_author: &str,
 ) -> Result<(), GitAiError> {
-    // Process each old -> new commit mapping
-    for (old_sha, new_sha) in original_commits.iter().zip(new_commits.iter()) {
-        rewrite_single_commit_authorship(repo, old_sha, new_sha, human_author)?;
+    // Detect the mapping type
+    if original_commits.len() > new_commits.len() {
+        // Many-to-few mapping (squashing or dropping commits)
+        debug_log(&format!(
+            "Detected many-to-few rebase: {} original -> {} new commits",
+            original_commits.len(),
+            new_commits.len()
+        ));
+
+        // Handle squashing: reconstruct authorship for each new commit from the
+        // corresponding range of original commits
+        handle_squashed_rebase(repo, original_commits, new_commits, human_author)?;
+    } else if original_commits.len() < new_commits.len() {
+        // Few-to-many mapping (commit splitting or adding commits)
+        debug_log(&format!(
+            "Detected few-to-many rebase: {} original -> {} new commits",
+            original_commits.len(),
+            new_commits.len()
+        ));
+
+        // Handle splitting: use the head of originals as source for all new commits
+        // This preserves attribution when commits are split or new commits are added
+        handle_split_rebase(repo, original_commits, new_commits, human_author)?;
+    } else {
+        // 1:1 mapping (normal rebase)
+        debug_log(&format!(
+            "Detected 1:1 rebase: {} commits",
+            original_commits.len()
+        ));
+
+        // Process each old -> new commit mapping
+        for (old_sha, new_sha) in original_commits.iter().zip(new_commits.iter()) {
+            rewrite_single_commit_authorship(repo, old_sha, new_sha, human_author)?;
+        }
     }
+
+    Ok(())
+}
+
+/// Handle squashed rebase where multiple commits become fewer commits
+///
+/// This reconstructs authorship by using the comprehensive squash logic
+/// that properly traces through all original commits to preserve authorship.
+fn handle_squashed_rebase(
+    repo: &Repository,
+    original_commits: &[String],
+    new_commits: &[String],
+    _human_author: &str,
+) -> Result<(), GitAiError> {
+    // For squashing, we use the last (most recent) original commit as the source
+    // since it contains all the accumulated changes from previous commits
+    let head_of_originals = original_commits
+        .last()
+        .ok_or_else(|| GitAiError::Generic("No original commits found".to_string()))?;
+
+    debug_log(&format!(
+        "Using {} as head of original commits for squash reconstruction",
+        head_of_originals
+    ));
+
+    // Process each new commit using the comprehensive squash logic
+    // This handles the complex case where files from multiple commits need to be blamed
+    for new_sha in new_commits {
+        debug_log(&format!(
+            "Reconstructing authorship for squashed commit: {}",
+            new_sha
+        ));
+
+        // Use the existing squash logic which properly handles multiple commits
+        // by finding the common base and creating a hanging commit with all files
+        let _ = rewrite_authorship_after_squash_or_rebase(
+            repo,
+            "", // branch name not used in the logic
+            head_of_originals,
+            new_sha,
+            false, // not a dry run
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Handle split rebase where commits are split or new commits are added
+///
+/// For split rebases, we attempt reconstruction but handle cases where files
+/// have been restructured or renamed gracefully.
+fn handle_split_rebase(
+    repo: &Repository,
+    original_commits: &[String],
+    new_commits: &[String],
+    human_author: &str,
+) -> Result<(), GitAiError> {
+    // For splitting, we use the last (most recent) original commit as the source
+    // since it contains all the accumulated changes from previous commits
+    let head_of_originals = original_commits
+        .last()
+        .ok_or_else(|| GitAiError::Generic("No original commits found".to_string()))?;
+
+    debug_log(&format!(
+        "Using {} as head of original commits for split/add reconstruction",
+        head_of_originals
+    ));
+
+    // Process each new commit
+    // When commits are split with file restructuring, we try multiple approaches
+    for new_sha in new_commits {
+        debug_log(&format!(
+            "Reconstructing authorship for split/added commit: {}",
+            new_sha
+        ));
+
+        // First try: use squash logic (works if files have same names)
+        let squash_result = rewrite_authorship_after_squash_or_rebase(
+            repo,
+            "", // branch name not used in the logic
+            head_of_originals,
+            new_sha,
+            false, // not a dry run
+        );
+
+        if squash_result.is_err() {
+            // If squash logic fails (e.g., files don't exist), try simpler reconstruction
+            debug_log(&format!(
+                "Squash logic failed for {}, trying simple reconstruction",
+                new_sha
+            ));
+
+            // Try each original commit to see if any works
+            let mut reconstructed = false;
+            for orig_sha in original_commits {
+                if let Ok(_) =
+                    rewrite_single_commit_authorship(repo, orig_sha, new_sha, human_author)
+                {
+                    reconstructed = true;
+                    break;
+                }
+            }
+
+            if !reconstructed {
+                debug_log(&format!(
+                    "Could not reconstruct authorship for {} - files may have been restructured",
+                    new_sha
+                ));
+                // For restructured files, we can't reliably reconstruct authorship
+                // This is ok - the commit just won't have AI authorship attribution
+            }
+        }
+    }
+
     Ok(())
 }
 

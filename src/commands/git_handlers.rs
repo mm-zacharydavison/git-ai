@@ -528,18 +528,8 @@ fn build_rebase_commit_mappings(
         merge_base
     ));
 
-    // Handle squashing (many-to-one): when multiple commits are squashed into one
-    if original_commits.len() > new_commits.len() && new_commits.len() == 1 {
-        debug_log(&format!(
-            "Detected squash: {} commits -> 1 commit",
-            original_commits.len()
-        ));
-        // For squashing, use the last (most recent) original commit as the source
-        // since it contains all the accumulated changes from previous commits
-        let last_original = original_commits.last().unwrap().clone();
-        return Ok((vec![last_original], new_commits));
-    }
-
+    // Always pass all commits through - let the authorship rewriting logic
+    // handle many-to-one, one-to-one, and other mapping scenarios properly
     Ok((original_commits, new_commits))
 }
 
