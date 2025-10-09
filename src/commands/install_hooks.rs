@@ -927,6 +927,7 @@ impl Spinner {
         println!("\x1b[1;31m✗ {}\x1b[0m", message);
     }
 
+    #[allow(dead_code)]
     fn skipped(&self, message: &'static str) {
         // Clear spinner and show skipped with gray circle and gray text
         self.pb.finish_and_clear();

@@ -44,6 +44,7 @@ pub enum RewriteLogEvent {
 }
 
 impl RewriteLogEvent {
+    #[allow(dead_code)]
     pub fn merge(
         source_branch: String,
         target_branch: String,
@@ -68,30 +69,36 @@ impl RewriteLogEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn rebase_interactive(event: RebaseInteractiveEvent) -> Self {
         Self::RebaseInteractive {
             rebase_interactive: event,
         }
     }
 
+    #[allow(dead_code)]
     pub fn rebase(event: RebaseEvent) -> Self {
         Self::Rebase { rebase: event }
     }
 
+    #[allow(dead_code)]
     pub fn cherry_pick(event: CherryPickEvent) -> Self {
         Self::CherryPick { cherry_pick: event }
     }
 
+    #[allow(dead_code)]
     pub fn revert_mixed(event: RevertMixedEvent) -> Self {
         Self::RevertMixed {
             revert_mixed: event,
         }
     }
 
+    #[allow(dead_code)]
     pub fn reset_soft(event: ResetSoftEvent) -> Self {
         Self::ResetSoft { reset_soft: event }
     }
 
+    #[allow(dead_code)]
     pub fn reset_hard(event: ResetHardEvent) -> Self {
         Self::ResetHard { reset_hard: event }
     }
@@ -108,10 +115,12 @@ impl RewriteLogEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stash(event: StashEvent) -> Self {
         Self::Stash { stash: event }
     }
 
+    #[allow(dead_code)]
     pub fn authorship_logs_synced(event: AuthorshipLogsSyncedEvent) -> Self {
         Self::AuthorshipLogsSynced {
             authorship_logs_synced: event,
@@ -130,6 +139,7 @@ pub struct MergeEvent {
 }
 
 impl MergeEvent {
+    #[allow(dead_code)]
     pub fn new(
         source_branch: String,
         target_branch: String,
@@ -181,6 +191,7 @@ pub struct RebaseInteractiveEvent {
 }
 
 impl RebaseInteractiveEvent {
+    #[allow(dead_code)]
     pub fn new(
         base_commit: String,
         commit_count: u32,
@@ -209,6 +220,7 @@ pub struct RebaseEvent {
 }
 
 impl RebaseEvent {
+    #[allow(dead_code)]
     pub fn new(
         base_commit: String,
         state: RebaseState,
@@ -238,6 +250,7 @@ pub struct CherryPickEvent {
 }
 
 impl CherryPickEvent {
+    #[allow(dead_code)]
     pub fn new(
         source_commit: String,
         target_branch: String,
@@ -263,6 +276,7 @@ pub struct RevertMixedEvent {
 }
 
 impl RevertMixedEvent {
+    #[allow(dead_code)]
     pub fn new(reverted_commit: String, success: bool, affected_files: Vec<String>) -> Self {
         Self {
             reverted_commit,
@@ -280,6 +294,7 @@ pub struct ResetSoftEvent {
 }
 
 impl ResetSoftEvent {
+    #[allow(dead_code)]
     pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
         Self {
             target_commit,
@@ -297,6 +312,7 @@ pub struct ResetHardEvent {
 }
 
 impl ResetHardEvent {
+    #[allow(dead_code)]
     pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
         Self {
             target_commit,
@@ -347,6 +363,7 @@ pub struct StashEvent {
 }
 
 impl StashEvent {
+    #[allow(dead_code)]
     pub fn new(
         operation: StashOperation,
         stash_ref: Option<String>,
@@ -370,6 +387,7 @@ pub struct AuthorshipLogsSyncedEvent {
 }
 
 impl AuthorshipLogsSyncedEvent {
+    #[allow(dead_code)]
     pub fn new(synced: Vec<String>, origin: Vec<String>) -> Self {
         Self {
             synced,
@@ -413,6 +431,7 @@ pub enum StashOperation {
 }
 
 /// Serialize events to JSONL format (newest events first)
+#[allow(dead_code)]
 pub fn serialize_events_to_jsonl(events: &[RewriteLogEvent]) -> Result<String, serde_json::Error> {
     let mut lines = Vec::new();
 

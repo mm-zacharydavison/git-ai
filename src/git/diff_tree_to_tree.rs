@@ -93,6 +93,7 @@ impl Diff {
         self.deltas.iter()
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.deltas.len()
     }

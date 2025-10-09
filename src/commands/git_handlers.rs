@@ -144,8 +144,8 @@ fn run_post_command_hooks(
             }
             let supress_output = parsed_args.has_command_flag("--porcelain")
                 || parsed_args.has_command_flag("--quiet")
-                || parsed_args.has_command_flag("-q");
-            || parsed_args.has_command_flag("--no-status");
+                || parsed_args.has_command_flag("-q")
+                || parsed_args.has_command_flag("--no-status");
 
             commit_hooks::commit_post_command_hook(
                 parsed_args,

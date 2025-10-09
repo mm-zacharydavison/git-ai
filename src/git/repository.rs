@@ -32,6 +32,7 @@ impl<'a> Object<'a> {
 }
 
 pub struct Signature<'a> {
+    #[allow(dead_code)]
     repo: &'a Repository,
     name: String,
     email: String,
@@ -152,6 +153,7 @@ impl<'a> Commit<'a> {
 
     // Get the number of parents of this commit.
     // Use the parents iterator to return an iterator over all parents.
+    #[allow(dead_code)]
     pub fn parent_count(&self) -> Result<usize, GitAiError> {
         Ok(self.parents().count())
     }
@@ -224,14 +226,18 @@ impl<'a> Commit<'a> {
 }
 
 pub struct TreeEntry<'a> {
+    #[allow(dead_code)]
     repo: &'a Repository,
     // Object id (SHA-1/oid) that this tree entry points to
     oid: String,
     // One of: blob, tree, commit (gitlink)
+    #[allow(dead_code)]
     object_type: String,
     // File mode as provided by git ls-tree (e.g. 100644, 100755, 120000, 040000)
+    #[allow(dead_code)]
     mode: String,
     // Full path relative to the root of the tree used for lookup
+    #[allow(dead_code)]
     path: String,
 }
 
@@ -331,6 +337,7 @@ pub struct Blob<'a> {
 }
 
 impl<'a> Blob<'a> {
+    #[allow(dead_code)]
     pub fn id(&self) -> String {
         self.oid.clone()
     }
@@ -356,10 +363,12 @@ impl<'a> Reference<'a> {
         Some(&self.ref_name)
     }
 
+    #[allow(dead_code)]
     pub fn is_branch(&self) -> bool {
         self.ref_name.starts_with("refs/heads/")
     }
 
+    #[allow(dead_code)]
     pub fn shorthand(&self) -> Result<String, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
@@ -379,6 +388,7 @@ impl<'a> Reference<'a> {
 
     // Peel a reference to a blob
     // This method recursively peels the reference until it reaches a blob.
+    #[allow(dead_code)]
     pub fn peel_to_blob(&self) -> Result<Blob<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
@@ -625,6 +635,7 @@ impl Repository {
         }
     }
 
+    #[allow(dead_code)]
     pub fn config_set_str(&self, key: &str, value: &str) -> Result<(), GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("config".to_string());
@@ -637,6 +648,7 @@ impl Repository {
 
     // Write an in-memory buffer to the ODB as a blob.
     // The Oid returned can in turn be passed to find_blob to get a handle to the blob.
+    #[allow(dead_code)]
     pub fn blob(&self, data: &[u8]) -> Result<String, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("hash-object".to_string());
@@ -647,6 +659,7 @@ impl Repository {
     }
 
     // Create a new direct reference. This function will return an error if a reference already exists with the given name unless force is true, in which case it will be overwritten.
+    #[allow(dead_code)]
     pub fn reference<'a>(
         &'a self,
         name: &str,
@@ -672,6 +685,7 @@ impl Repository {
     }
 
     // Lookup a reference to one of the objects in a repository. Requires full ref name.
+    #[allow(dead_code)]
     pub fn find_reference(&self, name: &str) -> Result<Reference<'_>, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("show-ref".to_string());
