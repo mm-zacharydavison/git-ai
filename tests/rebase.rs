@@ -1735,3 +1735,328 @@ sed -i.bak '3s/pick/squash/' "$1"
         "feature3.txt from commit 3 should exist"
     );
 }
+
+/// Test rebase with rewording (renaming) a commit that has 2 children commits
+/// Verifies that authorship is preserved for all 3 commits after reword
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_rebase_reword_commit_with_children() {
+    let tmp_repo = TmpRepo::new().unwrap();
+
+    // Create initial commit
+    tmp_repo
+        .write_file("base.txt", "base content\n", true)
+        .unwrap();
+    tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+    tmp_repo.commit_with_message("Initial commit").unwrap();
+
+    let default_branch = tmp_repo.current_branch().unwrap();
+    tmp_repo.create_branch("feature").unwrap();
+
+    // Create 3 AI commits - we'll reword the first one
+    // Commit 1 (this will be renamed)
+    tmp_repo
+        .write_file(
+            "feature1.txt",
+            "// AI feature 1\nfunction feature1() {}\n",
+            true,
+        )
+        .unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("ai_agent_1", Some("gpt-4"), Some("cursor"))
+        .unwrap();
+    tmp_repo
+        .commit_with_message("AI commit 1 - original message")
+        .unwrap();
+    let commit1 = tmp_repo.get_head_commit_sha().unwrap();
+
+    // Commit 2 (child of commit 1)
+    tmp_repo
+        .write_file(
+            "feature2.txt",
+            "// AI feature 2\nfunction feature2() {}\n",
+            true,
+        )
+        .unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("ai_agent_2", Some("claude"), Some("cursor"))
+        .unwrap();
+    tmp_repo.commit_with_message("AI commit 2").unwrap();
+    let commit2 = tmp_repo.get_head_commit_sha().unwrap();
+
+    // Commit 3 (child of commit 2, grandchild of commit 1)
+    tmp_repo
+        .write_file(
+            "feature3.txt",
+            "// AI feature 3\nfunction feature3() {}\n",
+            true,
+        )
+        .unwrap();
+    tmp_repo
+        .trigger_checkpoint_with_ai("ai_agent_3", Some("gpt-4"), Some("cursor"))
+        .unwrap();
+    tmp_repo.commit_with_message("AI commit 3").unwrap();
+    let commit3 = tmp_repo.get_head_commit_sha().unwrap();
+
+    // Capture blame information BEFORE rebase for all files
+    let blame_before_1 =
+        get_reference_as_authorship_log_v3(&tmp_repo.gitai_repo(), &commit1).unwrap();
+    let blame_before_2 =
+        get_reference_as_authorship_log_v3(&tmp_repo.gitai_repo(), &commit2).unwrap();
+    let blame_before_3 =
+        get_reference_as_authorship_log_v3(&tmp_repo.gitai_repo(), &commit3).unwrap();
+
+    // Advance main branch
+    tmp_repo.checkout_branch(&default_branch).unwrap();
+    tmp_repo
+        .write_file("main.txt", "main work\n", true)
+        .unwrap();
+    tmp_repo.trigger_checkpoint_with_author("human").unwrap();
+    tmp_repo.commit_with_message("Main advances").unwrap();
+    let base_commit = tmp_repo.get_head_commit_sha().unwrap();
+
+    // Perform interactive rebase with rewording the first commit
+    tmp_repo.checkout_branch("feature").unwrap();
+
+    use std::io::Write;
+    use std::process::Command;
+
+    // Create a script that modifies the rebase-todo to reword the first commit
+    let script_content = r#"#!/bin/sh
+sed -i.bak '1s/pick/reword/' "$1"
+"#;
+
+    let script_path = tmp_repo.path().join("reword_script.sh");
+    let mut script_file = std::fs::File::create(&script_path).unwrap();
+    script_file.write_all(script_content.as_bytes()).unwrap();
+    drop(script_file);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    // Create a script that provides the new commit message
+    let commit_msg_content = "AI commit 1 - RENAMED MESSAGE";
+    let commit_msg_path = tmp_repo.path().join("new_commit_msg.txt");
+    let mut msg_file = std::fs::File::create(&commit_msg_path).unwrap();
+    msg_file.write_all(commit_msg_content.as_bytes()).unwrap();
+    drop(msg_file);
+
+    // Create an editor script that replaces the commit message
+    let editor_script_content = format!(
+        r#"#!/bin/sh
+cat {} > "$1"
+"#,
+        commit_msg_path.to_str().unwrap()
+    );
+    let editor_script_path = tmp_repo.path().join("editor_script.sh");
+    let mut editor_file = std::fs::File::create(&editor_script_path).unwrap();
+    editor_file
+        .write_all(editor_script_content.as_bytes())
+        .unwrap();
+    drop(editor_file);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&editor_script_path)
+            .unwrap()
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&editor_script_path, perms).unwrap();
+    }
+
+    let output = Command::new("git")
+        .current_dir(tmp_repo.path())
+        .env("GIT_SEQUENCE_EDITOR", script_path.to_str().unwrap())
+        .env("GIT_EDITOR", editor_script_path.to_str().unwrap())
+        .args(&["rebase", "-i", &base_commit])
+        .output()
+        .unwrap();
+
+    if !output.status.success() {
+        eprintln!(
+            "git rebase output: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        panic!("Interactive rebase with reword failed");
+    }
+
+    // Get the rebased commits (should still be 3 commits)
+    let head = tmp_repo.get_head_commit_sha().unwrap();
+    let repo = tmp_repo.gitai_repo();
+    let mut rebased_commits = vec![];
+    let mut current = repo.find_commit(head).unwrap();
+    for _ in 0..3 {
+        rebased_commits.push(current.id().to_string());
+        current = current.parent(0).unwrap();
+    }
+    rebased_commits.reverse(); // oldest first
+
+    // Verify we still have 3 commits
+    assert_eq!(
+        rebased_commits.len(),
+        3,
+        "Should have 3 commits after reword rebase"
+    );
+
+    // Verify the first commit's message was changed
+    let first_rebased = repo.find_commit(rebased_commits[0].clone()).unwrap();
+    let first_message = first_rebased.summary().unwrap();
+    assert!(
+        first_message.contains("RENAMED MESSAGE"),
+        "First commit should have the renamed message, got: {}",
+        first_message
+    );
+
+    // Rewrite authorship for all 3 commits
+    rewrite_authorship_after_rebase(
+        &repo,
+        &[commit1, commit2, commit3],
+        &rebased_commits,
+        "Test User <test@example.com>",
+    )
+    .unwrap();
+
+    // Verify ALL 3 commits have authorship logs
+    for (i, rebased_commit) in rebased_commits.iter().enumerate() {
+        let result = get_reference_as_authorship_log_v3(&repo, rebased_commit);
+        assert!(
+            result.is_ok(),
+            "Rebased commit {} at index {} should have authorship after reword",
+            rebased_commit,
+            i
+        );
+    }
+
+    // Capture blame information AFTER rebase for all files
+    let blame_after_1 = get_reference_as_authorship_log_v3(&repo, &rebased_commits[0]).unwrap();
+    let blame_after_2 = get_reference_as_authorship_log_v3(&repo, &rebased_commits[1]).unwrap();
+    let blame_after_3 = get_reference_as_authorship_log_v3(&repo, &rebased_commits[2]).unwrap();
+
+    // Compare blame BEFORE and AFTER - the functional blame output should be the same
+    // We check that line attributions (which author/agent wrote which lines) are preserved
+
+    // For commit 1 (feature1.txt): verify line attributions match
+    for line_num in 1..=2 {
+        let before_attr = blame_before_1.get_line_attribution("feature1.txt", line_num);
+        let after_attr = blame_after_1.get_line_attribution("feature1.txt", line_num);
+        let before_exists = before_attr.is_some();
+        let after_exists = after_attr.is_some();
+
+        match (before_attr, after_attr) {
+            (Some((before_author, before_prompt)), Some((after_author, after_prompt))) => {
+                assert_eq!(
+                    before_author.username, after_author.username,
+                    "Line {} author should match before and after rebase",
+                    line_num
+                );
+                // Compare prompt agent IDs if both have prompts
+                if let (Some(bp), Some(ap)) = (before_prompt, after_prompt) {
+                    assert_eq!(
+                        bp.agent_id.id, ap.agent_id.id,
+                        "Line {} AI agent should match before and after rebase",
+                        line_num
+                    );
+                    assert_eq!(
+                        bp.agent_id.model, ap.agent_id.model,
+                        "Line {} model should match before and after rebase",
+                        line_num
+                    );
+                }
+            }
+            (None, None) => {} // Both have no attribution - OK
+            _ => panic!(
+                "Line {} attribution mismatch: before={:?}, after={:?}",
+                line_num, before_exists, after_exists
+            ),
+        }
+    }
+
+    // For commit 2 (feature2.txt): verify line attributions match
+    for line_num in 1..=2 {
+        let before_attr = blame_before_2.get_line_attribution("feature2.txt", line_num);
+        let after_attr = blame_after_2.get_line_attribution("feature2.txt", line_num);
+        let before_exists = before_attr.is_some();
+        let after_exists = after_attr.is_some();
+
+        match (before_attr, after_attr) {
+            (Some((before_author, before_prompt)), Some((after_author, after_prompt))) => {
+                assert_eq!(
+                    before_author.username, after_author.username,
+                    "Commit 2 Line {} author should match before and after rebase",
+                    line_num
+                );
+                if let (Some(bp), Some(ap)) = (before_prompt, after_prompt) {
+                    assert_eq!(
+                        bp.agent_id.id, ap.agent_id.id,
+                        "Commit 2 Line {} AI agent should match before and after rebase",
+                        line_num
+                    );
+                }
+            }
+            (None, None) => {}
+            _ => panic!(
+                "Commit 2 Line {} attribution mismatch: before={:?}, after={:?}",
+                line_num, before_exists, after_exists
+            ),
+        }
+    }
+
+    // For commit 3 (feature3.txt): verify line attributions match
+    for line_num in 1..=2 {
+        let before_attr = blame_before_3.get_line_attribution("feature3.txt", line_num);
+        let after_attr = blame_after_3.get_line_attribution("feature3.txt", line_num);
+        let before_exists = before_attr.is_some();
+        let after_exists = after_attr.is_some();
+
+        match (before_attr, after_attr) {
+            (Some((before_author, before_prompt)), Some((after_author, after_prompt))) => {
+                assert_eq!(
+                    before_author.username, after_author.username,
+                    "Commit 3 Line {} author should match before and after rebase",
+                    line_num
+                );
+                if let (Some(bp), Some(ap)) = (before_prompt, after_prompt) {
+                    assert_eq!(
+                        bp.agent_id.id, ap.agent_id.id,
+                        "Commit 3 Line {} AI agent should match before and after rebase",
+                        line_num
+                    );
+                }
+            }
+            (None, None) => {}
+            _ => panic!(
+                "Commit 3 Line {} attribution mismatch: before={:?}, after={:?}",
+                line_num, before_exists, after_exists
+            ),
+        }
+    }
+
+    // Verify all 3 files still exist with correct content
+    let feature1_content = std::fs::read_to_string(tmp_repo.path().join("feature1.txt")).unwrap();
+    assert!(
+        feature1_content.contains("AI feature 1"),
+        "feature1.txt should have the expected content"
+    );
+    assert!(
+        feature1_content.contains("function feature1()"),
+        "feature1.txt should have the function"
+    );
+
+    let feature2_content = std::fs::read_to_string(tmp_repo.path().join("feature2.txt")).unwrap();
+    assert!(
+        feature2_content.contains("AI feature 2"),
+        "feature2.txt should have the expected content"
+    );
+
+    let feature3_content = std::fs::read_to_string(tmp_repo.path().join("feature3.txt")).unwrap();
+    assert!(
+        feature3_content.contains("AI feature 3"),
+        "feature3.txt should have the expected content"
+    );
+}

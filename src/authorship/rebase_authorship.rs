@@ -155,9 +155,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     // Set the base_commit_sha to the new commit
     new_authorship_log.metadata.base_commit_sha = new_sha.to_string();
 
-    // println!("Reconstructed authorship log with {:?}", new_authorship_log);
-
-    // Step (Last): Delete the hanging commit
+    // Step 6: Delete the hanging commit
 
     delete_hanging_commit(repo, &hanging_commit_sha)?;
     // println!("Deleted hanging commit: {}", hanging_commit_sha);
