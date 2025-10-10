@@ -312,7 +312,7 @@ impl CursorPreset {
             .map_err(|e| GitAiError::Generic(format!("Failed to open {:?}: {}", path, e)))
     }
 
-    fn fetch_composer_payload(
+    pub fn fetch_composer_payload(
         global_db_path: &Path,
         composer_id: &str,
     ) -> Result<serde_json::Value, GitAiError> {
@@ -344,7 +344,7 @@ impl CursorPreset {
         ))
     }
 
-    fn transcript_data_from_composer_payload(
+    pub fn transcript_data_from_composer_payload(
         data: &serde_json::Value,
         global_db_path: &Path,
         composer_id: &str,
@@ -377,7 +377,9 @@ impl CursorPreset {
                     // Extract model from bubble (first value wins)
                     if model.is_none() {
                         if let Some(model_info) = bubble_content.get("modelInfo") {
-                            if let Some(model_name) = model_info.get("modelName") {
+                            if let Some(model_name) =
+                                model_info.get("modelName").and_then(|v| v.as_str())
+                            {
                                 model = Some(model_name.to_string());
                             }
                         }
@@ -455,7 +457,7 @@ impl CursorPreset {
         }
     }
 
-    fn fetch_bubble_content_from_db(
+    pub fn fetch_bubble_content_from_db(
         global_db_path: &Path,
         composer_id: &str,
         bubble_id: &str,

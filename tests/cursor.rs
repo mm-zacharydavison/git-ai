@@ -25,7 +25,7 @@ fn test_can_open_cursor_test_database() {
         .query_row([], |row| row.get(0))
         .expect("Failed to query");
 
-    assert!(count > 0, "Database should have some records");
+    assert_eq!(count, 50, "Database should have exactly 50 records");
 }
 
 #[test]
@@ -64,50 +64,42 @@ fn test_cursor_database_has_bubble_data() {
         .query_row([&pattern], |row| row.get(0))
         .expect("Failed to query");
 
-    assert!(
-        count > 0,
-        "Should have at least one bubble for the conversation"
+    assert_eq!(
+        count, 42,
+        "Should have exactly 42 bubbles for the test conversation"
     );
-    println!("Found {} bubbles in test conversation", count);
 }
 
 #[test]
 fn test_fetch_composer_payload_from_test_db() {
-    use serde_json::Value;
+    use git_ai::commands::checkpoint_agent::agent_preset::CursorPreset;
 
-    let conn = open_test_db();
+    let db_path = fixture_path("cursor_test.vscdb");
 
-    // Manually test the logic that CursorPreset::fetch_composer_payload uses
-    let key_pattern = format!("composerData:{}", TEST_CONVERSATION_ID);
-    let mut stmt = conn
-        .prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
-        .expect("Failed to prepare statement");
-
-    let value_text: String = stmt
-        .query_row([&key_pattern], |row| row.get(0))
-        .expect("Failed to query composer data");
-
-    let data: Value =
-        serde_json::from_str(&value_text).expect("Failed to parse composer data as JSON");
+    // Use the actual CursorPreset function
+    let composer_payload = CursorPreset::fetch_composer_payload(&db_path, TEST_CONVERSATION_ID)
+        .expect("Should fetch composer payload");
 
     // Verify the structure
     assert!(
-        data.get("fullConversationHeadersOnly").is_some(),
+        composer_payload
+            .get("fullConversationHeadersOnly")
+            .is_some(),
         "Should have fullConversationHeadersOnly field"
     );
 
-    let headers = data
+    let headers = composer_payload
         .get("fullConversationHeadersOnly")
         .and_then(|v| v.as_array())
         .expect("fullConversationHeadersOnly should be an array");
 
-    assert!(
-        !headers.is_empty(),
-        "Should have at least one conversation header"
+    assert_eq!(
+        headers.len(),
+        42,
+        "Should have exactly 42 conversation headers"
     );
-    println!("Found {} conversation headers", headers.len());
 
-    // Check that headers have bubbleId
+    // Check that first header has bubbleId
     let first_header = &headers[0];
     assert!(
         first_header.get("bubbleId").is_some(),
@@ -117,23 +109,15 @@ fn test_fetch_composer_payload_from_test_db() {
 
 #[test]
 fn test_fetch_bubble_content_from_test_db() {
-    use serde_json::Value;
+    use git_ai::commands::checkpoint_agent::agent_preset::CursorPreset;
 
-    let conn = open_test_db();
+    let db_path = fixture_path("cursor_test.vscdb");
 
-    // First, get a bubble ID from the composer data
-    let key_pattern = format!("composerData:{}", TEST_CONVERSATION_ID);
-    let mut stmt = conn
-        .prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
-        .expect("Failed to prepare statement");
+    // First, get a bubble ID from the composer data using actual function
+    let composer_payload = CursorPreset::fetch_composer_payload(&db_path, TEST_CONVERSATION_ID)
+        .expect("Should fetch composer payload");
 
-    let value_text: String = stmt
-        .query_row([&key_pattern], |row| row.get(0))
-        .expect("Failed to query composer data");
-
-    let data: Value = serde_json::from_str(&value_text).expect("Failed to parse JSON");
-
-    let headers = data
+    let headers = composer_payload
         .get("fullConversationHeadersOnly")
         .and_then(|v| v.as_array())
         .expect("Should have headers");
@@ -143,102 +127,46 @@ fn test_fetch_bubble_content_from_test_db() {
         .and_then(|v| v.as_str())
         .expect("Should have bubble ID");
 
-    println!("Testing with bubble ID: {}", first_bubble_id);
-
-    // Now fetch the bubble content
-    let bubble_pattern = format!("bubbleId:{}:{}", TEST_CONVERSATION_ID, first_bubble_id);
-    let mut stmt = conn
-        .prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
-        .expect("Failed to prepare statement");
-
-    let bubble_text: String = stmt
-        .query_row([&bubble_pattern], |row| row.get(0))
-        .expect("Failed to query bubble data");
-
-    let bubble_data: Value =
-        serde_json::from_str(&bubble_text).expect("Failed to parse bubble JSON");
+    // Use the actual CursorPreset function to fetch bubble content
+    let bubble_data =
+        CursorPreset::fetch_bubble_content_from_db(&db_path, TEST_CONVERSATION_ID, first_bubble_id)
+            .expect("Should fetch bubble content")
+            .expect("Bubble content should exist");
 
     // Verify bubble structure
     assert!(
         bubble_data.get("text").is_some() || bubble_data.get("content").is_some(),
         "Bubble should have text or content field"
     );
-
-    println!("Successfully fetched and parsed bubble content");
 }
 
 #[test]
-fn test_extract_messages_from_test_conversation() {
-    use serde_json::Value;
+fn test_extract_transcript_from_test_conversation() {
+    use git_ai::commands::checkpoint_agent::agent_preset::CursorPreset;
 
-    let conn = open_test_db();
+    let db_path = fixture_path("cursor_test.vscdb");
 
-    // Get composer data
-    let key_pattern = format!("composerData:{}", TEST_CONVERSATION_ID);
-    let mut stmt = conn
-        .prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
-        .expect("Failed to prepare statement");
+    // Use the actual CursorPreset function to extract transcript data
+    let composer_payload = CursorPreset::fetch_composer_payload(&db_path, TEST_CONVERSATION_ID)
+        .expect("Should fetch composer payload");
 
-    let value_text: String = stmt
-        .query_row([&key_pattern], |row| row.get(0))
-        .expect("Failed to query");
+    let transcript_data = CursorPreset::transcript_data_from_composer_payload(
+        &composer_payload,
+        &db_path,
+        TEST_CONVERSATION_ID,
+    )
+    .expect("Should extract transcript data")
+    .expect("Should have transcript data");
 
-    let data: Value = serde_json::from_str(&value_text).expect("Failed to parse JSON");
+    let (transcript, model) = transcript_data;
 
-    let headers = data
-        .get("fullConversationHeadersOnly")
-        .and_then(|v| v.as_array())
-        .expect("Should have headers");
-
-    let mut message_count = 0;
-
-    // Iterate through headers and fetch bubble content
-    for header in headers {
-        if let Some(bubble_id) = header.get("bubbleId").and_then(|v| v.as_str()) {
-            let bubble_pattern = format!("bubbleId:{}:{}", TEST_CONVERSATION_ID, bubble_id);
-            let mut stmt = conn
-                .prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
-                .expect("Failed to prepare statement");
-
-            if let Ok(bubble_text) =
-                stmt.query_row([&bubble_pattern], |row| row.get::<_, String>(0))
-            {
-                if let Ok(bubble_data) = serde_json::from_str::<Value>(&bubble_text) {
-                    // Check if this bubble has text content
-                    if let Some(text) = bubble_data.get("text").and_then(|v| v.as_str()) {
-                        if !text.trim().is_empty() {
-                            message_count += 1;
-                            let role = header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                            let role_str = if role == 1 { "User" } else { "Assistant" };
-                            println!(
-                                "Message {}: {} - {}",
-                                message_count,
-                                role_str,
-                                &text[..text.len().min(50)]
-                            );
-                        }
-                    }
-
-                    // Also check for content array
-                    if let Some(content_array) =
-                        bubble_data.get("content").and_then(|v| v.as_array())
-                    {
-                        for item in content_array {
-                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                if !text.trim().is_empty() {
-                                    message_count += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    assert!(
-        message_count > 0,
-        "Should extract at least one message from the conversation"
+    // Verify exact message count
+    assert_eq!(
+        transcript.messages().len(),
+        13,
+        "Should extract exactly 13 messages from the conversation"
     );
-    println!("Successfully extracted {} messages", message_count);
+
+    // Verify model extraction
+    assert_eq!(model, "gpt-5", "Model should be 'gpt-5'");
 }
