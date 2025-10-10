@@ -1129,7 +1129,9 @@ impl TmpRepo {
             .output()
             .map_err(|e| GitAiError::Generic(format!("Failed to run git reset: {}", e)))?;
 
-        if !output.status.success() {
+        let exit_status = output.status;
+
+        if !exit_status.success() {
             return Err(GitAiError::Generic(format!(
                 "git reset failed: {}",
                 String::from_utf8_lossy(&output.stderr)
@@ -1138,7 +1140,11 @@ impl TmpRepo {
 
         // Call post-reset hook directly
         let parsed_args = crate::git::cli_parser::parse_git_cli_args(&args);
-        crate::commands::hooks::reset_hooks::post_reset_hook(&parsed_args, &mut repo_mut);
+        crate::commands::hooks::reset_hooks::post_reset_hook(
+            &parsed_args,
+            &mut repo_mut,
+            exit_status,
+        );
 
         Ok(())
     }

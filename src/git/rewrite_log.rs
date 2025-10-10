@@ -26,11 +26,8 @@ pub enum RewriteLogEvent {
     RevertMixed {
         revert_mixed: RevertMixedEvent,
     },
-    ResetSoft {
-        reset_soft: ResetSoftEvent,
-    },
-    ResetHard {
-        reset_hard: ResetHardEvent,
+    Reset {
+        reset: ResetEvent,
     },
     CommitAmend {
         commit_amend: CommitAmendEvent,
@@ -103,13 +100,8 @@ impl RewriteLogEvent {
     }
 
     #[allow(dead_code)]
-    pub fn reset_soft(event: ResetSoftEvent) -> Self {
-        Self::ResetSoft { reset_soft: event }
-    }
-
-    #[allow(dead_code)]
-    pub fn reset_hard(event: ResetHardEvent) -> Self {
-        Self::ResetHard { reset_hard: event }
+    pub fn reset(event: ResetEvent) -> Self {
+        Self::Reset { reset: event }
     }
 
     pub fn commit_amend(original_commit: String, amended_commit_sha: String) -> Self {
@@ -290,37 +282,37 @@ impl RevertMixedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResetSoftEvent {
-    pub target_commit: String,
-    pub previous_head: String,
-    pub success: bool,
-}
-
-impl ResetSoftEvent {
-    #[allow(dead_code)]
-    pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
-        Self {
-            target_commit,
-            previous_head,
-            success,
-        }
-    }
+#[serde(rename_all = "lowercase")]
+pub enum ResetKind {
+    Hard,
+    Soft,
+    Mixed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResetHardEvent {
-    pub target_commit: String,
-    pub previous_head: String,
-    pub success: bool,
+pub struct ResetEvent {
+    pub kind: ResetKind,
+    pub keep: bool,
+    pub merge: bool,
+    pub new_head_sha: String,
+    pub old_head_sha: String,
 }
 
-impl ResetHardEvent {
+impl ResetEvent {
     #[allow(dead_code)]
-    pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
+    pub fn new(
+        kind: ResetKind,
+        keep: bool,
+        merge: bool,
+        new_head_sha: String,
+        old_head_sha: String,
+    ) -> Self {
         Self {
-            target_commit,
-            previous_head,
-            success,
+            kind,
+            keep,
+            merge,
+            new_head_sha,
+            old_head_sha,
         }
     }
 }

@@ -152,7 +152,7 @@ fn run_post_command_hooks(
         ),
         Some("fetch") => fetch_hooks::fetch_post_command_hook(parsed_args, exit_status),
         Some("push") => push_hooks::push_post_command_hook(parsed_args, exit_status),
-        Some("reset") => reset_hooks::post_reset_hook(parsed_args, repository),
+        Some("reset") => reset_hooks::post_reset_hook(parsed_args, repository, exit_status),
         Some("merge") => merge_hooks::post_merge_hook(parsed_args, exit_status, repository),
         Some("rebase") => rebase_hooks::handle_rebase_post_command(
             command_hooks_context,

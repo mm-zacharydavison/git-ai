@@ -1,6 +1,6 @@
 use crate::{
     commands::hooks::commit_hooks,
-    git::{cli_parser::ParsedGitInvocation, repository::Repository},
+    git::{cli_parser::ParsedGitInvocation, repository::Repository, rewrite_log::ResetKind},
     utils::debug_log,
 };
 
@@ -17,7 +17,16 @@ pub fn pre_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Reposi
     repository.require_pre_command_head();
 }
 
-pub fn post_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Repository) {
+pub fn post_reset_hook(
+    parsed_args: &ParsedGitInvocation,
+    repository: &mut Repository,
+    exit_status: std::process::ExitStatus,
+) {
+    if !exit_status.success() {
+        debug_log("Reset failed, skipping authorship handling");
+        return;
+    }
+
     // Extract tree-ish (what we're resetting TO)
     let tree_ish = extract_tree_ish(parsed_args);
 
@@ -62,13 +71,26 @@ pub fn post_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Repos
     // Get human author
     let human_author = commit_hooks::get_commit_default_author(repository, &[]);
 
+    // Determine reset kind
+    let reset_kind = if parsed_args.has_command_flag("--hard") {
+        crate::git::rewrite_log::ResetKind::Hard
+    } else if parsed_args.has_command_flag("--soft") {
+        crate::git::rewrite_log::ResetKind::Soft
+    } else {
+        // --mixed is default, or explicit --mixed, --merge, or no mode flag
+        crate::git::rewrite_log::ResetKind::Mixed
+    };
+
+    let keep = parsed_args.has_command_flag("--keep");
+    let merge = parsed_args.has_command_flag("--merge");
+
     // Handle different reset modes
     // Note: Git does not allow --soft or --hard with pathspecs
-    if parsed_args.has_command_flag("--hard") {
+    if reset_kind == ResetKind::Hard {
         handle_reset_hard(repository, &old_head_sha, &target_commit_sha);
-    } else if parsed_args.has_command_flag("--soft")
-        || parsed_args.has_command_flag("--mixed")
-        || parsed_args.has_command_flag("--merge")
+    } else if reset_kind == ResetKind::Soft
+        || reset_kind == ResetKind::Mixed
+        || merge
         || !has_reset_mode_flag(parsed_args)
     // default is --mixed
     {
@@ -93,7 +115,20 @@ pub fn post_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Repos
             );
         }
     }
-    // --keep: no-op (git aborts if uncommitted changes exist)
+
+    // Log reset event
+    let _ =
+        repository
+            .storage
+            .append_rewrite_event(crate::git::rewrite_log::RewriteLogEvent::Reset {
+                reset: crate::git::rewrite_log::ResetEvent::new(
+                    reset_kind,
+                    keep,
+                    merge,
+                    new_head_sha.to_string(),
+                    old_head_sha.to_string(),
+                ),
+            });
 }
 
 /// Handle --hard reset: delete working log since all uncommitted work is discarded
