@@ -1281,8 +1281,8 @@ mod tests {
 
         // Create a transcript
         let mut transcript = AiTranscript::new();
-        transcript.add_message(Message::user("Add a function".to_string()));
-        transcript.add_message(Message::assistant("Here's the function".to_string()));
+        transcript.add_message(Message::user("Add a function".to_string(), None));
+        transcript.add_message(Message::assistant("Here's the function".to_string(), None));
 
         // Create working log entries
         // First checkpoint: add 10 lines (single line + range of 9)
@@ -1347,8 +1347,8 @@ mod tests {
             model: "claude-3-sonnet".to_string(),
         };
         let mut transcript = AiTranscript::new();
-        transcript.add_message(Message::user("Add error handling".to_string()));
-        transcript.add_message(Message::assistant("Added error handling".to_string()));
+        transcript.add_message(Message::user("Add error handling".to_string(), None));
+        transcript.add_message(Message::assistant("Added error handling".to_string(), None));
 
         let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
         log.metadata.prompts.insert(
@@ -1422,8 +1422,8 @@ mod tests {
 
         // Add transcript to make it a valid AI checkpoint
         let mut transcript = AiTranscript::new();
-        transcript.add_message(Message::user("Add some code".to_string()));
-        transcript.add_message(Message::assistant("Added code".to_string()));
+        transcript.add_message(Message::user("Add some code".to_string(), None));
+        transcript.add_message(Message::assistant("Added code".to_string(), None));
         checkpoint1.transcript = Some(transcript);
 
         // Create a human checkpoint that deletes lines 2-3 (overriding AI lines)
@@ -1473,8 +1473,8 @@ mod tests {
             model: "claude-3-sonnet".to_string(),
         };
         let mut transcript1 = AiTranscript::new();
-        transcript1.add_message(Message::user("Add function".to_string()));
-        transcript1.add_message(Message::assistant("Added function".to_string()));
+        transcript1.add_message(Message::user("Add function".to_string(), None));
+        transcript1.add_message(Message::assistant("Added function".to_string(), None));
         let session1_hash = generate_short_hash(&agent1.id, &agent1.tool);
         log.metadata.prompts.insert(
             session1_hash.clone(),
@@ -1496,8 +1496,8 @@ mod tests {
             model: "claude-3-opus".to_string(),
         };
         let mut transcript2 = AiTranscript::new();
-        transcript2.add_message(Message::user("Add tests".to_string()));
-        transcript2.add_message(Message::assistant("Added tests".to_string()));
+        transcript2.add_message(Message::user("Add tests".to_string(), None));
+        transcript2.add_message(Message::assistant("Added tests".to_string(), None));
         let session2_hash = generate_short_hash(&agent2.id, &agent2.tool);
         log.metadata.prompts.insert(
             session2_hash.clone(),
