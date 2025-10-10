@@ -683,14 +683,6 @@ fn apply_diff_as_merge_commit(
     let ours_tree = ours_commit.tree()?;
     let theirs_tree = theirs_commit.tree()?;
 
-    // NOTE: Below is the libgit2 version of the logic (merge, write, find)
-    // Perform the merge of trees to an index
-    // let mut index = repo.merge_trees_favor_ours(&base_tree, &ours_tree, &theirs_tree)?;
-
-    // Write the index to a tree object
-    // let tree_oid = index.write_tree_to(repo)?;
-    // let merged_tree = repo.find_tree(tree_oid)?;
-
     // TODO Verify new version is correct (we should be getting a tree oid straight back from merge_trees_favor_ours)
     let tree_oid = repo.merge_trees_favor_ours(&base_tree, &ours_tree, &theirs_tree)?;
     let merged_tree = repo.find_tree(tree_oid)?;
