@@ -1178,6 +1178,23 @@ fn build_commit_path_to_base(
     Ok(commits)
 }
 
+pub fn walk_commits_to_base(
+    repository: &Repository,
+    head: &str,
+    base: &str,
+) -> Result<Vec<String>, crate::error::GitAiError> {
+    let mut commits = Vec::new();
+    let mut current = repository.find_commit(head.to_string())?;
+    let base_str = base.to_string();
+
+    while current.id().to_string() != base_str {
+        commits.push(current.id().to_string());
+        current = current.parent(0)?;
+    }
+
+    Ok(commits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
