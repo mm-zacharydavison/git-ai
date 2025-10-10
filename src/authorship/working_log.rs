@@ -76,26 +76,31 @@ impl WorkingLogEntry {
     }
 
     /// Add a single line to the added lines
+    #[allow(dead_code)]
     pub fn add_added_line(&mut self, line: u32) {
         self.added_lines.push(Line::Single(line));
     }
 
     /// Add a line range to the added lines
+    #[allow(dead_code)]
     pub fn add_added_range(&mut self, start: u32, end: u32) {
         self.added_lines.push(Line::Range(start, end));
     }
 
     /// Add a single line to the deleted lines
+    #[allow(dead_code)]
     pub fn add_deleted_line(&mut self, line: u32) {
         self.deleted_lines.push(Line::Single(line));
     }
 
     /// Add a line range to the deleted lines
+    #[allow(dead_code)]
     pub fn add_deleted_range(&mut self, start: u32, end: u32) {
         self.deleted_lines.push(Line::Range(start, end));
     }
 
     /// Check if a specific line number is covered by this working log entry
+    #[allow(dead_code)]
     pub fn covers_line(&self, line_number: u32) -> bool {
         self.added_lines
             .iter()
@@ -107,6 +112,7 @@ impl WorkingLogEntry {
     }
 
     /// Get all lines (both added and deleted) for backward compatibility
+    #[allow(dead_code)]
     pub fn all_lines(&self) -> Vec<Line> {
         let mut all_lines = Vec::new();
         all_lines.extend(self.added_lines.clone());

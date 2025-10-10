@@ -1,5 +1,6 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit::post_commit;
+use crate::authorship::working_log::{Checkpoint, Line};
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::repository::Repository as GitAiRepository;
@@ -626,6 +627,89 @@ impl TmpRepo {
         Ok(branch_name.to_string())
     }
 
+    /// Cherry-pick one or more commits
+    pub fn cherry_pick(&self, commits: &[&str]) -> Result<(), GitAiError> {
+        let mut args = vec!["cherry-pick"];
+        args.extend(commits);
+
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&args)
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git cherry-pick: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git cherry-pick failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Cherry-pick with expected conflicts (returns true if there were conflicts)
+    pub fn cherry_pick_with_conflicts(&self, commit: &str) -> Result<bool, GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["cherry-pick", commit])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git cherry-pick: {}", e)))?;
+
+        // Check if there are conflicts (check both stderr and stdout)
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        let has_conflicts = !output.status.success()
+            && (stderr.contains("conflict")
+                || stdout.contains("conflict")
+                || stderr.contains("CONFLICT")
+                || stdout.contains("CONFLICT"));
+
+        Ok(has_conflicts)
+    }
+
+    /// Continue a cherry-pick after resolving conflicts
+    pub fn cherry_pick_continue(&self) -> Result<(), GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["cherry-pick", "--continue"])
+            .env("GIT_EDITOR", "true") // Skip opening editor
+            .output()
+            .map_err(|e| {
+                GitAiError::Generic(format!("Failed to run git cherry-pick --continue: {}", e))
+            })?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git cherry-pick --continue failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Abort a cherry-pick operation
+    pub fn cherry_pick_abort(&self) -> Result<(), GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["cherry-pick", "--abort"])
+            .output()
+            .map_err(|e| {
+                GitAiError::Generic(format!("Failed to run git cherry-pick --abort: {}", e))
+            })?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git cherry-pick --abort failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Gets the commit SHA of the current HEAD
     pub fn head_commit_sha(&self) -> Result<String, GitAiError> {
         let head = self.repo_git2.head()?;
@@ -991,6 +1075,258 @@ impl TmpRepo {
 
         Ok(())
     }
+
+    /// Merges a branch into the current branch, allowing conflicts to remain unresolved
+    /// Returns Ok(true) if there are conflicts, Ok(false) if merge succeeded without conflicts
+    pub fn merge_with_conflicts(&self, branch_name: &str) -> Result<bool, GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["merge", branch_name, "--no-commit"])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git merge: {}", e)))?;
+
+        // Exit code 1 with "conflict" in output means there are merge conflicts
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        if !output.status.success()
+            && (stderr.contains("conflict")
+                || stdout.contains("conflict")
+                || stderr.contains("CONFLICT")
+                || stdout.contains("CONFLICT"))
+        {
+            // Conflicts exist - this is expected
+            return Ok(true);
+        }
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git merge failed unexpectedly: {}",
+                stderr
+            )));
+        }
+
+        // Merge succeeded without conflicts
+        Ok(false)
+    }
+
+    /// Resolves a conflicted file by choosing one version (ours or theirs)
+    pub fn resolve_conflict(&self, filename: &str, choose: &str) -> Result<(), GitAiError> {
+        match choose {
+            "ours" => {
+                let output = Command::new(crate::config::Config::get().git_cmd())
+                    .current_dir(&self.path)
+                    .args(&["checkout", "--ours", filename])
+                    .output()
+                    .map_err(|e| {
+                        GitAiError::Generic(format!("Failed to checkout --ours: {}", e))
+                    })?;
+
+                if !output.status.success() {
+                    return Err(GitAiError::Generic(format!(
+                        "git checkout --ours failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+            }
+            "theirs" => {
+                let output = Command::new(crate::config::Config::get().git_cmd())
+                    .current_dir(&self.path)
+                    .args(&["checkout", "--theirs", filename])
+                    .output()
+                    .map_err(|e| {
+                        GitAiError::Generic(format!("Failed to checkout --theirs: {}", e))
+                    })?;
+
+                if !output.status.success() {
+                    return Err(GitAiError::Generic(format!(
+                        "git checkout --theirs failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+            }
+            _ => {
+                return Err(GitAiError::Generic(format!(
+                    "Invalid choice: {}. Use 'ours' or 'theirs'",
+                    choose
+                )));
+            }
+        }
+
+        // Stage the resolved file
+        self.stage_file(filename)?;
+        Ok(())
+    }
+
+    /// Execute a git command directly (no hooks)
+    pub fn git_command(&self, args: &[&str]) -> Result<(), GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(args)
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git command: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Execute git reset with git-ai hooks
+    pub fn reset(
+        &self,
+        target: &str,
+        mode: ResetMode,
+        pathspecs: &[&str],
+    ) -> Result<(), GitAiError> {
+        // Capture HEAD before reset
+        let mut repo_mut =
+            crate::git::repository::find_repository_in_path(self.path.to_str().unwrap())?;
+        repo_mut.require_pre_command_head();
+
+        // Build git command args
+        let mut args = vec!["reset".to_string()];
+
+        match mode {
+            ResetMode::Hard => args.push("--hard".to_string()),
+            ResetMode::Soft => args.push("--soft".to_string()),
+            ResetMode::Mixed => args.push("--mixed".to_string()),
+            ResetMode::Merge => args.push("--merge".to_string()),
+            ResetMode::Keep => args.push("--keep".to_string()),
+        }
+
+        args.push(target.to_string());
+
+        for pathspec in pathspecs {
+            args.push(pathspec.to_string());
+        }
+
+        // Run the actual git command
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&args)
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git reset: {}", e)))?;
+
+        let exit_status = output.status;
+
+        if !exit_status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git reset failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        // Call post-reset hook directly
+        let parsed_args = crate::git::cli_parser::parse_git_cli_args(&args);
+        crate::commands::hooks::reset_hooks::post_reset_hook(
+            &parsed_args,
+            &mut repo_mut,
+            exit_status,
+        );
+
+        Ok(())
+    }
+}
+
+// @todo move this acunniffe
+/// Sanitized checkpoint representation for deterministic snapshots
+#[derive(Debug)]
+pub struct SnapshotCheckpoint {
+    author: String,
+    has_agent: bool,
+    agent_tool: Option<String>,
+    entries: Vec<SnapshotEntry>,
+}
+
+#[derive(Debug)]
+pub struct SnapshotEntry {
+    file: String,
+    added_lines: Vec<Line>,
+    deleted_lines: Vec<Line>,
+}
+
+pub fn snapshot_checkpoints(checkpoints: &[Checkpoint]) -> Vec<SnapshotCheckpoint> {
+    let mut snapshots: Vec<SnapshotCheckpoint> = checkpoints
+        .iter()
+        .map(|cp| {
+            let mut entries: Vec<SnapshotEntry> = cp
+                .entries
+                .iter()
+                .map(|e| SnapshotEntry {
+                    file: e.file.clone(),
+                    added_lines: e.added_lines.clone(),
+                    deleted_lines: e.deleted_lines.clone(),
+                })
+                .collect();
+
+            // Sort entries by file name for deterministic ordering
+            entries.sort_by(|a, b| a.file.cmp(&b.file));
+
+            SnapshotCheckpoint {
+                author: cp.author.clone(),
+                has_agent: cp.agent_id.is_some(),
+                agent_tool: cp.agent_id.as_ref().map(|a| a.tool.clone()),
+                entries,
+            }
+        })
+        .collect();
+
+    // Sort checkpoints by author name, then by first file name, then by first line number
+    // for deterministic ordering
+    snapshots.sort_by(|a, b| {
+        // First sort by author
+        match a.author.cmp(&b.author) {
+            std::cmp::Ordering::Equal => {
+                // If authors are equal, sort by first file name
+                let a_file = a.entries.first().map(|e| e.file.as_str()).unwrap_or("");
+                let b_file = b.entries.first().map(|e| e.file.as_str()).unwrap_or("");
+                match a_file.cmp(b_file) {
+                    std::cmp::Ordering::Equal => {
+                        // If files are equal, sort by first added line number
+                        let a_line = a
+                            .entries
+                            .first()
+                            .and_then(|e| e.added_lines.first())
+                            .map(|l| match l {
+                                Line::Single(n) => *n,
+                                Line::Range(start, _) => *start,
+                            })
+                            .unwrap_or(0);
+                        let b_line = b
+                            .entries
+                            .first()
+                            .and_then(|e| e.added_lines.first())
+                            .map(|l| match l {
+                                Line::Single(n) => *n,
+                                Line::Range(start, _) => *start,
+                            })
+                            .unwrap_or(0);
+                        a_line.cmp(&b_line)
+                    }
+                    other => other,
+                }
+            }
+            other => other,
+        }
+    });
+
+    snapshots
+}
+
+/// Reset mode for git reset command
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub enum ResetMode {
+    Hard,
+    Soft,
+    Mixed,
+    Merge,
+    Keep,
 }
 
 #[allow(dead_code)]

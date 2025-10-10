@@ -8,7 +8,7 @@ title: Compatibility and Limitations
 | --- | --- | --- |
 | [Cursor >1.7](https://usegitai.com/docs/agent-support/cursor) | ✅ | ✅ |
 | [Claude Code](https://usegitai.com/docs/agent-support/claude-code) | ✅ | ✅ |
-| [GitHub Copilot in VSCode via Extension](https://usegitai.com/docs/agent-support/vs-code-github-copilot) | ✅ | Coming soon |
+| [GitHub Copilot in VSCode via Extension](https://usegitai.com/docs/agent-support/vs-code-github-copilot) | ✅ | ✅ |
 
 ## Capabilities
 
@@ -36,9 +36,10 @@ title: Compatibility and Limitations
 | git replace maintains correct attribution | ✅ |
 | git worktrees maintains correct attribution | ✅ |
 | Amending commits correctly preserves attribution | ✅ |
-| Rebase correctly merges attribution | ❌ |
-| Cherrypick correctly merges attribution | ❌ |
-| reset `--soft` and `--mixed` maintains correct attribution | ❌ |
+| After resolving git conflicts, attribution is correct | ✅ |
+| Rebase correctly merges attribution | ✅ |
+| reset `--soft` and `--mixed` maintains correct attribution | ✅ |
+| Cherrypick correctly merges attribution | ✅ |
 | `mv` (move or rename files) moves AI attribution to the new file | ❌ |
 | Stash / Pop maintain correct attribution | ❌ |
 

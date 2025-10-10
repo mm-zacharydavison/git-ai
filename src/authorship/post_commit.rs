@@ -4,10 +4,9 @@ use crate::authorship::stats::{stats_for_commit_stats, write_stats_to_terminal};
 use crate::authorship::working_log::Checkpoint;
 use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
-use crate::git::refs::{notes_add, show_authorship_note};
+use crate::git::refs::notes_add;
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::debug_log;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
 

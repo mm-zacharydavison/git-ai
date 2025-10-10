@@ -11,23 +11,29 @@ pub enum RewriteLogEvent {
     MergeSquash {
         merge_squash: MergeSquashEvent,
     },
-    RebaseInteractive {
-        rebase_interactive: RebaseInteractiveEvent,
+    RebaseStart {
+        rebase_start: RebaseStartEvent,
     },
-    Rebase {
-        rebase: RebaseEvent,
+    RebaseComplete {
+        rebase_complete: RebaseCompleteEvent,
     },
-    CherryPick {
-        cherry_pick: CherryPickEvent,
+    RebaseAbort {
+        rebase_abort: RebaseAbortEvent,
+    },
+    CherryPickStart {
+        cherry_pick_start: CherryPickStartEvent,
+    },
+    CherryPickComplete {
+        cherry_pick_complete: CherryPickCompleteEvent,
+    },
+    CherryPickAbort {
+        cherry_pick_abort: CherryPickAbortEvent,
     },
     RevertMixed {
         revert_mixed: RevertMixedEvent,
     },
-    ResetSoft {
-        reset_soft: ResetSoftEvent,
-    },
-    ResetHard {
-        reset_hard: ResetHardEvent,
+    Reset {
+        reset: ResetEvent,
     },
     CommitAmend {
         commit_amend: CommitAmendEvent,
@@ -44,6 +50,7 @@ pub enum RewriteLogEvent {
 }
 
 impl RewriteLogEvent {
+    #[allow(dead_code)]
     pub fn merge(
         source_branch: String,
         target_branch: String,
@@ -68,32 +75,52 @@ impl RewriteLogEvent {
         }
     }
 
-    pub fn rebase_interactive(event: RebaseInteractiveEvent) -> Self {
-        Self::RebaseInteractive {
-            rebase_interactive: event,
+    pub fn rebase_start(event: RebaseStartEvent) -> Self {
+        Self::RebaseStart {
+            rebase_start: event,
         }
     }
 
-    pub fn rebase(event: RebaseEvent) -> Self {
-        Self::Rebase { rebase: event }
+    pub fn rebase_complete(event: RebaseCompleteEvent) -> Self {
+        Self::RebaseComplete {
+            rebase_complete: event,
+        }
     }
 
-    pub fn cherry_pick(event: CherryPickEvent) -> Self {
-        Self::CherryPick { cherry_pick: event }
+    pub fn rebase_abort(event: RebaseAbortEvent) -> Self {
+        Self::RebaseAbort {
+            rebase_abort: event,
+        }
     }
 
+    pub fn cherry_pick_start(event: CherryPickStartEvent) -> Self {
+        Self::CherryPickStart {
+            cherry_pick_start: event,
+        }
+    }
+
+    pub fn cherry_pick_complete(event: CherryPickCompleteEvent) -> Self {
+        Self::CherryPickComplete {
+            cherry_pick_complete: event,
+        }
+    }
+
+    pub fn cherry_pick_abort(event: CherryPickAbortEvent) -> Self {
+        Self::CherryPickAbort {
+            cherry_pick_abort: event,
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn revert_mixed(event: RevertMixedEvent) -> Self {
         Self::RevertMixed {
             revert_mixed: event,
         }
     }
 
-    pub fn reset_soft(event: ResetSoftEvent) -> Self {
-        Self::ResetSoft { reset_soft: event }
-    }
-
-    pub fn reset_hard(event: ResetHardEvent) -> Self {
-        Self::ResetHard { reset_hard: event }
+    #[allow(dead_code)]
+    pub fn reset(event: ResetEvent) -> Self {
+        Self::Reset { reset: event }
     }
 
     pub fn commit_amend(original_commit: String, amended_commit_sha: String) -> Self {
@@ -108,10 +135,12 @@ impl RewriteLogEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn stash(event: StashEvent) -> Self {
         Self::Stash { stash: event }
     }
 
+    #[allow(dead_code)]
     pub fn authorship_logs_synced(event: AuthorshipLogsSyncedEvent) -> Self {
         Self::AuthorshipLogsSynced {
             authorship_logs_synced: event,
@@ -130,6 +159,7 @@ pub struct MergeEvent {
 }
 
 impl MergeEvent {
+    #[allow(dead_code)]
     pub fn new(
         source_branch: String,
         target_branch: String,
@@ -172,26 +202,41 @@ impl MergeSquashEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RebaseInteractiveEvent {
-    pub base_commit: String,
-    pub commit_count: u32,
-    pub state: RebaseState,
+pub struct RebaseStartEvent {
+    pub original_head: String,
+    pub is_interactive: bool,
+}
+
+impl RebaseStartEvent {
+    pub fn new(original_head: String, is_interactive: bool) -> Self {
+        Self {
+            original_head,
+            is_interactive,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RebaseCompleteEvent {
+    pub original_head: String,
+    pub new_head: String,
+    pub is_interactive: bool,
     pub original_commits: Vec<String>,
     pub new_commits: Vec<String>,
 }
 
-impl RebaseInteractiveEvent {
+impl RebaseCompleteEvent {
     pub fn new(
-        base_commit: String,
-        commit_count: u32,
-        state: RebaseState,
+        original_head: String,
+        new_head: String,
+        is_interactive: bool,
         original_commits: Vec<String>,
         new_commits: Vec<String>,
     ) -> Self {
         Self {
-            base_commit,
-            commit_count,
-            state,
+            original_head,
+            new_head,
+            is_interactive,
             original_commits,
             new_commits,
         }
@@ -199,59 +244,63 @@ impl RebaseInteractiveEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RebaseEvent {
-    pub base_commit: String,
-    pub state: RebaseState,
-    pub commit_count: u32,
-    pub current_commit: Option<String>,
-    pub original_commits: Vec<String>,
+pub struct RebaseAbortEvent {
+    pub original_head: String,
+}
+
+impl RebaseAbortEvent {
+    pub fn new(original_head: String) -> Self {
+        Self { original_head }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CherryPickStartEvent {
+    pub original_head: String,
+    pub source_commits: Vec<String>,
+}
+
+impl CherryPickStartEvent {
+    pub fn new(original_head: String, source_commits: Vec<String>) -> Self {
+        Self {
+            original_head,
+            source_commits,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CherryPickCompleteEvent {
+    pub original_head: String,
+    pub new_head: String,
+    pub source_commits: Vec<String>,
     pub new_commits: Vec<String>,
 }
 
-impl RebaseEvent {
+impl CherryPickCompleteEvent {
     pub fn new(
-        base_commit: String,
-        state: RebaseState,
-        commit_count: u32,
-        current_commit: Option<String>,
-        original_commits: Vec<String>,
+        original_head: String,
+        new_head: String,
+        source_commits: Vec<String>,
         new_commits: Vec<String>,
     ) -> Self {
         Self {
-            base_commit,
-            state,
-            commit_count,
-            current_commit,
-            original_commits,
+            original_head,
+            new_head,
+            source_commits,
             new_commits,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CherryPickEvent {
-    pub source_commit: String,
-    pub target_branch: String,
-    pub new_commit_sha: Option<String>,
-    pub success: bool,
-    pub conflicts: Vec<String>,
+pub struct CherryPickAbortEvent {
+    pub original_head: String,
 }
 
-impl CherryPickEvent {
-    pub fn new(
-        source_commit: String,
-        target_branch: String,
-        new_commit_sha: Option<String>,
-        success: bool,
-        conflicts: Vec<String>,
-    ) -> Self {
-        Self {
-            source_commit,
-            target_branch,
-            new_commit_sha,
-            success,
-            conflicts,
-        }
+impl CherryPickAbortEvent {
+    pub fn new(original_head: String) -> Self {
+        Self { original_head }
     }
 }
 
@@ -263,6 +312,7 @@ pub struct RevertMixedEvent {
 }
 
 impl RevertMixedEvent {
+    #[allow(dead_code)]
     pub fn new(reverted_commit: String, success: bool, affected_files: Vec<String>) -> Self {
         Self {
             reverted_commit,
@@ -273,35 +323,37 @@ impl RevertMixedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResetSoftEvent {
-    pub target_commit: String,
-    pub previous_head: String,
-    pub success: bool,
-}
-
-impl ResetSoftEvent {
-    pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
-        Self {
-            target_commit,
-            previous_head,
-            success,
-        }
-    }
+#[serde(rename_all = "lowercase")]
+pub enum ResetKind {
+    Hard,
+    Soft,
+    Mixed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResetHardEvent {
-    pub target_commit: String,
-    pub previous_head: String,
-    pub success: bool,
+pub struct ResetEvent {
+    pub kind: ResetKind,
+    pub keep: bool,
+    pub merge: bool,
+    pub new_head_sha: String,
+    pub old_head_sha: String,
 }
 
-impl ResetHardEvent {
-    pub fn new(target_commit: String, previous_head: String, success: bool) -> Self {
+impl ResetEvent {
+    #[allow(dead_code)]
+    pub fn new(
+        kind: ResetKind,
+        keep: bool,
+        merge: bool,
+        new_head_sha: String,
+        old_head_sha: String,
+    ) -> Self {
         Self {
-            target_commit,
-            previous_head,
-            success,
+            kind,
+            keep,
+            merge,
+            new_head_sha,
+            old_head_sha,
         }
     }
 }
@@ -347,6 +399,7 @@ pub struct StashEvent {
 }
 
 impl StashEvent {
+    #[allow(dead_code)]
     pub fn new(
         operation: StashOperation,
         stash_ref: Option<String>,
@@ -370,6 +423,7 @@ pub struct AuthorshipLogsSyncedEvent {
 }
 
 impl AuthorshipLogsSyncedEvent {
+    #[allow(dead_code)]
     pub fn new(synced: Vec<String>, origin: Vec<String>) -> Self {
         Self {
             synced,
@@ -380,21 +434,6 @@ impl AuthorshipLogsSyncedEvent {
                 .as_secs(),
         }
     }
-}
-
-/// Rebase state tracking
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum RebaseState {
-    /// Rebase started
-    Start,
-    /// Rebase in progress
-    InProgress,
-    /// Rebase continued after conflict resolution
-    Continue,
-    /// Rebase aborted
-    Abort,
-    /// Rebase completed successfully
-    Complete,
 }
 
 /// Stash operation types
@@ -413,6 +452,7 @@ pub enum StashOperation {
 }
 
 /// Serialize events to JSONL format (newest events first)
+#[allow(dead_code)]
 pub fn serialize_events_to_jsonl(events: &[RewriteLogEvent]) -> Result<String, serde_json::Error> {
     let mut lines = Vec::new();
 
@@ -533,12 +573,11 @@ mod tests {
             vec![],
         );
 
-        let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
-            "def456".to_string(),
-            "main".to_string(),
-            Some("ghi789".to_string()),
-            true,
-            vec![],
+        let event2 = RewriteLogEvent::cherry_pick_complete(CherryPickCompleteEvent::new(
+            "original_head".to_string(),
+            "ghi789".to_string(),
+            vec!["def456".to_string()],
+            vec!["ghi789".to_string()],
         ));
 
         let events = vec![event1.clone(), event2.clone()];
@@ -557,10 +596,12 @@ mod tests {
         }
 
         match &deserialized[1] {
-            RewriteLogEvent::CherryPick { cherry_pick } => {
-                assert_eq!(cherry_pick.source_commit, "def456");
+            RewriteLogEvent::CherryPickComplete {
+                cherry_pick_complete,
+            } => {
+                assert_eq!(cherry_pick_complete.source_commits[0], "def456");
             }
-            _ => panic!("Expected CherryPick event"),
+            _ => panic!("Expected CherryPickComplete event"),
         }
     }
 
@@ -598,12 +639,11 @@ mod tests {
             vec![],
         );
 
-        let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
-            "def456".to_string(),
-            "main".to_string(),
-            Some("ghi789".to_string()),
-            true,
-            vec![],
+        let event2 = RewriteLogEvent::cherry_pick_complete(CherryPickCompleteEvent::new(
+            "original_head".to_string(),
+            "ghi789".to_string(),
+            vec!["def456".to_string()],
+            vec!["ghi789".to_string()],
         ));
 
         let initial_jsonl = serialize_events_to_jsonl(&[event1.clone()]).unwrap();
@@ -617,10 +657,12 @@ mod tests {
         assert_eq!(deserialized.len(), 2);
         // event2 should be first (newest) since it was appended
         match &deserialized[0] {
-            RewriteLogEvent::CherryPick { cherry_pick } => {
-                assert_eq!(cherry_pick.source_commit, "def456");
+            RewriteLogEvent::CherryPickComplete {
+                cherry_pick_complete,
+            } => {
+                assert_eq!(cherry_pick_complete.source_commits[0], "def456");
             }
-            _ => panic!("Expected CherryPick event"),
+            _ => panic!("Expected CherryPickComplete event"),
         }
 
         match &deserialized[1] {
