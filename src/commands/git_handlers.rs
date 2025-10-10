@@ -1,7 +1,7 @@
-use crate::commands::commit_hooks;
-use crate::commands::commit_hooks::get_commit_default_author;
-use crate::commands::fetch_hooks;
-use crate::commands::push_hooks;
+use crate::commands::hooks::commit_hooks;
+use crate::commands::hooks::commit_hooks::get_commit_default_author;
+use crate::commands::hooks::fetch_hooks;
+use crate::commands::hooks::push_hooks;
 use crate::config;
 use crate::git::cli_parser::is_dry_run;
 use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
