@@ -1692,9 +1692,16 @@ sed -i.bak '3s/^pick/squash/' "$1"
         std::fs::set_permissions(&script_path, perms).unwrap();
     }
 
+    // On Windows, we need to invoke the batch script through cmd.exe
+    let editor_cmd = if cfg!(windows) {
+        format!("cmd.exe /c \"{}\"", script_path.display())
+    } else {
+        script_path.to_str().unwrap().to_string()
+    };
+
     let output = Command::new("git")
         .current_dir(tmp_repo.path())
-        .env("GIT_SEQUENCE_EDITOR", script_path.to_str().unwrap())
+        .env("GIT_SEQUENCE_EDITOR", &editor_cmd)
         .env("GIT_EDITOR", "true") // Auto-accept commit message
         .args(&["rebase", "-i", &base_commit])
         .output()
