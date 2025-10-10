@@ -4,7 +4,15 @@ use crate::{
     utils::debug_log,
 };
 
-pub fn pre_reset_hook(_parsed_args: &ParsedGitInvocation, repository: &mut Repository) {
+pub fn pre_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Repository) {
+    // Get the human author for the checkpoint
+    let human_author =
+        commit_hooks::get_commit_default_author(repository, &parsed_args.command_args);
+
+    // Run checkpoint to capture current working directory state before reset
+    let _result =
+        crate::commands::checkpoint::run(repository, &human_author, false, false, true, None);
+
     // Capture HEAD before reset happens
     repository.require_pre_command_head();
 }

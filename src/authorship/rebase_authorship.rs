@@ -262,6 +262,9 @@ pub fn prepare_working_log_after_squash(
             ))
         })?;
 
+    // Filter to keep only AI checkpoints - we don't track human-only changes in working logs
+    checkpoints.retain(|checkpoint| checkpoint.agent_id.is_some());
+
     // Step 10: For each checkpoint, read the staged file content and save blobs
     let working_log = repo
         .storage
@@ -828,16 +831,21 @@ fn reconstruct_authorship_from_diff(
                 ChangeTag::Equal => {
                     // Equal lines are unchanged - skip them for now
                     // TODO: May need to handle moved lines in the future
-                    let line_count = change.value().lines().count() as u32;
+                    // Count newlines instead of lines() to handle trailing newlines correctly
+                    let line_count = change.value().matches('\n').count() as u32;
                     _old_line += line_count;
                     new_line += line_count;
                 }
                 ChangeTag::Delete => {
                     // Deleted lines only advance the old line counter
-                    _old_line += change.value().lines().count() as u32;
+                    // Count newlines instead of lines() to handle trailing newlines correctly
+                    _old_line += change.value().matches('\n').count() as u32;
                 }
                 ChangeTag::Insert => {
-                    let inserted: Vec<&str> = change.value().lines().collect();
+                    let change_value = change.value();
+                    let inserted: Vec<&str> = change_value.lines().collect();
+                    // Count actual newlines for accurate line tracking
+                    let actual_line_count = change_value.matches('\n').count() as u32;
 
                     debug_log(&format!(
                         "Found {} inserted lines in file {}",
@@ -884,7 +892,8 @@ fn reconstruct_authorship_from_diff(
                         }
                     }
 
-                    new_line += inserted.len() as u32;
+                    // Use actual newline count for accurate line tracking
+                    new_line += actual_line_count;
                 }
             }
         }
@@ -1294,6 +1303,9 @@ pub fn reconstruct_working_log_after_reset(
                 e
             ))
         })?;
+
+    // Filter to keep only AI checkpoints - we don't track human-only changes in working logs
+    checkpoints.retain(|checkpoint| checkpoint.agent_id.is_some());
 
     // Step 5: Persist blobs and write working log
     let new_working_log = repo.storage.working_log_for_base_commit(target_commit_sha);
