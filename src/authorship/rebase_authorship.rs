@@ -75,12 +75,25 @@ pub fn rewrite_authorship_if_needed(
                 &commit_author,
             )?;
 
-            if !supress_output {
-                println!(
-                    "✓ Rewrote authorship for {} rebased commits",
-                    rebase_complete.new_commits.len()
-                );
-            }
+            debug_log(&format!(
+                "✓ Rewrote authorship for {} rebased commits",
+                rebase_complete.new_commits.len()
+            ));
+        }
+        RewriteLogEvent::CherryPickComplete {
+            cherry_pick_complete,
+        } => {
+            rewrite_authorship_after_cherry_pick(
+                repo,
+                &cherry_pick_complete.source_commits,
+                &cherry_pick_complete.new_commits,
+                &commit_author,
+            )?;
+
+            debug_log(&format!(
+                "✓ Rewrote authorship for {} cherry-picked commits",
+                cherry_pick_complete.new_commits.len()
+            ));
         }
         _ => {}
     }
@@ -481,6 +494,76 @@ fn handle_split_rebase(
     Ok(())
 }
 
+/// Rewrite authorship logs after cherry-pick
+///
+/// Cherry-pick is simpler than rebase: it creates new commits by applying patches from source commits.
+/// The mapping is typically 1:1, or 1:0 if a commit becomes empty (already applied).
+///
+/// # Arguments
+/// * `repo` - Git repository
+/// * `source_commits` - Vector of source commit SHAs (commits being cherry-picked), oldest first
+/// * `new_commits` - Vector of new commit SHAs (after cherry-pick), oldest first
+/// * `human_author` - The human author identifier
+///
+/// # Returns
+/// Ok if all commits were processed successfully
+pub fn rewrite_authorship_after_cherry_pick(
+    repo: &Repository,
+    source_commits: &[String],
+    new_commits: &[String],
+    human_author: &str,
+) -> Result<(), GitAiError> {
+    debug_log(&format!(
+        "Rewriting authorship for cherry-pick: {} source -> {} new commits",
+        source_commits.len(),
+        new_commits.len()
+    ));
+
+    // Cherry-pick can result in fewer commits if some become empty
+    // Match up commits by position (they're applied in order)
+    let min_len = std::cmp::min(source_commits.len(), new_commits.len());
+
+    for i in 0..min_len {
+        let source_sha = &source_commits[i];
+        let new_sha = &new_commits[i];
+
+        debug_log(&format!(
+            "Processing cherry-picked commit {} -> {}",
+            source_sha, new_sha
+        ));
+
+        // Use the same logic as rebase for single commit rewriting
+        if let Err(e) = rewrite_single_commit_authorship(repo, source_sha, new_sha, human_author) {
+            debug_log(&format!(
+                "Failed to rewrite authorship for {} -> {}: {}",
+                source_sha, new_sha, e
+            ));
+            // Continue with other commits even if one fails
+        }
+    }
+
+    // If there are fewer new commits than source commits, some were dropped (empty)
+    if new_commits.len() < source_commits.len() {
+        debug_log(&format!(
+            "Note: {} source commits resulted in {} new commits (some became empty)",
+            source_commits.len(),
+            new_commits.len()
+        ));
+    }
+
+    // If there are more new commits, this shouldn't normally happen with cherry-pick
+    // but handle it gracefully
+    if new_commits.len() > source_commits.len() {
+        debug_log(&format!(
+            "Warning: More new commits ({}) than source commits ({})",
+            new_commits.len(),
+            source_commits.len()
+        ));
+    }
+
+    Ok(())
+}
+
 /// Rewrite authorship for a single commit after rebase
 ///
 /// Fast path: If trees are identical, just copy the authorship log
@@ -867,29 +950,41 @@ fn reconstruct_authorship_from_diff(
                             }
                         }
 
-                        let blame_line_number = if let Some(h_line_no) = matched_hanging_line {
+                        // Only try to blame lines that exist in the hanging commit
+                        // If we can't find a match, the line is new and has no historical authorship
+                        if let Some(h_line_no) = matched_hanging_line {
                             used_hanging_line_numbers.insert(h_line_no);
-                            h_line_no
-                        } else {
-                            // Fallback: use the position in the new file
-                            new_line + (i as u32)
-                        };
 
-                        let blame_result = run_blame_in_context(
-                            repo,
-                            &file_path_str,
-                            blame_line_number,
-                            hanging_commit_sha,
-                        )?;
+                            let blame_result = run_blame_in_context(
+                                repo,
+                                &file_path_str,
+                                h_line_no,
+                                hanging_commit_sha,
+                            );
 
-                        if let Some((author, prompt)) = blame_result {
-                            authorship_entries.push((
-                                file_path_str.clone(),
-                                blame_line_number,
-                                author,
-                                prompt,
-                            ));
+                            // Handle blame errors gracefully (e.g., file doesn't exist in hanging commit)
+                            match blame_result {
+                                Ok(Some((author, prompt))) => {
+                                    authorship_entries.push((
+                                        file_path_str.clone(),
+                                        h_line_no,
+                                        author,
+                                        prompt,
+                                    ));
+                                }
+                                Ok(None) => {
+                                    // No authorship found, that's ok
+                                }
+                                Err(e) => {
+                                    // Log the error but continue processing other lines
+                                    debug_log(&format!(
+                                        "Failed to blame line {} in {}: {}",
+                                        h_line_no, file_path_str, e
+                                    ));
+                                }
+                            }
                         }
+                        // else: Line doesn't exist in hanging commit, skip it (no historical authorship)
                     }
 
                     // Use actual newline count for accurate line tracking

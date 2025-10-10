@@ -627,6 +627,89 @@ impl TmpRepo {
         Ok(branch_name.to_string())
     }
 
+    /// Cherry-pick one or more commits
+    pub fn cherry_pick(&self, commits: &[&str]) -> Result<(), GitAiError> {
+        let mut args = vec!["cherry-pick"];
+        args.extend(commits);
+
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&args)
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git cherry-pick: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git cherry-pick failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Cherry-pick with expected conflicts (returns true if there were conflicts)
+    pub fn cherry_pick_with_conflicts(&self, commit: &str) -> Result<bool, GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["cherry-pick", commit])
+            .output()
+            .map_err(|e| GitAiError::Generic(format!("Failed to run git cherry-pick: {}", e)))?;
+
+        // Check if there are conflicts (check both stderr and stdout)
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        let has_conflicts = !output.status.success()
+            && (stderr.contains("conflict")
+                || stdout.contains("conflict")
+                || stderr.contains("CONFLICT")
+                || stdout.contains("CONFLICT"));
+
+        Ok(has_conflicts)
+    }
+
+    /// Continue a cherry-pick after resolving conflicts
+    pub fn cherry_pick_continue(&self) -> Result<(), GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["cherry-pick", "--continue"])
+            .env("GIT_EDITOR", "true") // Skip opening editor
+            .output()
+            .map_err(|e| {
+                GitAiError::Generic(format!("Failed to run git cherry-pick --continue: {}", e))
+            })?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git cherry-pick --continue failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Abort a cherry-pick operation
+    pub fn cherry_pick_abort(&self) -> Result<(), GitAiError> {
+        let output = Command::new(crate::config::Config::get().git_cmd())
+            .current_dir(&self.path)
+            .args(&["cherry-pick", "--abort"])
+            .output()
+            .map_err(|e| {
+                GitAiError::Generic(format!("Failed to run git cherry-pick --abort: {}", e))
+            })?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git cherry-pick --abort failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Gets the commit SHA of the current HEAD
     pub fn head_commit_sha(&self) -> Result<String, GitAiError> {
         let head = self.repo_git2.head()?;

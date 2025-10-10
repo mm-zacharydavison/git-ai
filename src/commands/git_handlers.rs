@@ -1,3 +1,4 @@
+use crate::commands::hooks::cherry_pick_hooks;
 use crate::commands::hooks::commit_hooks;
 use crate::commands::hooks::fetch_hooks;
 use crate::commands::hooks::merge_hooks;
@@ -132,6 +133,9 @@ fn run_pre_command_hooks(
         Some("reset") => {
             reset_hooks::pre_reset_hook(parsed_args, repository);
         }
+        Some("cherry-pick") => {
+            cherry_pick_hooks::pre_cherry_pick_hook(parsed_args, repository, command_hooks_context);
+        }
         _ => {}
     }
 }
@@ -155,6 +159,12 @@ fn run_post_command_hooks(
         Some("reset") => reset_hooks::post_reset_hook(parsed_args, repository, exit_status),
         Some("merge") => merge_hooks::post_merge_hook(parsed_args, exit_status, repository),
         Some("rebase") => rebase_hooks::handle_rebase_post_command(
+            command_hooks_context,
+            parsed_args,
+            exit_status,
+            repository,
+        ),
+        Some("cherry-pick") => cherry_pick_hooks::post_cherry_pick_hook(
             command_hooks_context,
             parsed_args,
             exit_status,

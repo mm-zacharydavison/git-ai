@@ -20,8 +20,14 @@ pub enum RewriteLogEvent {
     RebaseAbort {
         rebase_abort: RebaseAbortEvent,
     },
-    CherryPick {
-        cherry_pick: CherryPickEvent,
+    CherryPickStart {
+        cherry_pick_start: CherryPickStartEvent,
+    },
+    CherryPickComplete {
+        cherry_pick_complete: CherryPickCompleteEvent,
+    },
+    CherryPickAbort {
+        cherry_pick_abort: CherryPickAbortEvent,
     },
     RevertMixed {
         revert_mixed: RevertMixedEvent,
@@ -87,9 +93,22 @@ impl RewriteLogEvent {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn cherry_pick(event: CherryPickEvent) -> Self {
-        Self::CherryPick { cherry_pick: event }
+    pub fn cherry_pick_start(event: CherryPickStartEvent) -> Self {
+        Self::CherryPickStart {
+            cherry_pick_start: event,
+        }
+    }
+
+    pub fn cherry_pick_complete(event: CherryPickCompleteEvent) -> Self {
+        Self::CherryPickComplete {
+            cherry_pick_complete: event,
+        }
+    }
+
+    pub fn cherry_pick_abort(event: CherryPickAbortEvent) -> Self {
+        Self::CherryPickAbort {
+            cherry_pick_abort: event,
+        }
     }
 
     #[allow(dead_code)]
@@ -236,30 +255,52 @@ impl RebaseAbortEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CherryPickEvent {
-    pub source_commit: String,
-    pub target_branch: String,
-    pub new_commit_sha: Option<String>,
-    pub success: bool,
-    pub conflicts: Vec<String>,
+pub struct CherryPickStartEvent {
+    pub original_head: String,
+    pub source_commits: Vec<String>,
 }
 
-impl CherryPickEvent {
-    #[allow(dead_code)]
+impl CherryPickStartEvent {
+    pub fn new(original_head: String, source_commits: Vec<String>) -> Self {
+        Self {
+            original_head,
+            source_commits,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CherryPickCompleteEvent {
+    pub original_head: String,
+    pub new_head: String,
+    pub source_commits: Vec<String>,
+    pub new_commits: Vec<String>,
+}
+
+impl CherryPickCompleteEvent {
     pub fn new(
-        source_commit: String,
-        target_branch: String,
-        new_commit_sha: Option<String>,
-        success: bool,
-        conflicts: Vec<String>,
+        original_head: String,
+        new_head: String,
+        source_commits: Vec<String>,
+        new_commits: Vec<String>,
     ) -> Self {
         Self {
-            source_commit,
-            target_branch,
-            new_commit_sha,
-            success,
-            conflicts,
+            original_head,
+            new_head,
+            source_commits,
+            new_commits,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CherryPickAbortEvent {
+    pub original_head: String,
+}
+
+impl CherryPickAbortEvent {
+    pub fn new(original_head: String) -> Self {
+        Self { original_head }
     }
 }
 
@@ -532,12 +573,11 @@ mod tests {
             vec![],
         );
 
-        let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
-            "def456".to_string(),
-            "main".to_string(),
-            Some("ghi789".to_string()),
-            true,
-            vec![],
+        let event2 = RewriteLogEvent::cherry_pick_complete(CherryPickCompleteEvent::new(
+            "original_head".to_string(),
+            "ghi789".to_string(),
+            vec!["def456".to_string()],
+            vec!["ghi789".to_string()],
         ));
 
         let events = vec![event1.clone(), event2.clone()];
@@ -556,10 +596,12 @@ mod tests {
         }
 
         match &deserialized[1] {
-            RewriteLogEvent::CherryPick { cherry_pick } => {
-                assert_eq!(cherry_pick.source_commit, "def456");
+            RewriteLogEvent::CherryPickComplete {
+                cherry_pick_complete,
+            } => {
+                assert_eq!(cherry_pick_complete.source_commits[0], "def456");
             }
-            _ => panic!("Expected CherryPick event"),
+            _ => panic!("Expected CherryPickComplete event"),
         }
     }
 
@@ -597,12 +639,11 @@ mod tests {
             vec![],
         );
 
-        let event2 = RewriteLogEvent::cherry_pick(CherryPickEvent::new(
-            "def456".to_string(),
-            "main".to_string(),
-            Some("ghi789".to_string()),
-            true,
-            vec![],
+        let event2 = RewriteLogEvent::cherry_pick_complete(CherryPickCompleteEvent::new(
+            "original_head".to_string(),
+            "ghi789".to_string(),
+            vec!["def456".to_string()],
+            vec!["ghi789".to_string()],
         ));
 
         let initial_jsonl = serialize_events_to_jsonl(&[event1.clone()]).unwrap();
@@ -616,10 +657,12 @@ mod tests {
         assert_eq!(deserialized.len(), 2);
         // event2 should be first (newest) since it was appended
         match &deserialized[0] {
-            RewriteLogEvent::CherryPick { cherry_pick } => {
-                assert_eq!(cherry_pick.source_commit, "def456");
+            RewriteLogEvent::CherryPickComplete {
+                cherry_pick_complete,
+            } => {
+                assert_eq!(cherry_pick_complete.source_commits[0], "def456");
             }
-            _ => panic!("Expected CherryPick event"),
+            _ => panic!("Expected CherryPickComplete event"),
         }
 
         match &deserialized[1] {
