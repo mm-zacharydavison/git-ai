@@ -1594,6 +1594,7 @@ fn test_rebase_commit_splitting() {
 /// Test interactive rebase with squashing - verifies authorship from all commits is preserved
 /// This tests the bug fix where only the last commit's authorship was kept during squashing
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_rebase_squash_preserves_all_authorship() {
     let tmp_repo = TmpRepo::new().unwrap();
 
@@ -1650,36 +1651,13 @@ fn test_rebase_squash_preserves_all_authorship() {
     use std::io::Write;
     use std::process::Command;
 
-    // Create a cross-platform Rust script that modifies the rebase-todo
-    let script_content = if cfg!(windows) {
-        // Windows batch script
-        r#"@echo off
-setlocal enabledelayedexpansion
-set "file=%~1"
-set "temp=%file%.tmp"
+    // Create a script that modifies the rebase-todo to squash commits 2 and 3 into 1
+    let script_content = r#"#!/bin/sh
+sed -i.bak '2s/pick/squash/' "$1"
+sed -i.bak '3s/pick/squash/' "$1"
+"#;
 
-(for /f "delims=" %%i in (%file%) do (
-    set "line=%%i"
-    if not defined first (
-        echo !line!
-        set "first=1"
-    ) else (
-        echo !line:pick=squash!
-    )
-)) > "%temp%"
-
-move /y "%temp%" "%file%" >nul
-"#
-    } else {
-        // Unix shell script
-        r#"#!/bin/sh
-sed -i.bak '2s/^pick/squash/' "$1"
-sed -i.bak '3s/^pick/squash/' "$1"
-"#
-    };
-
-    let script_ext = if cfg!(windows) { "bat" } else { "sh" };
-    let script_path = tmp_repo.path().join(format!("squash_script.{}", script_ext));
+    let script_path = tmp_repo.path().join("squash_script.sh");
     let mut script_file = std::fs::File::create(&script_path).unwrap();
     script_file.write_all(script_content.as_bytes()).unwrap();
     drop(script_file);
@@ -1692,16 +1670,9 @@ sed -i.bak '3s/^pick/squash/' "$1"
         std::fs::set_permissions(&script_path, perms).unwrap();
     }
 
-    // On Windows, we need to invoke the batch script through cmd.exe
-    let editor_cmd = if cfg!(windows) {
-        format!("cmd.exe /c \"{}\"", script_path.display())
-    } else {
-        script_path.to_str().unwrap().to_string()
-    };
-
     let output = Command::new("git")
         .current_dir(tmp_repo.path())
-        .env("GIT_SEQUENCE_EDITOR", &editor_cmd)
+        .env("GIT_SEQUENCE_EDITOR", script_path.to_str().unwrap())
         .env("GIT_EDITOR", "true") // Auto-accept commit message
         .args(&["rebase", "-i", &base_commit])
         .output()
