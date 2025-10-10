@@ -129,6 +129,9 @@ fn run_pre_command_hooks(
         Some("rebase") => {
             rebase_hooks::pre_rebase_hook(parsed_args, repository, command_hooks_context);
         }
+        Some("reset") => {
+            reset_hooks::pre_reset_hook(parsed_args, repository);
+        }
         _ => {}
     }
 }
