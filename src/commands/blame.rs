@@ -144,7 +144,43 @@ impl Repository {
                 e
             )))
         })?;
-        let abs_file_path = repo_root.join(file_path);
+
+        // Normalize the file path to be relative to repo root
+        // This is important for AI authorship lookup which stores paths relative to repo root
+        let file_path_buf = std::path::Path::new(file_path);
+        let relative_file_path = if file_path_buf.is_absolute() {
+            // Convert absolute path to relative path
+            // Canonicalize both paths to handle symlinks (e.g., /var -> /private/var on macOS)
+            let canonical_file_path = file_path_buf.canonicalize().map_err(|e| {
+                GitAiError::Generic(format!(
+                    "Failed to canonicalize file path '{}': {}",
+                    file_path, e
+                ))
+            })?;
+            let canonical_repo_root = repo_root.canonicalize().map_err(|e| {
+                GitAiError::Generic(format!(
+                    "Failed to canonicalize repository root '{}': {}",
+                    repo_root.display(),
+                    e
+                ))
+            })?;
+
+            canonical_file_path
+                .strip_prefix(&canonical_repo_root)
+                .map_err(|_| {
+                    GitAiError::Generic(format!(
+                        "File path '{}' is not within repository root '{}'",
+                        file_path,
+                        repo_root.display()
+                    ))
+                })?
+                .to_string_lossy()
+                .to_string()
+        } else {
+            file_path.to_string()
+        };
+
+        let abs_file_path = repo_root.join(&relative_file_path);
 
         // Validate that the file exists
         if !abs_file_path.exists() {
@@ -179,19 +215,19 @@ impl Repository {
         // Step 1: Get Git's native blame for all ranges
         let mut all_blame_hunks = Vec::new();
         for (start_line, end_line) in &line_ranges {
-            let hunks = self.blame_hunks(file_path, *start_line, *end_line, options)?;
+            let hunks = self.blame_hunks(&relative_file_path, *start_line, *end_line, options)?;
             all_blame_hunks.extend(hunks);
         }
 
         // Step 2: Overlay AI authorship information
-        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, file_path)?;
+        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path)?;
 
         // Output based on format
         if options.porcelain || options.line_porcelain {
             output_porcelain_format(
                 self,
                 &line_authors,
-                file_path,
+                &relative_file_path,
                 &lines,
                 &line_ranges,
                 options,
@@ -200,7 +236,7 @@ impl Repository {
             output_incremental_format(
                 self,
                 &line_authors,
-                file_path,
+                &relative_file_path,
                 &lines,
                 &line_ranges,
                 options,
@@ -209,7 +245,7 @@ impl Repository {
             output_default_format(
                 self,
                 &line_authors,
-                file_path,
+                &relative_file_path,
                 &lines,
                 &line_ranges,
                 options,
