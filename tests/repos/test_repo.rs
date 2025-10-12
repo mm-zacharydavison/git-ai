@@ -1,3 +1,4 @@
+use git_ai::authorship::authorship_log_serialization::AuthorshipLog;
 use git_ai::git::repo_storage::PersistedWorkingLog;
 use git_ai::git::repository as GitAiRepository;
 use git2::Repository;
@@ -7,6 +8,13 @@ use std::sync::OnceLock;
 use std::{fs, fs::File, io::Read};
 
 use super::test_file::TestFile;
+
+#[derive(Debug)]
+pub struct NewCommit {
+    pub authorship_log: AuthorshipLog,
+    pub stdout: String,
+    pub commit_sha: String,
+}
 
 #[derive(Clone, Debug)]
 pub struct TestRepo {
@@ -36,15 +44,14 @@ impl TestRepo {
         Self { path }
     }
 
-    pub fn git_ai(&self, command: &str) -> Result<String, String> {
+    pub fn git_ai(&self, args: &[&str]) -> Result<String, String> {
         let binary_path = get_binary_path();
-        let args: Vec<&str> = command.split_whitespace().collect();
 
         let output = Command::new(binary_path)
-            .args(&args)
+            .args(args)
             .current_dir(&self.path)
             .output()
-            .expect(&format!("Failed to execute git-ai command: {}", command));
+            .expect(&format!("Failed to execute git-ai command: {:?}", args));
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -64,16 +71,17 @@ impl TestRepo {
         }
     }
 
-    pub fn git(&self, command: &str) -> Result<String, String> {
-        let args: Vec<&str> = command.split_whitespace().collect();
+    pub fn git(&self, args: &[&str]) -> Result<String, String> {
+        let binary_path = get_binary_path();
 
         let mut full_args = vec!["-C", self.path.to_str().unwrap()];
         full_args.extend(args);
 
-        let output = Command::new("git")
+        let output = Command::new(binary_path)
             .args(&full_args)
+            .env("GIT_AI", "git")
             .output()
-            .expect(&format!("Failed to execute git command: {}", command));
+            .expect(&format!("Failed to execute git command: {:?}", args));
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -112,31 +120,41 @@ impl TestRepo {
         repo.storage.working_log_for_base_commit(&commit_sha)
     }
 
-    pub fn stage_all_and_commit(&self, message: &str) -> Result<String, String> {
-        self.git("add -A").expect("add --all should succeed");
+    pub fn stage_all_and_commit(&self, message: &str) -> Result<NewCommit, String> {
+        self.git(&["add", "-A"]).expect("add --all should succeed");
 
-        // Use git_with_args for proper argument handling
-        let full_args = vec!["-C", self.path.to_str().unwrap(), "commit", "-m", message];
+        let output = self.git(&["commit", "-m", message]);
 
-        let output = Command::new("git")
-            .args(&full_args)
-            .output()
-            .expect("Failed to execute git commit command");
+        if output.is_ok() {
+            let combined = output.unwrap();
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            // Get the repository and HEAD commit SHA
+            let repo = GitAiRepository::find_repository_in_path(self.path.to_str().unwrap())
+                .map_err(|e| format!("Failed to find repository: {}", e))?;
 
-        if output.status.success() {
-            let combined = if stdout.is_empty() {
-                stderr
-            } else if stderr.is_empty() {
-                stdout
-            } else {
-                format!("{}{}", stdout, stderr)
+            let head_commit = repo
+                .head()
+                .map_err(|e| format!("Failed to get HEAD: {}", e))?
+                .target()
+                .map_err(|e| format!("Failed to get HEAD target: {}", e))?;
+
+            // Get the authorship log for the new commit
+            let authorship_log = match git_ai::git::refs::show_authorship_note(&repo, &head_commit)
+            {
+                Some(content) => AuthorshipLog::deserialize_from_string(&content)
+                    .map_err(|e| format!("Failed to parse authorship log: {}", e))?,
+                None => {
+                    return Err("No authorship log found for the new commit".to_string());
+                }
             };
-            Ok(combined)
+
+            Ok(NewCommit {
+                commit_sha: head_commit,
+                authorship_log,
+                stdout: combined,
+            })
         } else {
-            Err(stderr)
+            Err(output.unwrap_err())
         }
     }
 
@@ -167,7 +185,6 @@ fn compile_binary() -> PathBuf {
     }
 
     let binary_path = PathBuf::from(manifest_dir).join("target/debug/git-ai");
-    println!("Binary compiled at: {}", binary_path.display());
     binary_path
 }
 
@@ -179,11 +196,12 @@ fn get_binary_path() -> &'static PathBuf {
 mod tests {
     use super::super::test_file::ExpectedLineExt;
     use super::TestRepo;
+    use crate::lines;
 
     #[test]
     fn test_invoke_git() {
         let repo = TestRepo::new();
-        let output = repo.git("status").expect("git status should succeed");
+        let output = repo.git(&["status"]).expect("git status should succeed");
         println!("output: {}", output);
         assert!(output.contains("On branch"));
     }
@@ -192,7 +210,7 @@ mod tests {
     fn test_invoke_git_ai() {
         let repo = TestRepo::new();
         let output = repo
-            .git_ai("version")
+            .git_ai(&["version"])
             .expect("git-ai version should succeed");
         assert!(!output.is_empty());
     }
@@ -201,13 +219,27 @@ mod tests {
     fn test_exp() {
         let repo = TestRepo::new();
 
-        let example_txt = repo.filename("example.txt");
-        let example_txt = example_txt.set_contents(vec!["HUMAN".human(), "Hello, world!".ai()]);
+        let mut example_txt = repo.filename("example.txt");
+        example_txt.set_contents(vec!["og".human(), "og2".ai()]);
 
-        let output = repo.stage_all_and_commit("mix ai human").unwrap();
+        example_txt.insert_at(
+            0,
+            lines![
+                "HUMAN",              // plain string defaults to human
+                "HUMAN".ai(),         // explicitly marked as AI
+                "HUMAN",              // plain string defaults to human
+                "HUMAN",              // plain string defaults to human
+                "Hello, world!".ai(), // explicitly marked as AI
+            ],
+        );
 
-        println!("{:?}", repo.path);
+        example_txt.delete_at(3);
+
+        let commit = repo.stage_all_and_commit("mix ai human").unwrap();
+
         // Assert that blame output matches expected authorship
         example_txt.assert_blame_contents_expected();
+
+        example_txt.assert_contents_expected();
     }
 }

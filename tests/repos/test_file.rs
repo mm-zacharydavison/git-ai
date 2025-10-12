@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuthorType {
@@ -56,6 +53,16 @@ impl ExpectedLineExt for String {
     }
 }
 
+impl ExpectedLineExt for ExpectedLine {
+    fn ai(self) -> ExpectedLine {
+        ExpectedLine::new(self.contents, AuthorType::Ai)
+    }
+
+    fn human(self) -> ExpectedLine {
+        ExpectedLine::new(self.contents, AuthorType::Human)
+    }
+}
+
 /// Default conversion from &str to ExpectedLine (defaults to Human authorship)
 impl From<&str> for ExpectedLine {
     fn from(s: &str) -> Self {
@@ -90,41 +97,31 @@ impl<'a> TestFile<'a> {
         }
     }
 
-    fn forks_with_new_lines(&self, lines: Vec<ExpectedLine>) -> Self {
-        Self {
-            lines,
-            file_path: self.file_path.clone(),
-            repo: self.repo,
-        }
-    }
-
-    pub fn assert_file_contents_expected(&self) {
+    pub fn assert_contents_expected(&self) {
         let contents = fs::read_to_string(&self.file_path).unwrap();
         assert_eq!(
             contents,
-            self.to_contents(),
+            self.contents(),
             "Unexpected contents in file: {}",
             self.file_path.display(),
         );
     }
-
     /// Assert that the file at the given path matches the expected contents and authorship
     pub fn assert_blame_contents_expected(&self) {
         // Get blame output
+        let filename = self.file_path.to_str().expect("valid path");
         let blame_output = self
             .repo
-            .git_ai(&format!("blame {}", self.file_path.display()))
+            .git_ai(&["blame", filename])
             .expect("git-ai blame should succeed");
 
-        println!(
-            "\n=== Git-AI Blame Output ===\n{}\n===========================\n",
-            blame_output
-        );
+        // println!(
+        //     "\n=== Git-AI Blame Output ===\n{}\n===========================\n",
+        //     blame_output
+        // );
 
         // Parse the blame output to extract authors for each line
         let lines_by_author = self.parse_blame_output(&blame_output);
-
-        println!("Parsed authors: {:?}", lines_by_author);
 
         // Compare with expected authorship
         assert_eq!(
@@ -143,19 +140,21 @@ impl<'a> TestFile<'a> {
                 AuthorType::Ai => {
                     assert!(
                         self.is_ai_author(actual_author),
-                        "Line {}: Expected AI author but got '{}'. Expected line: {:?}",
+                        "Line {}: Expected AI author but got '{}'. Expected line: {:?}\n{}",
                         line_num,
                         actual_author,
-                        expected_line
+                        expected_line,
+                        blame_output
                     );
                 }
                 AuthorType::Human => {
                     assert!(
                         !self.is_ai_author(actual_author),
-                        "Line {}: Expected Human author but got AI author '{}'. Expected line: {:?}",
+                        "Line {}: Expected Human author but got AI author '{}'. Expected line: {:?}\n{}",
                         line_num,
                         actual_author,
-                        expected_line
+                        expected_line,
+                        blame_output
                     );
                 }
             }
@@ -207,15 +206,6 @@ impl<'a> TestFile<'a> {
             || author_lower.contains("cursor")
     }
 
-    /// Get the expected file contents as a single string (without authorship info)
-    pub fn to_contents(&self) -> String {
-        self.lines
-            .iter()
-            .map(|line| line.contents.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     /// Get lines with a specific author type
     pub fn lines_by_author(&self, author_type: AuthorType) -> Vec<&ExpectedLine> {
         self.lines
@@ -224,31 +214,126 @@ impl<'a> TestFile<'a> {
             .collect()
     }
 
-    /// Insert lines at the specified index, returning a new ExpectedTextState
-    /// Simplifying assumption: all lines are same author type or panic
-    pub fn insert_at(&self, index: usize, lines: Vec<ExpectedLine>) -> Self {
-        let mut new_lines = self.lines.clone();
-        new_lines.splice(index..index, lines);
-        Self::new_with_filename(self.file_path.clone(), new_lines, self.repo)
+    /// Insert lines at the specified index, mutating the TestFile in place
+    pub fn insert_at<T: Into<ExpectedLine>>(
+        &mut self,
+        starting_index: usize,
+        lines: Vec<T>,
+    ) -> &mut Self {
+        let lines: Vec<ExpectedLine> = lines.into_iter().map(|l| l.into()).collect();
+
+        if lines.len() == 0 {
+            panic!("[test internals] must insert > 0 lines")
+        }
+
+        // Build splits - indices where author type changes
+        let mut splits: Vec<usize> = vec![0]; // Always start from index 0
+        let mut last_author_type = &lines[0].author_type;
+
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            if &line.author_type != last_author_type {
+                splits.push(i);
+                last_author_type = &line.author_type;
+            }
+        }
+
+        // Current working state - start with the current file contents
+        let mut cumulative_offset = 0;
+
+        // Process each chunk of same-author lines
+        for (chunk_idx, &split_start) in splits.iter().enumerate() {
+            // Determine the end of this chunk (exclusive)
+            let split_end = if chunk_idx + 1 < splits.len() {
+                splits[chunk_idx + 1]
+            } else {
+                lines.len()
+            };
+
+            // Get the chunk of lines to insert (all have same author type)
+            let chunk = &lines[split_start..split_end];
+            let author_type = &chunk[0].author_type;
+
+            // Insert this chunk into self.lines at the appropriate position
+            let insert_position = starting_index + cumulative_offset;
+            self.lines
+                .splice(insert_position..insert_position, chunk.iter().cloned());
+
+            // Write the current state to disk and create a checkpoint
+            self.write_and_checkpoint(author_type);
+
+            // Update offset for next insertion (next chunk starts after this one)
+            cumulative_offset += chunk.len();
+        }
+
+        self
     }
 
-    /// Replace a single line at the specified index, returning a new ExpectedTextState
-    /// /// Simplifying assumption: all lines are same author type or panic
-    pub fn replace_at(&self, index: usize, line: ExpectedLine) -> Self {
-        let mut new_lines = self.lines.clone();
-        if index < new_lines.len() {
-            new_lines[index] = line;
+    /// Replace a single line at the specified index, mutating the TestFile in place
+    pub fn replace_at<T: Into<ExpectedLine>>(&mut self, index: usize, line: T) -> &mut Self {
+        let line = line.into();
+        if index < self.lines.len() {
+            self.lines[index] = line.clone();
         } else {
             panic!(
                 "Index {} out of bounds for {} lines",
                 index,
-                new_lines.len()
+                self.lines.len()
             );
         }
-        Self::new_with_filename(self.file_path.clone(), new_lines, self.repo)
+
+        // Write the updated content to disk and create a checkpoint
+        self.write_and_checkpoint(&line.author_type);
+
+        self
     }
 
-    pub fn set_contents(&self, lines: Vec<ExpectedLine>) -> Self {
+    /// Delete a single line at the specified index, mutating the TestFile in place
+    /// Deletions are always attributed to humans
+    pub fn delete_at(&mut self, index: usize) -> &mut Self {
+        if index < self.lines.len() {
+            self.lines.remove(index);
+        } else {
+            panic!(
+                "Index {} out of bounds for {} lines",
+                index,
+                self.lines.len()
+            );
+        }
+
+        // Write the updated content to disk and create a checkpoint (deletions are human)
+        self.write_and_checkpoint(&AuthorType::Human);
+
+        self
+    }
+
+    /// Delete a range of lines [start..end), mutating the TestFile in place
+    /// Deletions are always attributed to humans
+    pub fn delete_range(&mut self, start: usize, end: usize) -> &mut Self {
+        if start >= end {
+            panic!(
+                "[test internals] start index {} must be less than end index {}",
+                start, end
+            );
+        }
+
+        if end > self.lines.len() {
+            panic!(
+                "End index {} out of bounds for {} lines",
+                end,
+                self.lines.len()
+            );
+        }
+
+        self.lines.drain(start..end);
+
+        // Write the updated content to disk and create a checkpoint (deletions are human)
+        self.write_and_checkpoint(&AuthorType::Human);
+
+        self
+    }
+
+    pub fn set_contents<T: Into<ExpectedLine>>(&mut self, lines: Vec<T>) -> &mut Self {
+        let lines: Vec<ExpectedLine> = lines.into_iter().map(|l| l.into()).collect();
         // stub in AI Lines
         let line_contents = lines
             .iter()
@@ -272,33 +357,39 @@ impl<'a> TestFile<'a> {
 
         self.write_and_checkpoint_with_contents(&line_contents_with_ai, &AuthorType::Ai);
 
-        Self::new_with_filename(self.file_path.clone(), lines, self.repo)
+        self.lines = lines;
+        self
     }
 
-    /// Replace a range of lines [start..end) with new lines, returning a new ExpectedTextState
-    /// Simplifying assumption: all lines are same author type or panic
-    pub fn replace_range_at(&self, start: usize, end: usize, lines: Vec<ExpectedLine>) -> Self {
-        let mut new_lines = self.lines.clone();
-        new_lines.splice(start..end, lines);
-        Self::new_with_filename(self.file_path.clone(), new_lines, self.repo)
+    pub fn contents(&self) -> String {
+        return self
+            .lines
+            .iter()
+            .map(|s| s.contents.clone())
+            .collect::<Vec<String>>()
+            .join("\n");
     }
 
-    fn _write_and_checkpoint(&self, _author_type: &AuthorType) {
-        // TODO: Implement actual write and checkpoint
+    fn write_and_checkpoint(&self, author_type: &AuthorType) {
+        let contents = self.contents();
+        fs::write(&self.file_path, contents).unwrap();
+        let _ = if author_type == &AuthorType::Ai {
+            self.repo.git_ai(&["checkpoint", "mock_ai"])
+        } else {
+            self.repo.git_ai(&["checkpoint"])
+        };
     }
 
     fn write_and_checkpoint_with_contents(&self, contents: &str, author_type: &AuthorType) {
         fs::write(&self.file_path, contents).unwrap();
 
         // Stage the file first
-        self.repo
-            .git(&format!("add {}", self.file_path.display()))
-            .unwrap();
+        self.repo.git(&["add", "-A"]).unwrap();
 
         let result = if author_type == &AuthorType::Ai {
-            self.repo.git_ai("checkpoint mock_ai")
+            self.repo.git_ai(&["checkpoint", "mock_ai"])
         } else {
-            self.repo.git_ai("checkpoint")
+            self.repo.git_ai(&["checkpoint"])
         };
 
         // match &result {
@@ -310,36 +401,16 @@ impl<'a> TestFile<'a> {
     }
 }
 
-// /// Macro to build ExpectedTextState with a fluent syntax
-// /// Accepts ExpectedLine or any type convertible to ExpectedLine (e.g., &str, String)
-// /// Plain strings default to Human authorship
-// #[macro_export]
-// macro_rules! expect_contents {
-//     ($($line:expr),+ $(,)?) => {{
-//         TestFile::new_with_filename(PathBuf::from(""), vec![$($line.into()),+])
-//     }};
-// }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_expected_line_creation() {
-        let line = "Hello world".ai();
-        assert_eq!(line.contents, "Hello world");
-        assert_eq!(line.author_type, AuthorType::Ai);
-
-        let line = "User input".human();
-        assert_eq!(line.contents, "User input");
-        assert_eq!(line.author_type, AuthorType::Human);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "fluent test file API does not support strings with new lines (must be a single line)"
-    )]
-    fn test_multiline_panic() {
-        let _line = "Line 1\nLine 2".ai();
-    }
+/// Macro to create a Vec<ExpectedLine> from mixed types
+/// Accepts ExpectedLine or any type convertible to ExpectedLine (e.g., &str, String)
+/// Plain strings default to Human authorship
+#[macro_export]
+macro_rules! lines {
+    ($($line:expr),* $(,)?) => {{
+        {
+            use $crate::repos::test_file::ExpectedLine;
+            let v: Vec<ExpectedLine> = vec![$(Into::into($line)),*];
+            v
+        }
+    }};
 }
