@@ -187,6 +187,16 @@ impl AgentCheckpointPreset for CursorPreset {
             (AiTranscript::new(), "unknown".to_string())
         });
 
+        // Extract edited filepaths
+        let mut edited_filepaths: Option<Vec<String>> = None;
+        let file_path = hook_data
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !file_path.is_empty() {
+            edited_filepaths = Some(vec![file_path.to_string()]);
+        }
+
         let agent_id = AgentId {
             tool: "cursor".to_string(),
             id: conversation_id,
@@ -198,7 +208,7 @@ impl AgentCheckpointPreset for CursorPreset {
             is_human: false,
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
-            edited_filepaths: None,
+            edited_filepaths,
         })
     }
 }
