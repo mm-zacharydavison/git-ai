@@ -78,7 +78,7 @@ impl Timer {
     pub fn new() -> Self {
         Timer {
             epoch: Instant::now(),
-            enabled: cfg!(debug_assertions) || std::env::var("GIT_AI_PROFILE").is_ok(),
+            enabled: std::env::var("GIT_AI_PROFILE").is_ok(),
         }
     }
 
@@ -108,11 +108,13 @@ impl Timer {
     }
 
     pub fn print_duration(self, label: &str, duration: Duration) {
-        println!(
-            "\x1b[1;33m[profiler]\x1b[0m {} {:?}ms",
-            label,
-            duration.as_millis()
-        );
+        if self.enabled {
+            println!(
+                "\x1b[1;33m[profiler]\x1b[0m {} {:?}ms",
+                label,
+                duration.as_millis()
+            );
+        }
     }
 
     /// Start timing an operation quietly
