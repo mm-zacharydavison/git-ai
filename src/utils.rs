@@ -78,7 +78,7 @@ impl Timer {
     pub fn new() -> Self {
         Timer {
             epoch: Instant::now(),
-            enabled: cfg!(debug_assertions) || std::env::var("GIT_AI_TIMER").is_ok(),
+            enabled: cfg!(debug_assertions) || std::env::var("GIT_AI_PROFILE").is_ok(),
         }
     }
 
