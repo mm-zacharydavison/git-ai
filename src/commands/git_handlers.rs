@@ -10,6 +10,7 @@ use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
 use crate::git::find_repository;
 use crate::git::repository::Repository;
 
+use crate::utils::Timer;
 use crate::utils::debug_log;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -97,9 +98,19 @@ pub fn handle_git(args: &[String]) {
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
+        Timer::default().print_duration("git-ai proxy overhead", Timer::default().epoch.elapsed());
+
         let repository = repository_option.as_mut().unwrap();
+
+        let end_precommand_clock = Timer::default().start_quiet("pre-command-hooks");
+
         run_pre_command_hooks(&mut command_hooks_context, &parsed_args, repository);
+
+        let pre_command_duration = end_precommand_clock();
+
         let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
+
+        let end_post_command_clock = Timer::default().start_quiet("post-command-hooks");
 
         run_post_command_hooks(
             &mut command_hooks_context,
@@ -107,8 +118,15 @@ pub fn handle_git(args: &[String]) {
             exit_status,
             repository,
         );
+
+        let post_command_duration = end_post_command_clock();
+
+        Timer::default()
+            .print_duration("git-ai hooks", pre_command_duration + post_command_duration);
+
         exit_status
     } else {
+        Timer::default().print_duration("git-ai proxy overhead", Timer::default().epoch.elapsed());
         // run without hooks
         proxy_to_git(&parsed_args.to_invocation_vec(), false)
     };

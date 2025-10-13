@@ -1,6 +1,5 @@
 use crate::git::diff_tree_to_tree::Diff;
-use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Debug logging utility function
 ///
@@ -52,52 +51,86 @@ pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
 
 /// Timer utility for measuring execution time
 ///
-/// Tracks start times for named operations and logs the duration when they complete.
+/// Provides a clean API for timing operations with automatic printing.
 /// Useful for performance debugging and optimization.
 ///
-
+/// # Example
+///
+/// ```
+/// let end = Timer::default().start("my operation");
+/// // ... do work ...
+/// end(); // prints "[timer] my operation took 123ms"
+///
+/// // Or capture the duration:
+/// let duration = end();
+///
+/// // For quiet timing without logging:
+/// let end = Timer::default().start_quiet("background task");
+/// let duration = end(); // just returns duration, no printing
+/// ```
 pub struct Timer {
-    timings: HashMap<String, Instant>,
     enabled: bool,
+    pub epoch: Instant,
 }
 
 impl Timer {
     /// Create a new Timer instance
     pub fn new() -> Self {
         Timer {
-            timings: HashMap::new(),
+            epoch: Instant::now(),
             enabled: cfg!(debug_assertions) || std::env::var("GIT_AI_TIMER").is_ok(),
         }
     }
 
     /// Start timing an operation
     ///
+    /// Returns a closure that when called will print the elapsed time and return the duration.
+    ///
     /// # Arguments
     ///
-    /// * `key` - A unique identifier for this timing operation
-    pub fn start(&mut self, key: &str) {
-        // keep this a toy in production
-        if self.enabled {
-            self.timings.insert(key.to_string(), Instant::now());
+    /// * `label` - A descriptive label for this timing operation
+    ///
+    /// # Returns
+    ///
+    /// A closure that prints the elapsed time and returns a `Duration`
+    pub fn start(self, label: &str) -> impl FnOnce() -> Duration {
+        let start_time = Instant::now();
+        let enabled = self.enabled;
+        let label = label.to_string();
+
+        move || {
+            let duration = start_time.elapsed();
+            if enabled {
+                self.print_duration(&label, duration);
+            }
+            duration
         }
     }
 
-    /// End timing an operation and log the duration
+    pub fn print_duration(self, label: &str, duration: Duration) {
+        println!(
+            "\x1b[1;33m[timer]\x1b[0m {} {:?}ms",
+            label,
+            duration.as_millis()
+        );
+    }
+
+    /// Start timing an operation quietly
     ///
-    /// Removes the timing entry and prints the elapsed time in yellow.
-    /// If the key doesn't exist (no matching start() call), this is a no-op.
+    /// Returns a closure that when called will return the duration without printing.
+    /// Useful when you want to measure time but control logging yourself.
     ///
     /// # Arguments
     ///
-    /// * `key` - The identifier used in the corresponding start() call
-    pub fn end(&mut self, key: &str) {
-        if self.enabled {
-            // keep this a toy in production
-            if let Some(start_time) = self.timings.remove(key) {
-                let duration = start_time.elapsed();
-                println!("\x1b[1;33mtimer:\x1b[0m {} took {:?}", key, duration);
-            }
-        }
+    /// * `_label` - A descriptive label (unused, kept for API consistency)
+    ///
+    /// # Returns
+    ///
+    /// A closure that returns a `Duration` without printing
+    pub fn start_quiet(self, _label: &str) -> impl FnOnce() -> Duration {
+        let start_time = Instant::now();
+
+        move || start_time.elapsed()
     }
 }
 
