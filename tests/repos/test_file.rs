@@ -99,6 +99,103 @@ impl<'a> TestFile<'a> {
         }
     }
 
+    /// Populate TestFile from an existing file by reading its contents and blame
+    pub fn from_existing_file(file_path: PathBuf, repo: &'a super::test_repo::TestRepo) -> Self {
+        // Check if file exists
+        if !file_path.exists() {
+            return Self {
+                lines: vec![],
+                file_path,
+                repo,
+            };
+        }
+
+        // Read file contents
+        let contents = fs::read_to_string(&file_path).unwrap_or_default();
+        if contents.is_empty() {
+            return Self {
+                lines: vec![],
+                file_path,
+                repo,
+            };
+        }
+
+        // Run blame to get authorship
+        let filename = file_path.to_str().expect("valid path");
+        let blame_result = repo.git_ai(&["blame", filename]);
+
+        let lines = if let Ok(blame_output) = blame_result {
+            // Parse blame output to get authorship for each line
+            let content_lines: Vec<&str> = contents.lines().collect();
+            let blame_lines: Vec<&str> = blame_output
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+
+            content_lines
+                .iter()
+                .zip(blame_lines.iter())
+                .map(|(content, blame_line)| {
+                    let (author, _) = Self::parse_blame_line_static(blame_line);
+                    let author_type = if Self::is_ai_author_static(&author) {
+                        AuthorType::Ai
+                    } else {
+                        AuthorType::Human
+                    };
+                    ExpectedLine::new(content.to_string(), author_type)
+                })
+                .collect()
+        } else {
+            // No blame available, assume all human
+            contents
+                .lines()
+                .map(|line| ExpectedLine::new(line.to_string(), AuthorType::Human))
+                .collect()
+        };
+
+        Self {
+            lines,
+            file_path,
+            repo,
+        }
+    }
+
+    /// Static version of parse_blame_line for use in from_existing_file
+    fn parse_blame_line_static(line: &str) -> (String, String) {
+        if let Some(start_paren) = line.find('(') {
+            if let Some(end_paren) = line.find(')') {
+                let author_section = &line[start_paren + 1..end_paren];
+                let content = line[end_paren + 1..].trim();
+
+                // Extract author name (everything before the date)
+                let parts: Vec<&str> = author_section.trim().split_whitespace().collect();
+                let mut author_parts = Vec::new();
+                for part in parts {
+                    // Stop when we hit what looks like a date (starts with digit)
+                    if part.chars().next().unwrap_or('a').is_ascii_digit() {
+                        break;
+                    }
+                    author_parts.push(part);
+                }
+                let author = author_parts.join(" ");
+
+                return (author, content.to_string());
+            }
+        }
+        ("unknown".to_string(), line.to_string())
+    }
+
+    /// Static version of is_ai_author for use in from_existing_file
+    fn is_ai_author_static(author: &str) -> bool {
+        let author_lower = author.to_lowercase();
+        author_lower.contains("mock_ai")
+            || author_lower.contains("some-ai")
+            || author_lower.contains("claude")
+            || author_lower.contains("gpt")
+            || author_lower.contains("copilot")
+            || author_lower.contains("cursor")
+    }
+
     pub fn stage(&self) {
         self.repo
             .git(&["add", self.file_path.to_str().expect("valid path")])
@@ -275,7 +372,7 @@ impl<'a> TestFile<'a> {
 
     /// Format blame output for readable snapshots
     /// Format: Name of user\n\n$author 1) LINE CONTENTS\n$author 2) LINE CONTENTS
-    fn format_blame_for_snapshot(&self, blame_output: &str) -> String {
+    pub fn format_blame_for_snapshot(&self, blame_output: &str) -> String {
         let mut result = String::new();
         let mut current_author: Option<String> = None;
         let mut line_num = 1;
@@ -307,7 +404,7 @@ impl<'a> TestFile<'a> {
 
     /// Parse a single blame line to extract author and content
     /// Format: sha (author date line_num) content
-    fn parse_blame_line(&self, line: &str) -> (String, String) {
+    pub fn parse_blame_line(&self, line: &str) -> (String, String) {
         if let Some(start_paren) = line.find('(') {
             if let Some(end_paren) = line.find(')') {
                 let author_section = &line[start_paren + 1..end_paren];

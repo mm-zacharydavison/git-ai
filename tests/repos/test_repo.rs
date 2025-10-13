@@ -42,6 +42,13 @@ impl TestRepo {
         &self.path
     }
 
+    pub fn current_branch(&self) -> String {
+        self.git(&["branch", "--show-current"])
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
     pub fn git_ai(&self, args: &[&str]) -> Result<String, String> {
         let binary_path = get_binary_path();
 
@@ -100,7 +107,15 @@ impl TestRepo {
     }
 
     pub fn filename(&self, filename: &str) -> TestFile {
-        TestFile::new_with_filename(self.path.join(filename), vec![], self)
+        let file_path = self.path.join(filename);
+
+        // If file exists, populate from existing file with blame
+        if file_path.exists() {
+            TestFile::from_existing_file(file_path, self)
+        } else {
+            // New file, start with empty lines
+            TestFile::new_with_filename(file_path, vec![], self)
+        }
     }
 
     pub fn current_working_logs(&self) -> PersistedWorkingLog {
