@@ -2,19 +2,13 @@ use git_ai::authorship::authorship_log_serialization::AuthorshipLog;
 use git_ai::git::repo_storage::PersistedWorkingLog;
 use git_ai::git::repository as GitAiRepository;
 use git2::Repository;
+use insta::assert_debug_snapshot;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::{fs, fs::File, io::Read};
 
 use super::test_file::TestFile;
-
-#[derive(Debug)]
-pub struct NewCommit {
-    pub authorship_log: AuthorshipLog,
-    pub stdout: String,
-    pub commit_sha: String,
-}
 
 #[derive(Clone, Debug)]
 pub struct TestRepo {
@@ -42,6 +36,10 @@ impl TestRepo {
             .expect("failed to initialize git2 repository");
 
         Self { path }
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.path
     }
 
     pub fn git_ai(&self, args: &[&str]) -> Result<String, String> {
@@ -164,6 +162,25 @@ impl TestRepo {
     }
 }
 
+impl Drop for TestRepo {
+    fn drop(&mut self) {
+        fs::remove_dir_all(self.path.clone()).expect("failed to remove test repo");
+    }
+}
+
+#[derive(Debug)]
+pub struct NewCommit {
+    pub authorship_log: AuthorshipLog,
+    pub stdout: String,
+    pub commit_sha: String,
+}
+
+impl NewCommit {
+    pub fn assert_authorship_snapshot(&self) {
+        assert_debug_snapshot!(self.authorship_log);
+    }
+}
+
 static COMPILED_BINARY: OnceLock<PathBuf> = OnceLock::new();
 
 fn compile_binary() -> PathBuf {
@@ -225,21 +242,43 @@ mod tests {
         example_txt.insert_at(
             0,
             lines![
-                "HUMAN",              // plain string defaults to human
-                "HUMAN".ai(),         // explicitly marked as AI
-                "HUMAN",              // plain string defaults to human
-                "HUMAN",              // plain string defaults to human
-                "Hello, world!".ai(), // explicitly marked as AI
+                "HUMAN",
+                "HUMAN".ai(),
+                "HUMAN",
+                "HUMAN",
+                "Hello, world!".ai(),
             ],
         );
 
         example_txt.delete_at(3);
 
-        let commit = repo.stage_all_and_commit("mix ai human").unwrap();
+        let _commit = repo.stage_all_and_commit("mix ai human").unwrap();
 
         // Assert that blame output matches expected authorship
         example_txt.assert_blame_contents_expected();
 
+        example_txt.assert_blame_snapshot();
+
         example_txt.assert_contents_expected();
+    }
+
+    #[test]
+    fn test_assert_lines_and_blame() {
+        let repo = TestRepo::new();
+
+        let mut example_txt = repo.filename("example.txt");
+
+        // Set up the file with some AI and human lines
+        example_txt.set_contents(lines!["line 1", "line 2".ai(), "line 3", "line 4".ai()]);
+
+        repo.stage_all_and_commit("test commit").unwrap();
+
+        // Now assert the exact output using the new syntax
+        example_txt.assert_lines_and_blame(lines![
+            "line 1".human(),
+            "line 2".ai(),
+            "line 3".human(),
+            "line 4".ai(),
+        ]);
     }
 }

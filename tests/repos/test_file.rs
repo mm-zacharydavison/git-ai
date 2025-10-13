@@ -1,5 +1,7 @@
 use std::{fs, path::PathBuf};
 
+use insta::assert_debug_snapshot;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuthorType {
     Human,
@@ -106,6 +108,148 @@ impl<'a> TestFile<'a> {
             self.file_path.display(),
         );
     }
+
+    pub fn assert_blame_snapshot(&self) {
+        let filename = self.file_path.to_str().expect("valid path");
+        let blame_output = self
+            .repo
+            .git_ai(&["blame", filename])
+            .expect("git-ai blame should succeed");
+
+        let formatted = self.format_blame_for_snapshot(&blame_output);
+        assert_debug_snapshot!(formatted);
+    }
+
+    pub fn assert_lines_and_blame<T: Into<ExpectedLine>>(&mut self, lines: Vec<T>) {
+        let expected_lines: Vec<ExpectedLine> = lines.into_iter().map(|l| l.into()).collect();
+
+        // Get blame output
+        let filename = self.file_path.to_str().expect("valid path");
+        let blame_output = self
+            .repo
+            .git_ai(&["blame", filename])
+            .expect("git-ai blame should succeed");
+
+        // Parse the blame output to get (author, content) for each line
+        let actual_lines: Vec<(String, String)> = blame_output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| self.parse_blame_line(line))
+            .collect();
+
+        // Compare line counts
+        assert_eq!(
+            actual_lines.len(),
+            expected_lines.len(),
+            "Number of lines in blame output ({}) doesn't match expected ({})\nBlame output:\n{}",
+            actual_lines.len(),
+            expected_lines.len(),
+            blame_output
+        );
+
+        // Compare each line's content and authorship
+        for (i, ((actual_author, actual_content), expected_line)) in
+            actual_lines.iter().zip(&expected_lines).enumerate()
+        {
+            let line_num = i + 1;
+
+            // Check line content
+            assert_eq!(
+                actual_content.trim(),
+                expected_line.contents.trim(),
+                "Line {}: Content mismatch\nExpected: {:?}\nActual: {:?}\nFull blame output:\n{}",
+                line_num,
+                expected_line.contents,
+                actual_content,
+                blame_output
+            );
+
+            // Check authorship
+            match &expected_line.author_type {
+                AuthorType::Ai => {
+                    assert!(
+                        self.is_ai_author(actual_author),
+                        "Line {}: Expected AI author but got '{}'\nExpected: {:?}\nActual content: {:?}\nFull blame output:\n{}",
+                        line_num,
+                        actual_author,
+                        expected_line,
+                        actual_content,
+                        blame_output
+                    );
+                }
+                AuthorType::Human => {
+                    assert!(
+                        !self.is_ai_author(actual_author),
+                        "Line {}: Expected Human author but got AI author '{}'\nExpected: {:?}\nActual content: {:?}\nFull blame output:\n{}",
+                        line_num,
+                        actual_author,
+                        expected_line,
+                        actual_content,
+                        blame_output
+                    );
+                }
+            }
+        }
+    }
+
+    /// Format blame output for readable snapshots
+    /// Format: Name of user\n\n$author 1) LINE CONTENTS\n$author 2) LINE CONTENTS
+    fn format_blame_for_snapshot(&self, blame_output: &str) -> String {
+        let mut result = String::new();
+        let mut current_author: Option<String> = None;
+        let mut line_num = 1;
+
+        for line in blame_output.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            // Parse the blame line to extract author and content
+            let (author, content) = self.parse_blame_line(line);
+
+            // Add header when author changes
+            if current_author.as_ref() != Some(&author) {
+                if current_author.is_some() {
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}\n\n", author));
+                current_author = Some(author.clone());
+            }
+
+            // Add the line with author prefix and line number
+            result.push_str(&format!("{} {}) {}\n", author, line_num, content));
+            line_num += 1;
+        }
+
+        result
+    }
+
+    /// Parse a single blame line to extract author and content
+    /// Format: sha (author date line_num) content
+    fn parse_blame_line(&self, line: &str) -> (String, String) {
+        if let Some(start_paren) = line.find('(') {
+            if let Some(end_paren) = line.find(')') {
+                let author_section = &line[start_paren + 1..end_paren];
+                let content = line[end_paren + 1..].trim();
+
+                // Extract author name (everything before the date)
+                let parts: Vec<&str> = author_section.trim().split_whitespace().collect();
+                let mut author_parts = Vec::new();
+                for part in parts {
+                    // Stop when we hit what looks like a date (starts with digit)
+                    if part.chars().next().unwrap_or('a').is_ascii_digit() {
+                        break;
+                    }
+                    author_parts.push(part);
+                }
+                let author = author_parts.join(" ");
+
+                return (author, content.to_string());
+            }
+        }
+        ("unknown".to_string(), line.to_string())
+    }
+
     /// Assert that the file at the given path matches the expected contents and authorship
     pub fn assert_blame_contents_expected(&self) {
         // Get blame output
