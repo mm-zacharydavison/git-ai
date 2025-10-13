@@ -1,40 +1,49 @@
-use git_ai::git::test_utils::TmpRepo;
-use insta::assert_debug_snapshot;
+#[macro_use]
+mod repos;
+use repos::test_file::ExpectedLineExt;
+use repos::test_repo::TestRepo;
 
 #[test]
 fn test_blame_after_merge_with_ai_contributions() {
-    // Create initial repository with base commit
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
+
+    // Create base file and initial commit
+    file.set_contents(lines!["Base line 1", "Base line 2", "Base line 3"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // Save the default branch name before creating feature branch
+    let default_branch = repo.current_branch();
 
     // Create a feature branch
-    tmp_repo.create_branch("feature").unwrap();
+    repo.git(&["checkout", "-b", "feature"]).unwrap();
 
-    // Make changes on feature branch
-    lines.append("FEATURE LINE 1\nFEATURE LINE 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo
-        .commit_with_message("feature branch changes")
-        .unwrap();
+    // Make AI changes on feature branch (insert after line 3)
+    file.insert_at(3, lines!["FEATURE LINE 1".ai(), "FEATURE LINE 2".ai()]);
+    repo.stage_all_and_commit("feature branch changes").unwrap();
 
-    // Switch back to the default branch and make different changes
-    let default_branch = tmp_repo.get_default_branch().unwrap();
-    tmp_repo.switch_branch(&default_branch).unwrap();
-    lines.append("MAIN LINE 1\nMAIN LINE 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    tmp_repo.commit_with_message("main branch changes").unwrap();
+    // Switch back to default branch and make human changes
+    repo.git(&["checkout", &default_branch]).unwrap();
+    file = repo.filename("test.txt"); // Reload file from default branch
+    // Insert at beginning to avoid conflict with feature branch
+    file.insert_at(0, lines!["MAIN LINE 1", "MAIN LINE 2"]);
+    repo.stage_all_and_commit("main branch changes").unwrap();
 
-    // Merge feature branch into main
-    tmp_repo
-        .merge_branch("feature", "merge feature into main")
+    // Merge feature branch into default branch (should not conflict)
+    repo.git(&["merge", "feature", "-m", "merge feature into main"])
         .unwrap();
 
-    // Test blame after merge
-    let blame = tmp_repo.blame_for_file(&lines, Some((30, 35))).unwrap();
-    assert_debug_snapshot!(blame);
+    // Test blame after merge - should have both AI and human contributions
+    file = repo.filename("test.txt");
+    file.assert_lines_and_blame(lines![
+        "MAIN LINE 1".human(),
+        "MAIN LINE 2".human(),
+        "Base line 1".human(),
+        "Base line 2".human(),
+        "Base line 3".human(),
+        "FEATURE LINE 1".ai(),
+        "FEATURE LINE 2".ai(),
+    ]);
 }
 
 // #[test]
@@ -81,52 +90,53 @@ fn test_blame_after_merge_with_ai_contributions() {
 
 #[test]
 fn test_blame_after_complex_merge_scenario() {
-    // Create initial repository with base commit
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    // Create multiple branches
-    tmp_repo.create_branch("feature-a").unwrap();
-    lines
-        .append("\nFEATURE A LINE 1\nFEATURE A LINE 2\n")
-        .unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("feature a changes").unwrap();
+    // Create base file and initial commit
+    file.set_contents(lines!["Base line 1", "Base line 2"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    tmp_repo.create_branch("feature-b").unwrap();
-    lines
-        .append("FEATURE B LINE 1\nFEATURE B LINE 2\n")
-        .unwrap();
-    tmp_repo.trigger_checkpoint_with_author("GPT-4").unwrap();
-    tmp_repo.commit_with_message("feature b changes").unwrap();
+    // Save the default branch name
+    let default_branch = repo.current_branch();
 
-    // Switch back to the default branch and make changes
-    let default_branch = tmp_repo.get_default_branch().unwrap();
-    tmp_repo.switch_branch(&default_branch).unwrap();
-    lines
-        .append("MAIN COMPLEX LINE 1\nMAIN COMPLEX LINE 2\n")
-        .unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    tmp_repo
-        .commit_with_message("main complex changes")
+    // Create feature-a branch
+    repo.git(&["checkout", "-b", "feature-a"]).unwrap();
+    file.insert_at(2, lines!["FEATURE A LINE 1".ai(), "FEATURE A LINE 2".ai()]);
+    repo.stage_all_and_commit("feature a changes").unwrap();
+
+    // Create feature-b branch (from feature-a)
+    repo.git(&["checkout", "-b", "feature-b"]).unwrap();
+    file.insert_at(4, lines!["FEATURE B LINE 1".ai(), "FEATURE B LINE 2".ai()]);
+    repo.stage_all_and_commit("feature b changes").unwrap();
+
+    // Switch back to default branch and make human changes
+    repo.git(&["checkout", &default_branch]).unwrap();
+    file = repo.filename("test.txt"); // Reload file from default branch
+    // Insert at beginning to avoid conflicts
+    file.insert_at(0, lines!["MAIN COMPLEX LINE 1", "MAIN COMPLEX LINE 2"]);
+    repo.stage_all_and_commit("main complex changes").unwrap();
+
+    // Merge feature-a into default branch
+    repo.git(&["merge", "feature-a", "-m", "merge feature-a into main"])
         .unwrap();
 
-    // Merge feature-a into main
-    tmp_repo
-        .merge_branch("feature-a", "merge feature-a into main")
+    // Merge feature-b into default branch
+    repo.git(&["merge", "feature-b", "-m", "merge feature-b into main"])
         .unwrap();
 
-    // Merge feature-b into main
-    tmp_repo
-        .merge_branch("feature-b", "merge feature-b into main")
-        .unwrap();
-
-    // Test blame after complex merge
-    let blame = tmp_repo.blame_for_file(&lines, None).unwrap();
-    assert_debug_snapshot!(blame);
+    // Test blame after complex merge - should have all contributions
+    file = repo.filename("test.txt");
+    file.assert_lines_and_blame(lines![
+        "MAIN COMPLEX LINE 1".human(),
+        "MAIN COMPLEX LINE 2".human(),
+        "Base line 1".human(),
+        "Base line 2".human(),
+        "FEATURE A LINE 1".ai(),
+        "FEATURE A LINE 2".ai(),
+        "FEATURE B LINE 1".ai(),
+        "FEATURE B LINE 2".ai(),
+    ]);
 }
 
 // #[test]
@@ -178,40 +188,73 @@ fn test_blame_after_complex_merge_scenario() {
 
 #[test]
 fn test_blame_after_merge_conflict_resolution() {
-    // Create initial repository with base commit
-    let (tmp_repo, mut lines, _) = TmpRepo::new_with_base_commit().unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
+
+    // Create base file with multiple lines
+    file.set_contents(lines![
+        "Line 1", "Line 2", "Line 3", "Line 4", "Line 5", "Line 6", "Line 7", "Line 8", "Line 9",
+        "Line 10",
+    ]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // Save the default branch name
+    let default_branch = repo.current_branch();
 
     // Create a feature branch
-    tmp_repo.create_branch("feature").unwrap();
+    repo.git(&["checkout", "-b", "feature"]).unwrap();
 
-    // Make changes on feature branch
-    lines
-        .replace_range(15, 16, "CONFLICT FEATURE VERSION\n")
-        .unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    let _authorship_log = tmp_repo
-        .commit_with_message("feature conflict changes")
+    // Make AI changes on feature branch (replace line 5)
+    file.replace_at(4, "CONFLICT FEATURE VERSION".ai());
+    repo.stage_all_and_commit("feature conflict changes")
         .unwrap();
 
-    // Switch back to the default branch and make conflicting changes
-    let default_branch = tmp_repo.get_default_branch().unwrap();
-    tmp_repo.switch_branch(&default_branch).unwrap();
-    lines
-        .replace_range(15, 16, "CONFLICT MAIN VERSION\n")
-        .unwrap();
-    tmp_repo.trigger_checkpoint_with_author("new-user").unwrap();
-    tmp_repo
-        .commit_with_message("main conflict changes")
-        .unwrap();
+    // Switch back to default branch and make conflicting human changes
+    repo.git(&["checkout", &default_branch]).unwrap();
+    file = repo.filename("test.txt"); // Reload file from main branch
+    file.replace_at(4, "CONFLICT MAIN VERSION");
+    repo.stage_all_and_commit("main conflict changes").unwrap();
 
-    // Merge feature branch into main (our simplified merge will take main's version)
-    tmp_repo
-        .merge_branch("feature", "merge feature with conflict resolution")
-        .unwrap();
+    // Merge feature branch into main (conflicts will occur)
+    // Git will exit with error on conflict, so we handle it
+    let merge_result = repo.git(&[
+        "merge",
+        "feature",
+        "-m",
+        "merge feature with conflict resolution",
+    ]);
+
+    if merge_result.is_err() {
+        // Resolve conflict by accepting main's version
+        file = repo.filename("test.txt");
+        file.set_contents(lines![
+            "Line 1",
+            "Line 2",
+            "Line 3",
+            "Line 4",
+            "CONFLICT MAIN VERSION",
+            "Line 6",
+            "Line 7",
+            "Line 8",
+            "Line 9",
+            "Line 10",
+        ]);
+        repo.stage_all_and_commit("merge feature with conflict resolution")
+            .unwrap();
+    }
 
     // Test blame after conflict resolution
-    let blame = tmp_repo.blame_for_file(&lines, Some((10, 20))).unwrap();
-    assert_debug_snapshot!(blame);
+    file = repo.filename("test.txt");
+    file.assert_lines_and_blame(lines![
+        "Line 1".human(),
+        "Line 2".human(),
+        "Line 3".human(),
+        "Line 4".human(),
+        "CONFLICT MAIN VERSION".human(),
+        "Line 6".human(),
+        "Line 7".human(),
+        "Line 8".human(),
+        "Line 9".human(),
+        "Line 10".human(),
+    ]);
 }
