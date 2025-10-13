@@ -15,7 +15,7 @@ const MIN_CLAUDE_VERSION: (u32, u32) = (2, 0);
 
 // Command patterns for hooks (after "git-ai")
 // Claude Code hooks (uses shell, so relative path works)
-const CLAUDE_PRE_TOOL_CMD: &str = "checkpoint --hook-input stdin";
+const CLAUDE_PRE_TOOL_CMD: &str = "checkpoint";
 const CLAUDE_POST_TOOL_CMD: &str = "checkpoint claude --hook-input stdin";
 
 // Cursor hooks (requires absolute path to avoid shell config loading delay)
