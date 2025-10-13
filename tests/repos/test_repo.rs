@@ -106,6 +106,43 @@ impl TestRepo {
         }
     }
 
+    pub fn git_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Result<String, String> {
+        let binary_path = get_binary_path();
+
+        let mut full_args = vec!["-C", self.path.to_str().unwrap()];
+        full_args.extend(args);
+
+        let mut command = Command::new(binary_path);
+        command.args(&full_args).env("GIT_AI", "git");
+
+        // Add custom environment variables
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+
+        let output = command.output().expect(&format!(
+            "Failed to execute git command with env: {:?}",
+            args
+        ));
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() {
+            // Combine stdout and stderr since git often writes to stderr
+            let combined = if stdout.is_empty() {
+                stderr
+            } else if stderr.is_empty() {
+                stdout
+            } else {
+                format!("{}{}", stdout, stderr)
+            };
+            Ok(combined)
+        } else {
+            Err(stderr)
+        }
+    }
+
     pub fn filename(&self, filename: &str) -> TestFile {
         let file_path = self.path.join(filename);
 
