@@ -55,14 +55,7 @@ pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
 /// Tracks start times for named operations and logs the duration when they complete.
 /// Useful for performance debugging and optimization.
 ///
-/// # Example
-///
-/// ```
-/// let mut timing = Timer::new();
-/// timing.start("git_commit");
-/// // ... do work ...
-/// timing.end("git_commit"); // Prints: timer: git_commit took 1.23s
-/// ```
+
 pub struct Timer {
     timings: HashMap<String, Instant>,
     enabled: bool,

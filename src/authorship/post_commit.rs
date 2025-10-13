@@ -7,6 +7,7 @@ use crate::error::GitAiError;
 use crate::git::refs::notes_add;
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
+use crate::utils::Timer;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
 
