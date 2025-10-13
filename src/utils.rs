@@ -109,7 +109,7 @@ impl Timer {
 
     pub fn print_duration(self, label: &str, duration: Duration) {
         println!(
-            "\x1b[1;33m[timer]\x1b[0m {} {:?}ms",
+            "\x1b[1;33m[profiler]\x1b[0m {} {:?}ms",
             label,
             duration.as_millis()
         );
