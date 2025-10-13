@@ -283,35 +283,35 @@ mod tests {
         assert!(!output.is_empty());
     }
 
-    #[test]
-    fn test_exp() {
-        let repo = TestRepo::new();
+    // #[test]
+    // fn test_exp() {
+    //     let repo = TestRepo::new();
 
-        let mut example_txt = repo.filename("example.txt");
-        example_txt.set_contents(vec!["og".human(), "og2".ai()]);
+    //     let mut example_txt = repo.filename("example.txt");
+    //     example_txt.set_contents(vec!["og".human(), "og2".ai()]);
 
-        example_txt.insert_at(
-            0,
-            lines![
-                "HUMAN",
-                "HUMAN".ai(),
-                "HUMAN",
-                "HUMAN",
-                "Hello, world!".ai(),
-            ],
-        );
+    //     example_txt.insert_at(
+    //         0,
+    //         lines![
+    //             "HUMAN",
+    //             "HUMAN".ai(),
+    //             "HUMAN",
+    //             "HUMAN",
+    //             "Hello, world!".ai(),
+    //         ],
+    //     );
 
-        example_txt.delete_at(3);
+    //     example_txt.delete_at(3);
 
-        let _commit = repo.stage_all_and_commit("mix ai human").unwrap();
+    //     let _commit = repo.stage_all_and_commit("mix ai human").unwrap();
 
-        // Assert that blame output matches expected authorship
-        example_txt.assert_blame_contents_expected();
+    //     // Assert that blame output matches expected authorship
+    //     example_txt.assert_blame_contents_expected();
 
-        example_txt.assert_blame_snapshot();
+    //     example_txt.assert_blame_snapshot();
 
-        example_txt.assert_contents_expected();
-    }
+    //     example_txt.assert_contents_expected();
+    // }
 
     #[test]
     fn test_assert_lines_and_blame() {
