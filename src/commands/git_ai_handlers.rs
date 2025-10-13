@@ -9,6 +9,7 @@ use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use std::io::IsTerminal;
+use std::io::Read;
 
 pub fn handle_git_ai(args: &[String]) {
     if args.is_empty() {
@@ -82,6 +83,24 @@ fn print_help() {
     std::process::exit(0);
 }
 
+fn must_hook_input(hook_input: Option<String>) -> Option<String> {
+    if hook_input.is_some() && !hook_input.as_ref().unwrap().trim().is_empty() {
+        return hook_input;
+    }
+    let mut stdin = std::io::stdin();
+    let mut buffer = String::new();
+    if let Err(e) = stdin.read_to_string(&mut buffer) {
+        eprintln!("Failed to read stdin for hook input: {}", e);
+        std::process::exit(1);
+    }
+    if !buffer.trim().is_empty() {
+        return Some(buffer);
+    } else {
+        eprintln!("No hook input provided (via --hook-input or stdin).");
+        std::process::exit(1);
+    }
+}
+
 fn handle_checkpoint(args: &[String]) {
     let mut repository_working_dir = std::env::current_dir()
         .unwrap()
@@ -89,24 +108,13 @@ fn handle_checkpoint(args: &[String]) {
         .to_string();
 
     // Parse checkpoint-specific arguments
-    let mut author = None;
     let mut show_working_log = false;
     let mut reset = false;
-    let mut prompt_id = None;
     let mut hook_input = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--author" => {
-                if i + 1 < args.len() {
-                    author = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --author requires a value");
-                    std::process::exit(1);
-                }
-            }
             "--show-working-log" => {
                 show_working_log = true;
                 i += 1;
@@ -114,15 +122,6 @@ fn handle_checkpoint(args: &[String]) {
             "--reset" => {
                 reset = true;
                 i += 1;
-            }
-            "--prompt-id" => {
-                if i + 1 < args.len() {
-                    prompt_id = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --prompt-id requires a value");
-                    std::process::exit(1);
-                }
             }
             "--hook-input" => {
                 if i + 1 < args.len() {
@@ -145,8 +144,8 @@ fn handle_checkpoint(args: &[String]) {
     if !args.is_empty() {
         match args[0].as_str() {
             "claude" => {
+                hook_input = must_hook_input(hook_input);
                 match ClaudePreset.run(AgentCheckpointFlags {
-                    prompt_id: prompt_id.clone(),
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
@@ -159,8 +158,8 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "cursor" => {
+                hook_input = must_hook_input(hook_input);
                 match CursorPreset.run(AgentCheckpointFlags {
-                    prompt_id: prompt_id.clone(),
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
@@ -180,8 +179,8 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "github-copilot" => {
+                hook_input = must_hook_input(hook_input);
                 match GithubCopilotPreset.run(AgentCheckpointFlags {
-                    prompt_id: prompt_id.clone(),
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
@@ -232,11 +231,9 @@ fn handle_checkpoint(args: &[String]) {
         }
     };
 
-    let final_author = author.as_ref().unwrap_or(&default_user_name);
-
     if let Err(e) = commands::checkpoint::run(
         &repo,
-        final_author,
+        &default_user_name,
         show_working_log,
         reset,
         false,

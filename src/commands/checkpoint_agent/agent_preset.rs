@@ -11,7 +11,6 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 pub struct AgentCheckpointFlags {
-    pub prompt_id: Option<String>,
     pub hook_input: Option<String>,
 }
 
@@ -158,9 +157,6 @@ impl AgentCheckpointPreset for CursorPreset {
             });
         }
 
-        // Use prompt_id if provided, otherwise use conversation_id
-        let composer_id = flags.prompt_id.unwrap_or(conversation_id);
-
         // Locate Cursor storage
         let user_dir = Self::cursor_user_dir()?;
         let global_db = user_dir.join("globalStorage").join("state.vscdb");
@@ -175,11 +171,11 @@ impl AgentCheckpointPreset for CursorPreset {
         }
 
         // Fetch the composer data and extract transcript + model + edited filepaths
-        let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
+        let payload = Self::fetch_composer_payload(&global_db, &conversation_id)?;
         let (transcript, model) = Self::transcript_data_from_composer_payload(
             &payload,
             &global_db,
-            &composer_id,
+            &conversation_id,
         )?
         .unwrap_or_else(|| {
             // Return empty transcript as default
@@ -193,7 +189,7 @@ impl AgentCheckpointPreset for CursorPreset {
 
         let agent_id = AgentId {
             tool: "cursor".to_string(),
-            id: composer_id,
+            id: conversation_id,
             model,
         };
 
