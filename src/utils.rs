@@ -1,4 +1,5 @@
 use crate::git::diff_tree_to_tree::Diff;
+use std::time::{Duration, Instant};
 
 /// Debug logging utility function
 ///
@@ -45,5 +46,85 @@ pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
 
     if file_count == 0 {
         println!("  No changes between {} and {}", old_label, new_label);
+    }
+}
+
+/// Timer utility for measuring execution time
+///
+/// Provides a clean API for timing operations with automatic printing.
+/// Useful for performance debugging and optimization.
+///
+
+pub struct Timer {
+    enabled: bool,
+    pub epoch: Instant,
+}
+
+impl Timer {
+    /// Create a new Timer instance
+    pub fn new() -> Self {
+        Timer {
+            epoch: Instant::now(),
+            enabled: std::env::var("GIT_AI_PROFILE").is_ok(),
+        }
+    }
+
+    /// Start timing an operation
+    ///
+    /// Returns a closure that when called will print the elapsed time and return the duration.
+    ///
+    /// # Arguments
+    ///
+    /// * `label` - A descriptive label for this timing operation
+    ///
+    /// # Returns
+    ///
+    /// A closure that prints the elapsed time and returns a `Duration`
+    pub fn start(self, label: &str) -> impl FnOnce() -> Duration {
+        let start_time = Instant::now();
+        let enabled = self.enabled;
+        let label = label.to_string();
+
+        move || {
+            let duration = start_time.elapsed();
+            if enabled {
+                self.print_duration(&label, duration);
+            }
+            duration
+        }
+    }
+
+    pub fn print_duration(self, label: &str, duration: Duration) {
+        if self.enabled {
+            println!(
+                "\x1b[1;33m[profiler]\x1b[0m {} {:?}ms",
+                label,
+                duration.as_millis()
+            );
+        }
+    }
+
+    /// Start timing an operation quietly
+    ///
+    /// Returns a closure that when called will return the duration without printing.
+    /// Useful when you want to measure time but control logging yourself.
+    ///
+    /// # Arguments
+    ///
+    /// * `_label` - A descriptive label (unused, kept for API consistency)
+    ///
+    /// # Returns
+    ///
+    /// A closure that returns a `Duration` without printing
+    pub fn start_quiet(self, _label: &str) -> impl FnOnce() -> Duration {
+        let start_time = Instant::now();
+
+        move || start_time.elapsed()
+    }
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self::new()
     }
 }

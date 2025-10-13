@@ -1,88 +1,7 @@
-use git_ai::config;
-use git_ai::git::test_utils::TmpRepo;
-use std::collections::BTreeMap;
-use std::process::Command;
-
-// Helper function to run git blame and capture output
-fn run_git_blame(repo_path: &std::path::Path, file_path: &str, args: &[&str]) -> String {
-    println!("[DEBUG] Running git blame in directory: {:?}", repo_path);
-    println!("[DEBUG] File path: {}", file_path);
-    println!("[DEBUG] Args: {:?}", args);
-
-    // Process arguments to handle key=value pairs correctly
-    let mut processed_args = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i] {
-            "--abbrev" => {
-                if i + 1 < args.len() {
-                    processed_args.push(format!("--abbrev={}", args[i + 1]));
-                    i += 2;
-                } else {
-                    processed_args.push(args[i].to_string());
-                    i += 1;
-                }
-            }
-            "--date" => {
-                if i + 1 < args.len() {
-                    processed_args.push(format!("--date={}", args[i + 1]));
-                    i += 2;
-                } else {
-                    processed_args.push(args[i].to_string());
-                    i += 1;
-                }
-            }
-            _ => {
-                processed_args.push(args[i].to_string());
-                i += 1;
-            }
-        }
-    }
-
-    println!("[DEBUG] Processed args: {:?}", processed_args);
-
-    let output = Command::new(crate::config::Config::get().git_cmd())
-        .current_dir(repo_path)
-        .arg("blame")
-        .args(&processed_args)
-        .arg(file_path)
-        .env("GIT_PAGER", "cat") // Force use of cat instead of less
-        .env("PAGER", "cat")
-        .output()
-        .expect("Failed to run git blame");
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    println!("[DEBUG] Git blame stdout: {:?}", stdout);
-    println!("[DEBUG] Git blame stderr: {:?}", stderr);
-    println!("[DEBUG] Git blame status: {:?}", output.status);
-
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
-// Helper function to run git-ai blame and capture output
-fn run_git_ai_blame(repo_path: &std::path::Path, file_path: &str, args: &[&str]) -> String {
-    let binary_path = std::env::current_dir().unwrap().join("target/debug/git-ai");
-    let output = Command::new(binary_path)
-        .current_dir(repo_path)
-        .arg("blame")
-        .args(args)
-        .arg(file_path)
-        .env("GIT_PAGER", "cat") // Force use of cat instead of less
-        .env("PAGER", "cat")
-        .output()
-        .expect("Failed to run git-ai blame");
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !stderr.is_empty() {
-        println!("Git-ai stderr: {}", stderr);
-    }
-
-    stdout
-}
+#[macro_use]
+mod repos;
+use repos::test_file::ExpectedLineExt;
+use repos::test_repo::TestRepo;
 
 // Helper function to extract author names from blame output
 fn extract_authors(output: &str) -> Vec<String> {
@@ -103,7 +22,8 @@ fn extract_authors(output: &str) -> Vec<String> {
         })
         .collect()
 }
-// Helper function to normalize blame output for snapshot comparison
+
+// Helper function to normalize blame output for comparison
 // This replaces author names with consistent placeholders to avoid drift from author names
 fn normalize_for_snapshot(output: &str) -> String {
     output
@@ -179,53 +99,20 @@ fn normalize_for_snapshot(output: &str) -> String {
         .join("\n")
 }
 
-// Helper function to create a snapshot-comparable structure
-fn create_blame_comparison(
-    git_output: &str,
-    git_ai_output: &str,
-    test_name: &str,
-) -> BTreeMap<String, String> {
-    let mut comparison = BTreeMap::new();
-
-    // Normalize both outputs for comparison
-    let git_norm = normalize_for_snapshot(git_output);
-    let git_ai_norm = normalize_for_snapshot(git_ai_output);
-
-    comparison.insert(format!("{}_git_normalized", test_name), git_norm);
-    comparison.insert(format!("{}_git_ai_normalized", test_name), git_ai_norm);
-
-    // Also store raw outputs for debugging
-    comparison.insert(format!("{}_git_raw", test_name), git_output.to_string());
-    comparison.insert(
-        format!("{}_git_ai_raw", test_name),
-        git_ai_output.to_string(),
-    );
-
-    comparison
-}
-
 #[test]
 fn test_blame_basic_format() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo
-        .write_file("test.txt", "Line 1\nLine 2\n", true)
-        .unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 3\nLine 4\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2", "Line 3".ai(), "Line 4".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &[]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &[]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "basic_format");
+    // Run git blame and git-ai blame
+    let git_output = repo.git(&["blame", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "test.txt"]).unwrap();
 
-    // Use insta to capture the comparison and catch drift
+    // Compare normalized outputs
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -238,25 +125,24 @@ fn test_blame_basic_format() {
 
 #[test]
 fn test_blame_line_range() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo
-        .write_file("test.txt", "Line 1\nLine 2\nLine 3\nLine 4\n", true)
-        .unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 5\nLine 6\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines![
+        "Line 1",
+        "Line 2",
+        "Line 3",
+        "Line 4",
+        "Line 5".ai(),
+        "Line 6".ai()
+    ]);
+
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
     // Test -L flag
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-L", "2,4"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-L", "2,4"]);
+    let git_output = repo.git(&["blame", "-L", "2,4", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-L", "2,4", "test.txt"]).unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "line_range");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -269,22 +155,16 @@ fn test_blame_line_range() {
 
 #[test]
 fn test_blame_porcelain_format() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--porcelain"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--porcelain"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "porcelain_format");
+    let git_output = repo.git(&["blame", "--porcelain", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "--porcelain", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -297,22 +177,16 @@ fn test_blame_porcelain_format() {
 
 #[test]
 fn test_blame_show_email() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-e"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-e"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_email");
+    let git_output = repo.git(&["blame", "-e", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-e", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -332,22 +206,16 @@ fn test_blame_show_email() {
 
 #[test]
 fn test_blame_show_name() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-f"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-f"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_name");
+    let git_output = repo.git(&["blame", "-f", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-f", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -370,22 +238,16 @@ fn test_blame_show_name() {
 
 #[test]
 fn test_blame_show_number() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-n"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-n"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_number");
+    let git_output = repo.git(&["blame", "-n", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-n", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -398,22 +260,16 @@ fn test_blame_show_number() {
 
 #[test]
 fn test_blame_suppress_author() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-s"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-s"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "suppress_author");
+    let git_output = repo.git(&["blame", "-s", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-s", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -423,35 +279,29 @@ fn test_blame_suppress_author() {
         "Normalized blame outputs should match exactly"
     );
 
-    // Verify both suppress author information
+    // Verify both suppress author information (should not contain "Test User")
     assert!(
-        !git_output.contains("test_user"),
+        !git_output.contains("Test User"),
         "Git output should suppress author"
     );
     assert!(
-        !git_ai_output.contains("test_user"),
+        !git_ai_output.contains("Test User"),
         "Git-ai output should suppress author"
     );
 }
 
 #[test]
 fn test_blame_long_rev() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-l"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-l"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "long_rev");
+    let git_output = repo.git(&["blame", "-l", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-l", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -485,22 +335,16 @@ fn test_blame_long_rev() {
 
 #[test]
 fn test_blame_raw_timestamp() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-t"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-t"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "raw_timestamp");
+    let git_output = repo.git(&["blame", "-t", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-t", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -523,22 +367,19 @@ fn test_blame_raw_timestamp() {
 
 #[test]
 fn test_blame_abbrev() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
+
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // Note: git requires --abbrev=4 format, git-ai accepts --abbrev 4
+    let git_output = repo.git(&["blame", "--abbrev=4", "test.txt"]).unwrap();
+    let git_ai_output = repo
+        .git_ai(&["blame", "--abbrev", "4", "test.txt"])
         .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--abbrev", "4"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--abbrev", "4"]);
-
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "abbrev");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -551,20 +392,15 @@ fn test_blame_abbrev() {
 
 #[test]
 fn test_blame_blank_boundary() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-b"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-b"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    let git_output = repo.git(&["blame", "-b", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "-b", "test.txt"]).unwrap();
 
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
@@ -578,22 +414,16 @@ fn test_blame_blank_boundary() {
 
 #[test]
 fn test_blame_show_root() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--root"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--root"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "show_root");
+    let git_output = repo.git(&["blame", "--root", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "--root", "test.txt"]).unwrap();
+
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -654,22 +484,19 @@ fn test_blame_show_root() {
 // }
 #[test]
 fn test_blame_date_format() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
+
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // Note: git requires --date=short format, git-ai accepts --date short
+    let git_output = repo.git(&["blame", "--date=short", "test.txt"]).unwrap();
+    let git_ai_output = repo
+        .git_ai(&["blame", "--date", "short", "test.txt"])
         .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--date", "short"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--date", "short"]);
-
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "date_format");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -689,25 +516,27 @@ fn test_blame_date_format() {
 
 #[test]
 fn test_blame_multiple_flags() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo
-        .write_file("test.txt", "Line 1\nLine 2\nLine 3\n", true)
-        .unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 4\nLine 5\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
+    file.set_contents(lines![
+        "Line 1",
+        "Line 2",
+        "Line 3",
+        "Line 4".ai(),
+        "Line 5".ai()
+    ]);
+
+    repo.stage_all_and_commit("Initial commit").unwrap();
 
     // Test multiple flags together
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["-L", "2,4", "-e", "-n"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["-L", "2,4", "-e", "-n"]);
+    let git_output = repo
+        .git(&["blame", "-L", "2,4", "-e", "-n", "test.txt"])
+        .unwrap();
+    let git_ai_output = repo
+        .git_ai(&["blame", "-L", "2,4", "-e", "-n", "test.txt"])
+        .unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "multiple_flags");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -737,22 +566,18 @@ fn test_blame_multiple_flags() {
 
 #[test]
 fn test_blame_incremental_format() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
+
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    let git_output = repo.git(&["blame", "--incremental", "test.txt"]).unwrap();
+    let git_ai_output = repo
+        .git_ai(&["blame", "--incremental", "test.txt"])
         .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--incremental"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--incremental"]);
-
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "incremental_format");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -765,22 +590,20 @@ fn test_blame_incremental_format() {
 
 #[test]
 fn test_blame_line_porcelain() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
+    file.set_contents(lines!["Line 1", "Line 2".ai()]);
+
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    let git_output = repo
+        .git(&["blame", "--line-porcelain", "test.txt"])
         .unwrap();
-    file.append("Line 2\n").unwrap();
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
+    let git_ai_output = repo
+        .git_ai(&["blame", "--line-porcelain", "test.txt"])
         .unwrap();
-    tmp_repo.commit_with_message("Initial commit").unwrap();
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &["--line-porcelain"]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &["--line-porcelain"]);
-
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "line_porcelain");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -793,35 +616,17 @@ fn test_blame_line_porcelain() {
 
 #[test]
 fn test_blame_with_ai_authorship() {
-    let tmp_repo = TmpRepo::new().unwrap();
-    let mut file = tmp_repo.write_file("test.txt", "Line 1\n", true).unwrap();
+    let repo = TestRepo::new();
+    let mut file = repo.filename("test.txt");
 
-    // First commit by human
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 2\n").unwrap();
+    file.set_contents(lines!["Line 1", "Line 2", "Line 3".ai(), "Line 4"]);
 
-    // Second commit by AI
-    tmp_repo
-        .trigger_checkpoint_with_ai("Claude", Some("claude-3-sonnet"), Some("cursor"))
-        .unwrap();
-    file.append("Line 3\n").unwrap();
-
-    // Third commit by human
-    tmp_repo
-        .trigger_checkpoint_with_author("test_user")
-        .unwrap();
-    file.append("Line 4\n").unwrap();
-
-    tmp_repo
-        .commit_with_message("Mixed authorship commit")
+    repo.stage_all_and_commit("Mixed authorship commit")
         .unwrap();
 
-    let git_output = run_git_blame(tmp_repo.path(), "test.txt", &[]);
-    let git_ai_output = run_git_ai_blame(tmp_repo.path(), "test.txt", &[]);
+    let git_output = repo.git(&["blame", "test.txt"]).unwrap();
+    let git_ai_output = repo.git_ai(&["blame", "test.txt"]).unwrap();
 
-    let _comparison = create_blame_comparison(&git_output, &git_ai_output, "ai_authorship");
     let git_norm = normalize_for_snapshot(&git_output);
     let git_ai_norm = normalize_for_snapshot(&git_ai_output);
     println!("\n[DEBUG] Normalized git blame output:\n{}", git_norm);
@@ -844,8 +649,10 @@ fn test_blame_with_ai_authorship() {
 
     // Verify git-ai shows AI authors where appropriate
     assert!(
-        git_ai_authors.iter().any(|a| a.contains("cursor")),
-        "Should show cursor as author. Got: {:?}",
+        git_ai_authors
+            .iter()
+            .any(|a| a.contains("some-ai") || a.contains("mock_ai")),
+        "Should show AI as author. Got: {:?}",
         git_ai_authors
     );
 }

@@ -7,6 +7,8 @@ mod utils;
 
 use clap::Parser;
 
+use crate::utils::Timer;
+
 #[derive(Parser)]
 #[command(name = "git-ai")]
 #[command(about = "git proxy with AI authorship tracking", long_about = None)]
@@ -18,6 +20,7 @@ struct Cli {
 }
 
 fn main() {
+    _ = Timer::default();
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()

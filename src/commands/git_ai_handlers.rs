@@ -8,6 +8,7 @@ use crate::commands::checkpoint_agent::agent_preset::{
 use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
+use crate::utils::Timer;
 use std::io::IsTerminal;
 use std::io::Read;
 
@@ -16,6 +17,8 @@ pub fn handle_git_ai(args: &[String]) {
         print_help();
         return;
     }
+    let timer = Timer::default();
+
     match args[0].as_str() {
         "help" | "--help" | "-h" => {
             print_help();
@@ -31,7 +34,9 @@ pub fn handle_git_ai(args: &[String]) {
             handle_stats(&args[1..]);
         }
         "checkpoint" => {
+            let end = timer.start("git-ai checkpoint");
             handle_checkpoint(&args[1..]);
+            end();
         }
         "blame" => {
             handle_ai_blame(&args[1..]);
