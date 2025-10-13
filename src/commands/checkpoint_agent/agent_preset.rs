@@ -79,13 +79,20 @@ impl AgentCheckpointPreset for ClaudePreset {
             model: model.unwrap_or_else(|| "unknown".to_string()),
         };
 
+        // Extract file_path from tool_input if present
+        let edited_filepaths = hook_data
+            .get("tool_input")
+            .and_then(|ti| ti.get("file_path"))
+            .and_then(|v| v.as_str())
+            .map(|path| vec![path.to_string()]);
+
         Ok(AgentRunResult {
             agent_id,
             is_human: false,
             transcript: Some(transcript),
             // use default.
             repo_working_dir: None,
-            edited_filepaths: None,
+            edited_filepaths,
         })
     }
 }
@@ -546,7 +553,7 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             .to_string();
 
         // Build transcript and model via helper
-        let (transcript, detected_model) =
+        let (transcript, detected_model, edited_filepaths) =
             GithubCopilotPreset::transcript_and_model_from_copilot_session_json(&session_content)?;
 
         let agent_id = AgentId {
@@ -560,16 +567,16 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             is_human: false,
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
-            edited_filepaths: None,
+            edited_filepaths,
         })
     }
 }
 
 impl GithubCopilotPreset {
-    /// Translate a GitHub Copilot chat session JSON string into an AiTranscript and optional model.
+    /// Translate a GitHub Copilot chat session JSON string into an AiTranscript, optional model, and edited filepaths.
     pub fn transcript_and_model_from_copilot_session_json(
         session_json_str: &str,
-    ) -> Result<(AiTranscript, Option<String>), GitAiError> {
+    ) -> Result<(AiTranscript, Option<String>, Option<Vec<String>>), GitAiError> {
         let session_json: serde_json::Value =
             serde_json::from_str(session_json_str).map_err(|e| GitAiError::JsonError(e))?;
 
@@ -585,6 +592,7 @@ impl GithubCopilotPreset {
 
         let mut transcript = AiTranscript::new();
         let mut detected_model: Option<String> = None;
+        let mut edited_filepaths: Vec<String> = Vec::new();
 
         for request in requests {
             // Parse the human timestamp once per request (unix ms and RFC3339)
@@ -646,7 +654,29 @@ impl GithubCopilotPreset {
                                 }
                             }
                             // Other structured response elements worth capturing
-                            "textEditGroup" | "prepareToolInvocation" => {
+                            "textEditGroup" => {
+                                // Extract file path from textEditGroup
+                                if let Some(uri_obj) = item.get("uri") {
+                                    let path_opt = uri_obj
+                                        .get("fsPath")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                        .or_else(|| {
+                                            uri_obj
+                                                .get("path")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                        });
+                                    if let Some(p) = path_opt {
+                                        if !edited_filepaths.contains(&p) {
+                                            edited_filepaths.push(p);
+                                        }
+                                    }
+                                }
+                                transcript
+                                    .add_message(Message::tool_use(kind.to_string(), item.clone()));
+                            }
+                            "prepareToolInvocation" => {
                                 transcript
                                     .add_message(Message::tool_use(kind.to_string(), item.clone()));
                             }
@@ -761,6 +791,6 @@ impl GithubCopilotPreset {
             }
         }
 
-        Ok((transcript, detected_model))
+        Ok((transcript, detected_model, Some(edited_filepaths)))
     }
 }

@@ -11,9 +11,11 @@ fn copilot_session_parsing_stub() {
     let sample = r#"{"requests": []}"#;
     let result = GithubCopilotPreset::transcript_and_model_from_copilot_session_json(sample);
     assert!(result.is_ok());
-    let (tx, model) = result.unwrap();
+    let (tx, model, edited_filepaths) = result.unwrap();
     assert!(tx.messages.is_empty());
     assert!(model.is_none());
+    assert!(edited_filepaths.is_some());
+    assert_eq!(edited_filepaths.unwrap().len(), 0);
 }
 
 #[test]
@@ -23,7 +25,7 @@ fn copilot_session_parsing_simple() {
 
     let result = GithubCopilotPreset::transcript_and_model_from_copilot_session_json(&sample);
     assert!(result.is_ok());
-    let (tx, model) = result.unwrap();
+    let (tx, model, _edited_filepaths) = result.unwrap();
 
     // Build expected transcript messages exactly
     let expected_messages = vec![
@@ -108,4 +110,95 @@ fn copilot_session_parsing_simple() {
 
     // Validate model exactly
     assert_eq!(model, Some("copilot/claude-sonnet-4".to_string()));
+}
+
+#[test]
+fn test_copilot_extracts_edited_filepaths() {
+    let sample = load_fixture("copilot_session_simple.json");
+
+    let result = GithubCopilotPreset::transcript_and_model_from_copilot_session_json(&sample);
+    assert!(result.is_ok());
+    let (_tx, _model, edited_filepaths) = result.unwrap();
+
+    // Verify edited_filepaths is extracted from textEditGroup
+    assert!(edited_filepaths.is_some());
+    let paths = edited_filepaths.unwrap();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0], "/Users/svarlamov/projects/testing-git/index.ts");
+}
+
+#[test]
+fn test_copilot_no_edited_filepaths_when_no_edits() {
+    let sample = r##"{
+        "requests": [
+            {
+                "timestamp": 1728308673835,
+                "message": {
+                    "text": "What can you help me with?"
+                },
+                "response": [
+                    {
+                        "kind": "markdown",
+                        "value": "I can help with code!"
+                    }
+                ],
+                "modelId": "copilot/claude-sonnet-4"
+            }
+        ]
+    }"##;
+
+    let result = GithubCopilotPreset::transcript_and_model_from_copilot_session_json(sample);
+    assert!(result.is_ok());
+    let (_tx, _model, edited_filepaths) = result.unwrap();
+
+    // Verify edited_filepaths is empty when there are no textEditGroup entries
+    assert!(edited_filepaths.is_some());
+    let paths = edited_filepaths.unwrap();
+    assert_eq!(paths.len(), 0);
+}
+
+#[test]
+fn test_copilot_deduplicates_edited_filepaths() {
+    let sample = r##"{
+        "requests": [
+            {
+                "timestamp": 1728308673835,
+                "message": {
+                    "text": "Edit the file"
+                },
+                "response": [
+                    {
+                        "kind": "textEditGroup",
+                        "uri": {
+                            "fsPath": "/Users/test/file.ts"
+                        }
+                    },
+                    {
+                        "kind": "textEditGroup",
+                        "uri": {
+                            "fsPath": "/Users/test/file.ts"
+                        }
+                    },
+                    {
+                        "kind": "textEditGroup",
+                        "uri": {
+                            "fsPath": "/Users/test/other.ts"
+                        }
+                    }
+                ],
+                "modelId": "copilot/claude-sonnet-4"
+            }
+        ]
+    }"##;
+
+    let result = GithubCopilotPreset::transcript_and_model_from_copilot_session_json(sample);
+    assert!(result.is_ok());
+    let (_tx, _model, edited_filepaths) = result.unwrap();
+
+    // Verify duplicate paths are removed
+    assert!(edited_filepaths.is_some());
+    let paths = edited_filepaths.unwrap();
+    assert_eq!(paths.len(), 2);
+    assert!(paths.contains(&"/Users/test/file.ts".to_string()));
+    assert!(paths.contains(&"/Users/test/other.ts".to_string()));
 }

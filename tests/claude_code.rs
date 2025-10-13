@@ -1,6 +1,7 @@
 mod test_utils;
 
 use git_ai::authorship::transcript::{AiTranscript, Message};
+use git_ai::commands::checkpoint_agent::agent_preset::{AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset};
 use test_utils::load_fixture;
 
 #[test]
@@ -32,4 +33,55 @@ fn test_parse_example_claude_code_jsonl_with_model() {
             }
         }
     }
+}
+
+#[test]
+fn test_claude_preset_extracts_edited_filepath() {
+    let hook_input = r##"{
+        "cwd": "/Users/svarlamov/projects/testing-git",
+        "hook_event_name": "PostToolUse",
+        "permission_mode": "default",
+        "session_id": "23aad27c-175d-427f-ac5f-a6830b8e6e65",
+        "tool_input": {
+            "file_path": "/Users/svarlamov/projects/testing-git/README.md",
+            "new_string": "# Testing Git Repository",
+            "old_string": "# Testing Git"
+        },
+        "tool_name": "Edit",
+        "transcript_path": "tests/fixtures/example-claude-code.jsonl"
+    }"##;
+
+    let flags = AgentCheckpointFlags {
+        hook_input: Some(hook_input.to_string()),
+    };
+
+    let preset = ClaudePreset;
+    let result = preset.run(flags).expect("Failed to run ClaudePreset");
+
+    // Verify edited_filepaths is extracted
+    assert!(result.edited_filepaths.is_some());
+    let edited_filepaths = result.edited_filepaths.unwrap();
+    assert_eq!(edited_filepaths.len(), 1);
+    assert_eq!(edited_filepaths[0], "/Users/svarlamov/projects/testing-git/README.md");
+}
+
+#[test]
+fn test_claude_preset_no_filepath_when_tool_input_missing() {
+    let hook_input = r##"{
+        "cwd": "/Users/svarlamov/projects/testing-git",
+        "hook_event_name": "PostToolUse",
+        "session_id": "23aad27c-175d-427f-ac5f-a6830b8e6e65",
+        "tool_name": "Read",
+        "transcript_path": "tests/fixtures/example-claude-code.jsonl"
+    }"##;
+
+    let flags = AgentCheckpointFlags {
+        hook_input: Some(hook_input.to_string()),
+    };
+
+    let preset = ClaudePreset;
+    let result = preset.run(flags).expect("Failed to run ClaudePreset");
+
+    // Verify edited_filepaths is None when tool_input is missing
+    assert!(result.edited_filepaths.is_none());
 }
