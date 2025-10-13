@@ -392,6 +392,7 @@ impl TmpRepo {
             transcript: Some(transcript),
             is_human: false,
             repo_working_dir: None,
+            edited_filepaths: None,
         };
 
         checkpoint(

@@ -163,8 +163,8 @@ fn test_extract_transcript_from_test_conversation() {
     // Verify exact message count
     assert_eq!(
         transcript.messages().len(),
-        13,
-        "Should extract exactly 13 messages from the conversation"
+        31,
+        "Should extract exactly 31 messages from the conversation"
     );
 
     // Verify model extraction

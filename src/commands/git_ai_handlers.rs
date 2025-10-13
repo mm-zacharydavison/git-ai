@@ -203,6 +203,7 @@ fn handle_checkpoint(args: &[String]) {
                     is_human: false,
                     transcript: None,
                     repo_working_dir: None,
+                    edited_filepaths: None,
                 });
             }
             _ => {}
