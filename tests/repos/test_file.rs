@@ -99,6 +99,12 @@ impl<'a> TestFile<'a> {
         }
     }
 
+    pub fn stage(&self) {
+        self.repo
+            .git(&["add", self.file_path.to_str().expect("valid path")])
+            .expect("add file should succeed");
+    }
+
     pub fn assert_contents_expected(&self) {
         let contents = fs::read_to_string(&self.file_path).unwrap();
         assert_eq!(
@@ -150,6 +156,81 @@ impl<'a> TestFile<'a> {
         // Compare each line's content and authorship
         for (i, ((actual_author, actual_content), expected_line)) in
             actual_lines.iter().zip(&expected_lines).enumerate()
+        {
+            let line_num = i + 1;
+
+            // Check line content
+            assert_eq!(
+                actual_content.trim(),
+                expected_line.contents.trim(),
+                "Line {}: Content mismatch\nExpected: {:?}\nActual: {:?}\nFull blame output:\n{}",
+                line_num,
+                expected_line.contents,
+                actual_content,
+                blame_output
+            );
+
+            // Check authorship
+            match &expected_line.author_type {
+                AuthorType::Ai => {
+                    assert!(
+                        self.is_ai_author(actual_author),
+                        "Line {}: Expected AI author but got '{}'\nExpected: {:?}\nActual content: {:?}\nFull blame output:\n{}",
+                        line_num,
+                        actual_author,
+                        expected_line,
+                        actual_content,
+                        blame_output
+                    );
+                }
+                AuthorType::Human => {
+                    assert!(
+                        !self.is_ai_author(actual_author),
+                        "Line {}: Expected Human author but got AI author '{}'\nExpected: {:?}\nActual content: {:?}\nFull blame output:\n{}",
+                        line_num,
+                        actual_author,
+                        expected_line,
+                        actual_content,
+                        blame_output
+                    );
+                }
+            }
+        }
+    }
+
+    /// Assert only committed lines (filters out uncommitted lines)
+    /// Useful for partial staging tests where some lines aren't committed yet
+    pub fn assert_committed_lines<T: Into<ExpectedLine>>(&mut self, lines: Vec<T>) {
+        let expected_lines: Vec<ExpectedLine> = lines.into_iter().map(|l| l.into()).collect();
+
+        // Get blame output
+        let filename = self.file_path.to_str().expect("valid path");
+        let blame_output = self
+            .repo
+            .git_ai(&["blame", filename])
+            .expect("git-ai blame should succeed");
+
+        // Parse the blame output and filter out uncommitted lines
+        let committed_lines: Vec<(String, String)> = blame_output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| self.parse_blame_line(line))
+            .filter(|(author, _)| author != "Not Committed Yet")
+            .collect();
+
+        // Compare line counts
+        assert_eq!(
+            committed_lines.len(),
+            expected_lines.len(),
+            "Number of committed lines ({}) doesn't match expected ({})\nBlame output:\n{}",
+            committed_lines.len(),
+            expected_lines.len(),
+            blame_output
+        );
+
+        // Compare each line's content and authorship
+        for (i, ((actual_author, actual_content), expected_line)) in
+            committed_lines.iter().zip(&expected_lines).enumerate()
         {
             let line_num = i + 1;
 

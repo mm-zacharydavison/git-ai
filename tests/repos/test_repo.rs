@@ -118,9 +118,7 @@ impl TestRepo {
         repo.storage.working_log_for_base_commit(&commit_sha)
     }
 
-    pub fn stage_all_and_commit(&self, message: &str) -> Result<NewCommit, String> {
-        self.git(&["add", "-A"]).expect("add --all should succeed");
-
+    pub fn commit(&self, message: &str) -> Result<NewCommit, String> {
         let output = self.git(&["commit", "-m", message]);
 
         if output.is_ok() {
@@ -154,6 +152,11 @@ impl TestRepo {
         } else {
             Err(output.unwrap_err())
         }
+    }
+
+    pub fn stage_all_and_commit(&self, message: &str) -> Result<NewCommit, String> {
+        self.git(&["add", "-A"]).expect("add --all should succeed");
+        self.commit(message)
     }
 
     pub fn read_file(&self, filename: &str) -> Option<String> {
