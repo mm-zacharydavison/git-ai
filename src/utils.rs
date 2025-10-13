@@ -54,20 +54,7 @@ pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
 /// Provides a clean API for timing operations with automatic printing.
 /// Useful for performance debugging and optimization.
 ///
-/// # Example
-///
-/// ```
-/// let end = Timer::default().start("my operation");
-/// // ... do work ...
-/// end(); // prints "[timer] my operation took 123ms"
-///
-/// // Or capture the duration:
-/// let duration = end();
-///
-/// // For quiet timing without logging:
-/// let end = Timer::default().start_quiet("background task");
-/// let duration = end(); // just returns duration, no printing
-/// ```
+
 pub struct Timer {
     enabled: bool,
     pub epoch: Instant,
