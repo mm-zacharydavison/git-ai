@@ -999,6 +999,16 @@ impl Repository {
         args.push("--no-commit-id".to_string());
         args.push("--name-only".to_string());
         args.push("-r".to_string());
+
+        // Find the commit to check if it has a parent
+        let commit = self.find_commit(commit_sha.to_string())?;
+
+        // For initial commits (no parent), compare against the empty tree
+        if commit.parent_count()? == 0 {
+            let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+            args.push(empty_tree.to_string());
+        }
+
         args.push(commit_sha.to_string());
 
         // Add pathspecs if provided

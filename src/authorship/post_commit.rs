@@ -6,7 +6,7 @@ use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
 use crate::error::GitAiError;
 use crate::git::refs::notes_add;
 use crate::git::repository::Repository;
-use crate::utils::{Timer, debug_log};
+use crate::utils::Timer;
 use std::collections::{HashMap, HashSet};
 
 pub fn post_commit(
@@ -32,19 +32,15 @@ pub fn post_commit(
 
     let parent_working_log = working_log.read_all_checkpoints()?;
 
-    debug_log(&format!(
-        "edited files: {:?}",
-        parent_working_log.edited_files
-    ));
+    // debug_log(&format!(
+    //     "edited files: {:?}",
+    //     parent_working_log.edited_files
+    // ));
 
     // Filter out untracked files from the working log
     timer.start("filter_untracked_files");
-    let mut filtered_working_log = filter_untracked_files(
-        repo,
-        &parent_working_log.checkpoints,
-        &commit_sha,
-        Some(&parent_working_log.edited_files),
-    )?;
+    let mut filtered_working_log =
+        filter_untracked_files(repo, &parent_working_log, &commit_sha, None)?;
     timer.end("filter_untracked_files");
 
     // mutates inline
@@ -62,20 +58,14 @@ pub fn post_commit(
     // Filter the authorship log to only include committed lines
     // We need to keep ONLY lines that are in the commit, not filter out unstaged lines
     timer.start("collect_committed_hunks");
-    let committed_hunks = collect_committed_hunks(
-        repo,
-        &parent_sha,
-        &commit_sha,
-        Some(&parent_working_log.edited_files),
-    )?;
+    let committed_hunks = collect_committed_hunks(repo, &parent_sha, &commit_sha, None)?;
     timer.end("collect_committed_hunks");
 
     // Convert authorship log line numbers from working directory coordinates to commit coordinates
     // The working log uses working directory coordinates (which includes unstaged changes),
     // but the authorship log should store commit coordinates (line numbers as they appear in the commit tree)
     timer.start("collect_unstaged_hunks");
-    let unstaged_hunks =
-        collect_unstaged_hunks(repo, &commit_sha, Some(&parent_working_log.edited_files))?;
+    let unstaged_hunks = collect_unstaged_hunks(repo, &commit_sha, None)?;
     timer.end("collect_unstaged_hunks");
 
     // Convert working directory line numbers to commit line numbers
@@ -94,7 +84,7 @@ pub fn post_commit(
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
         let parent_checkpoints = parent_working_log
             .read_all_checkpoints()
-            .map(|wl| wl.checkpoints)
+            .map(|wl| wl)
             .unwrap_or_default();
 
         !parent_checkpoints.is_empty() && parent_checkpoints.iter().any(|cp| cp.agent_id.is_some())
@@ -120,7 +110,7 @@ pub fn post_commit(
     } else {
         // Filter the working log to remove committed lines, keeping only unstaged ones
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
-        let parent_checkpoints = parent_working_log.read_all_checkpoints()?.checkpoints;
+        let parent_checkpoints = parent_working_log.read_all_checkpoints()?;
 
         let new_working_log = repo_storage.working_log_for_base_commit(&commit_sha);
 

@@ -140,8 +140,12 @@ pub fn rewrite_authorship_after_squash_or_rebase(
 
     // TODO Is this diff necessary? The result is unused
     // Create diff between the two trees
-    let _diff =
-        repo.diff_tree_to_tree(Some(&origin_base_tree), Some(&new_commit_parent_tree), None)?;
+    let _diff = repo.diff_tree_to_tree(
+        Some(&origin_base_tree),
+        Some(&new_commit_parent_tree),
+        None,
+        None,
+    )?;
 
     // Step 5: Take this diff and apply it to the HEAD of the old shas history.
     // We want it to be a merge essentially, and Accept Theirs (OLD Head wins when there's conflicts)
@@ -843,7 +847,7 @@ fn reconstruct_authorship_from_diff(
     let parent_tree = new_commit_parent.tree()?;
 
     // Create diff between new_commit and new_commit_parent using Git CLI
-    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None)?;
+    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&new_tree), None, None)?;
 
     let mut authorship_entries = Vec::new();
 
