@@ -61,44 +61,32 @@ pub fn handle_git_ai(args: &[String]) {
 fn print_help() {
     eprintln!("git-ai - git proxy with AI authorship tracking");
     eprintln!("");
-    eprintln!("Usage: git-ai <git or git-ai command> [args...]");
+    eprintln!("Usage: git-ai <command> [args...]");
     eprintln!("");
     eprintln!("Commands:");
-    eprintln!("  checkpoint         checkpoint working changes and specify author");
-    eprintln!("    Presets: claude, cursor. Debug/Testing presets mock_ai");
-    eprintln!("    --show-working-log    Display current working log");
-    eprintln!("    --reset               Reset working log");
-    eprintln!("  blame              [override] git blame with AI authorship tracking");
+    eprintln!("  checkpoint         Checkpoint working changes and attribute author");
+    eprintln!("    Presets: claude, cursor, github-copilot, mock_ai");
     eprintln!(
-        "  commit             [wrapper] pass through to 'git commit' with git-ai before/after hooks"
+        "    --hook-input <json|stdin>   JSON payload required by presets, or 'stdin' to read from stdin"
     );
-    eprintln!("  stats              Show AI authorship statistics for a commit");
-    eprintln!("    <commit>               Optional commit SHA (defaults to current HEAD)");
+    eprintln!("    --show-working-log          Display current working log");
+    eprintln!("    --reset                     Reset working log");
+    eprintln!("  blame <file>       Git blame with AI authorship overlay");
+    eprintln!("  stats [commit]     Show AI authorship statistics for a commit");
     eprintln!("    --json                 Output in JSON format");
+    eprintln!(
+        "  stats-delta        Generate authorship logs for children of commits with working logs"
+    );
+    eprintln!("    --json                 Output created notes as JSON");
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
     eprintln!("  squash-authorship  Generate authorship from squashed commits");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
+    eprintln!("  git-path           Print the path to the underlying git executable");
+    eprintln!("  version, -v, --version     Print the git-ai version");
+    eprintln!("  help, -h, --help           Show this help message");
     eprintln!("");
     std::process::exit(0);
-}
-
-fn must_hook_input(hook_input: Option<String>) -> Option<String> {
-    if hook_input.is_some() && !hook_input.as_ref().unwrap().trim().is_empty() {
-        return hook_input;
-    }
-    let mut stdin = std::io::stdin();
-    let mut buffer = String::new();
-    if let Err(e) = stdin.read_to_string(&mut buffer) {
-        eprintln!("Failed to read stdin for hook input: {}", e);
-        std::process::exit(1);
-    }
-    if !buffer.trim().is_empty() {
-        return Some(buffer);
-    } else {
-        eprintln!("No hook input provided (via --hook-input or stdin).");
-        std::process::exit(1);
-    }
 }
 
 fn handle_checkpoint(args: &[String]) {
@@ -126,9 +114,26 @@ fn handle_checkpoint(args: &[String]) {
             "--hook-input" => {
                 if i + 1 < args.len() {
                     hook_input = Some(args[i + 1].clone());
+                    if hook_input.as_ref().unwrap() == "stdin" {
+                        let mut stdin = std::io::stdin();
+                        let mut buffer = String::new();
+                        if let Err(e) = stdin.read_to_string(&mut buffer) {
+                            eprintln!("Failed to read stdin for hook input: {}", e);
+                            std::process::exit(1);
+                        }
+                        if !buffer.trim().is_empty() {
+                            hook_input = Some(buffer);
+                        } else {
+                            eprintln!("No hook input provided (via --hook-input or stdin).");
+                            std::process::exit(1);
+                        }
+                    } else if hook_input.as_ref().unwrap().trim().is_empty() {
+                        eprintln!("Error: --hook-input requires a value");
+                        std::process::exit(1);
+                    }
                     i += 2;
                 } else {
-                    eprintln!("Error: --hook-input requires a value");
+                    eprintln!("Error: --hook-input requires a value or 'stdin' to read from stdin");
                     std::process::exit(1);
                 }
             }
@@ -144,7 +149,6 @@ fn handle_checkpoint(args: &[String]) {
     if !args.is_empty() {
         match args[0].as_str() {
             "claude" => {
-                hook_input = must_hook_input(hook_input);
                 match ClaudePreset.run(AgentCheckpointFlags {
                     hook_input: hook_input.clone(),
                 }) {
@@ -158,7 +162,6 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "cursor" => {
-                hook_input = must_hook_input(hook_input);
                 match CursorPreset.run(AgentCheckpointFlags {
                     hook_input: hook_input.clone(),
                 }) {
@@ -179,7 +182,6 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "github-copilot" => {
-                hook_input = must_hook_input(hook_input);
                 match GithubCopilotPreset.run(AgentCheckpointFlags {
                     hook_input: hook_input.clone(),
                 }) {
