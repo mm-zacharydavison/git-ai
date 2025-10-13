@@ -3,10 +3,11 @@ use git_ai::git::repo_storage::PersistedWorkingLog;
 use git_ai::git::repository as GitAiRepository;
 use git2::Repository;
 use insta::assert_debug_snapshot;
+use rand::Rng;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
-use std::{fs, fs::File, io::Read};
 
 use super::test_file::TestFile;
 
@@ -17,13 +18,8 @@ pub struct TestRepo {
 
 impl TestRepo {
     pub fn new() -> Self {
-        let mut buf = [0u8; 8];
-        File::open("/dev/urandom")
-            .expect("failed to open /dev/urandom")
-            .read_exact(&mut buf)
-            .expect("failed to read random bytes");
-
-        let n = u64::from_le_bytes(buf) % 10000000000;
+        let mut rng = rand::thread_rng();
+        let n: u64 = rng.gen_range(0..10000000000);
         let base = std::env::temp_dir();
         let path = base.join(n.to_string());
         let repo = Repository::init(&path).expect("failed to initialize git2 repository");
