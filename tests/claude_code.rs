@@ -1,7 +1,9 @@
 mod test_utils;
 
 use git_ai::authorship::transcript::{AiTranscript, Message};
-use git_ai::commands::checkpoint_agent::agent_preset::{AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset};
+use git_ai::commands::checkpoint_agent::agent_preset::{
+    AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset,
+};
 use test_utils::load_fixture;
 
 #[test]
@@ -62,7 +64,10 @@ fn test_claude_preset_extracts_edited_filepath() {
     assert!(result.edited_filepaths.is_some());
     let edited_filepaths = result.edited_filepaths.unwrap();
     assert_eq!(edited_filepaths.len(), 1);
-    assert_eq!(edited_filepaths[0], "/Users/svarlamov/projects/testing-git/README.md");
+    assert_eq!(
+        edited_filepaths[0],
+        "/Users/svarlamov/projects/testing-git/README.md"
+    );
 }
 
 #[test]

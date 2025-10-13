@@ -38,7 +38,12 @@ pub fn run(
     let repo_storage = RepoStorage::for_repo_path(repo.path());
     let working_log = repo_storage.working_log_for_base_commit(&base_commit);
 
-    let files = get_all_tracked_files(repo, &base_commit, &working_log)?;
+    // Extract edited filepaths from agent_run_result if available
+    let edited_filepaths = agent_run_result
+        .as_ref()
+        .and_then(|result| result.edited_filepaths.as_ref());
+
+    let files = get_all_tracked_files(repo, &base_commit, &working_log, edited_filepaths)?;
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
         working_log.reset_working_log()?;
@@ -201,11 +206,20 @@ pub fn run(
     Ok((entries.len(), files.len(), checkpoints.len()))
 }
 
-fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
+fn get_all_files(
+    repo: &Repository,
+    edited_filepaths: Option<&Vec<String>>,
+) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
 
+    // Convert edited_filepaths to HashSet for git status if provided
+    let pathspec = edited_filepaths.map(|paths| {
+        use std::collections::HashSet;
+        paths.iter().cloned().collect::<HashSet<String>>()
+    });
+
     // Use porcelain v2 format to get status
-    let statuses = repo.status(None)?;
+    let statuses = repo.status(pathspec.as_ref())?;
 
     for entry in statuses {
         // Skip ignored files
@@ -248,8 +262,9 @@ fn get_all_tracked_files(
     repo: &Repository,
     _base_commit: &str,
     working_log: &PersistedWorkingLog,
+    edited_filepaths: Option<&Vec<String>>,
 ) -> Result<Vec<String>, GitAiError> {
-    let mut files = get_all_files(repo)?;
+    let mut files = get_all_files(repo, edited_filepaths)?;
 
     // Also include files that were in previous checkpoints but might not show up in git status
     // This ensures we track deletions when files return to their original state

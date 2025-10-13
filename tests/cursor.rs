@@ -239,7 +239,9 @@ fn test_cursor_preset_human_checkpoint_no_filepath() {
     };
 
     let preset = CursorPreset;
-    let result = preset.run(flags).expect("Should succeed for human checkpoint");
+    let result = preset
+        .run(flags)
+        .expect("Should succeed for human checkpoint");
 
     // Verify this is a human checkpoint
     assert!(result.is_human);
