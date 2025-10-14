@@ -4,7 +4,7 @@ use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::{debug_log, Timer};
+use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -195,7 +195,11 @@ pub fn run(
             // All files with changes got entries
             eprintln!(
                 "{}{} changed {} file(s) that have changed since the last {}",
-                if agent_run_result.as_ref().map(|r| r.is_human).unwrap_or(true) {
+                if agent_run_result
+                    .as_ref()
+                    .map(|r| r.is_human)
+                    .unwrap_or(true)
+                {
                     "Human: "
                 } else {
                     "AI: "
@@ -208,7 +212,11 @@ pub fn run(
             // Some files were already checkpointed
             eprintln!(
                 "{}{} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
-                if agent_run_result.as_ref().map(|r| r.is_human).unwrap_or(true) {
+                if agent_run_result
+                    .as_ref()
+                    .map(|r| r.is_human)
+                    .unwrap_or(true)
+                {
                     "Human: "
                 } else {
                     "AI: "

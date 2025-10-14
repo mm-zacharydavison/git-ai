@@ -158,7 +158,14 @@ fn handle_checkpoint(args: &[String]) {
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
-                        agent_run_result = Some(agent_run);
+                        if agent_run.is_human {
+                            agent_run_result = None;
+                            if agent_run.repo_working_dir.is_some() {
+                                repository_working_dir = agent_run.repo_working_dir.unwrap();
+                            }
+                        } else {
+                            agent_run_result = Some(agent_run);
+                        }
                     }
                     Err(e) => {
                         eprintln!("Claude preset error: {}", e);
