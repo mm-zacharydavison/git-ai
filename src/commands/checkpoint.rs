@@ -48,12 +48,66 @@ pub fn run(
     // Extract edited filepaths from agent_run_result if available
     // For human checkpoints, use will_edit_filepaths to narrow git status scope
     // For AI checkpoints, use edited_filepaths
+    // Filter out paths outside the repository to prevent git call crashes
+    let mut filtered_pathspec: Option<Vec<String>> = None;
     let pathspec_filter = agent_run_result.as_ref().and_then(|result| {
-        if result.is_human {
+        let paths = if result.is_human {
             result.will_edit_filepaths.as_ref()
         } else {
             result.edited_filepaths.as_ref()
-        }
+        };
+
+        paths.and_then(|p| {
+            let repo_workdir = repo.workdir().ok()?;
+            let filtered: Vec<String> = p
+                .iter()
+                .filter_map(|path| {
+                    // Check if path is absolute and outside repo
+                    if std::path::Path::new(path).is_absolute() {
+                        // For absolute paths, check if they start with repo_workdir
+                        if !std::path::Path::new(path).starts_with(&repo_workdir) {
+                            return None;
+                        }
+                    } else {
+                        // For relative paths, join with workdir and canonicalize to check
+                        let joined = repo_workdir.join(path);
+                        // Try to canonicalize to resolve .. and . components
+                        if let Ok(canonical) = joined.canonicalize() {
+                            if !canonical.starts_with(&repo_workdir) {
+                                return None;
+                            }
+                        } else {
+                            // If we can't canonicalize (file doesn't exist), check the joined path
+                            // Convert both to canonical form if possible, otherwise use as-is
+                            let normalized_joined = joined.components().fold(
+                                std::path::PathBuf::new(),
+                                |mut acc, component| {
+                                    match component {
+                                        std::path::Component::ParentDir => {
+                                            acc.pop();
+                                        }
+                                        std::path::Component::CurDir => {}
+                                        _ => acc.push(component),
+                                    }
+                                    acc
+                                },
+                            );
+                            if !normalized_joined.starts_with(&repo_workdir) {
+                                return None;
+                            }
+                        }
+                    }
+                    Some(path.clone())
+                })
+                .collect();
+
+            if filtered.is_empty() {
+                None
+            } else {
+                filtered_pathspec = Some(filtered);
+                filtered_pathspec.as_ref()
+            }
+        })
     });
 
     let end_get_files_clock = Timer::default().start_quiet("checkpoint: get tracked files");
@@ -842,6 +896,53 @@ mod tests {
             entries_len, 0,
             "Should have 0 entries (conflicted file should be skipped)"
         );
+    }
+
+    #[test]
+    fn test_checkpoint_with_paths_outside_repo() {
+        use crate::authorship::transcript::AiTranscript;
+        use crate::authorship::working_log::AgentId;
+        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Make changes to the file
+        file.append("New line added\n").unwrap();
+
+        // Create agent run result with paths outside the repo
+        let agent_run_result = AgentRunResult {
+            agent_id: AgentId {
+                tool: "test_tool".to_string(),
+                id: "test_session".to_string(),
+                model: "test_model".to_string(),
+            },
+            transcript: Some(AiTranscript { messages: vec![] }),
+            is_human: false,
+            repo_working_dir: None,
+            edited_filepaths: Some(vec![
+                "/tmp/outside_file.txt".to_string(),
+                "../outside_parent.txt".to_string(),
+                file.filename().to_string(), // This one is valid
+            ]),
+            will_edit_filepaths: None,
+        };
+
+        // Run checkpoint - should not crash even with paths outside repo
+        let result =
+            tmp_repo.trigger_checkpoint_with_agent_result("test_user", Some(agent_run_result));
+
+        // Should succeed without crashing
+        assert!(
+            result.is_ok(),
+            "Checkpoint should succeed even with paths outside repo: {:?}",
+            result.err()
+        );
+
+        let (entries_len, files_len, _) = result.unwrap();
+        // Should only process the valid file
+        assert_eq!(files_len, 1, "Should process 1 valid file");
+        assert_eq!(entries_len, 1, "Should create 1 entry");
     }
 
     #[test]
