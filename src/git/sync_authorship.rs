@@ -70,6 +70,19 @@ pub fn fetch_authorship_notes(
         &fetch_authorship
     ));
 
+    let default_head_sha = repository
+        .remote_head(remote_name)
+        .ok()
+        .map_or(None, |head_refname| {
+            if let Ok(commit_obj) = repository.revparse_single(&head_refname) {
+                let commit_sha = commit_obj.id();
+                return Some(commit_sha);
+            }
+            return None;
+        });
+
+    debug_log(&format!("default_head_sha: {:?}", &default_head_sha));
+
     if let Err(e) = exec_git(&fetch_authorship) {
         // Treat as best-effort; do not fail the user command if authorship sync fails
         debug_log(&format!("authorship fetch skipped due to error: {}", e));

@@ -687,6 +687,16 @@ impl Repository {
         })
     }
 
+    pub fn remote_head(&self, remote_name: &str) -> Result<String, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("symbolic-ref".to_string());
+        args.push(format!("refs/remotes/{}/HEAD", remote_name));
+        args.push("--short".to_string());
+
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
     // Lookup a reference to one of the objects in a repository. Requires full ref name.
     #[allow(dead_code)]
     pub fn find_reference(&self, name: &str) -> Result<Reference<'_>, GitAiError> {
