@@ -252,6 +252,18 @@ impl OwnedCommit {
     pub fn repo(&self) -> &Repository {
         &self.repo
     }
+
+    pub fn summary(&self) -> Result<String, GitAiError> {
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--format=%s".to_string());
+        args.push(self.oid.clone());
+
+        let output = exec_git(&args)?;
+        let summary = String::from_utf8(output.stdout)?;
+        Ok(summary.trim().to_string())
+    }
 }
 
 impl<'a> Commit<'a> {
