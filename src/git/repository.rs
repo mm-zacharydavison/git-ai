@@ -1,8 +1,10 @@
 use crate::authorship::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
 use crate::error::GitAiError;
+use crate::git::cli_parser::ParsedGitInvocation;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
+use crate::git::sync_authorship::fetch_authorship_notes;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -877,6 +879,14 @@ impl Repository {
         }
         // Otherwise, just use the first remote
         Ok(remotes.get(0).map(|s| s.to_string()))
+    }
+
+    pub fn fetch_authorship(
+        &self,
+        parsed_args: &ParsedGitInvocation,
+        remote_name: &str,
+    ) -> Result<(), GitAiError> {
+        fetch_authorship_notes(self, parsed_args, remote_name)
     }
 
     pub fn upstream_remote(&self) -> Result<Option<String>, GitAiError> {
