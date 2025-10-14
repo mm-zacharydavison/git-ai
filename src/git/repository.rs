@@ -237,9 +237,34 @@ pub struct Commit<'a> {
     oid: String,
 }
 
+/// Owned version of Commit that can be sent across async boundaries
+#[derive(Clone)]
+pub struct OwnedCommit {
+    repo: Repository,
+    oid: String,
+}
+
+impl OwnedCommit {
+    pub fn id(&self) -> String {
+        self.oid.clone()
+    }
+
+    pub fn repo(&self) -> &Repository {
+        &self.repo
+    }
+}
+
 impl<'a> Commit<'a> {
     pub fn id(&self) -> String {
         self.oid.clone()
+    }
+
+    /// Create an owned commit with a cloned repository for async processing
+    pub fn to_owned_commit(&self) -> OwnedCommit {
+        OwnedCommit {
+            repo: self.repo.clone(),
+            oid: self.oid.clone(),
+        }
     }
 
     pub fn tree(&self) -> Result<Tree<'a>, GitAiError> {
@@ -603,7 +628,7 @@ impl<'a> Iterator for References<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Repository {
     global_args: Vec<String>,
     git_dir: PathBuf,

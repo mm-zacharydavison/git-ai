@@ -1,5 +1,7 @@
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::error::GitAiError;
 use crate::git::refs::get_commits_with_notes_from_list;
-use crate::git::repository::{CommitRange, find_repository_in_path};
+use crate::git::repository::{CommitRange, OwnedCommit, find_repository_in_path};
 
 pub fn restore_authorship(args: &[String]) {
     // Validate arguments
@@ -78,6 +80,59 @@ pub fn restore_authorship(args: &[String]) {
         commits_without_notes.len(),
         commit_shas.len()
     );
+
+    // Process commits in parallel with concurrency limit
+    let concurrency_limit = 10;
+
+    // Convert to owned commits for async processing
+    let owned_commits: Vec<OwnedCommit> = commits_without_notes
+        .iter()
+        .map(|c| c.to_owned_commit())
+        .collect();
+
+    smol::block_on(async {
+        let semaphore = std::sync::Arc::new(smol::lock::Semaphore::new(concurrency_limit));
+        let mut tasks = Vec::new();
+
+        for commit in owned_commits {
+            let sem = semaphore.clone();
+
+            let task = smol::spawn(async move {
+                let _permit = sem.acquire().await;
+
+                let _ = reconstruct_authorship_for_commit(commit).await;
+            });
+
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        for task in tasks {
+            task.await;
+        }
+    });
+
+    eprintln!("All commits processed!");
+}
+
+async fn reconstruct_authorship_for_commit(
+    default_branch: String,
+    commit: OwnedCommit,
+) -> Result<(AuthorshipLog), GitAiError> {
+    // Step 1 - Parse the commit summary and look for a branch name ie `feat/text` < maybe we need regex package now?
+    // Ignore default_branch if we find it. Ie skip origin/main if we find it, and keep searching for feat/text or whatever they call it
+
+    // Step 2 - If the branch name is found, fetch it into ai/authorship-fix/  git fetch origin feat/xyz:ai/authorship-fix/ --force
+
+    // Step 3 - Check if the first commit in that refname is on the default_branch (main)
+    // this basically checks if we have enoug history checked out locally to reconstruct.
+    // If not fail with a graceful error
+
+    // Step 4 - call rewrite_authorship_after_squash_or_rebase (internal library) with the commit ID (passed into this function) and the last commit in the branch lineage
+
+    // always clean up! even if a step fails make sure we clear ai/authorship-fix/branch
+
+    // Return Authorship Log Ok(authorship_log)
 }
 
 fn parse_commit_range(commit_range: &str) -> (String, String) {
