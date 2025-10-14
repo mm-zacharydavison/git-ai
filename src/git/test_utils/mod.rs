@@ -393,6 +393,7 @@ impl TmpRepo {
             is_human: false,
             repo_working_dir: None,
             edited_filepaths: None,
+            will_edit_filepaths: None,
         };
 
         checkpoint(

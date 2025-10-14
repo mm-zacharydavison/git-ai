@@ -210,6 +210,7 @@ fn handle_checkpoint(args: &[String]) {
                     transcript: None,
                     repo_working_dir: None,
                     edited_filepaths: None,
+                    will_edit_filepaths: None,
                 });
             }
             _ => {}

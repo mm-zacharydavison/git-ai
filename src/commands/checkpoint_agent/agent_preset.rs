@@ -20,6 +20,7 @@ pub struct AgentRunResult {
     pub transcript: Option<AiTranscript>,
     pub repo_working_dir: Option<String>,
     pub edited_filepaths: Option<Vec<String>>,
+    pub will_edit_filepaths: Option<Vec<String>>,
 }
 
 pub trait AgentCheckpointPreset {
@@ -80,11 +81,26 @@ impl AgentCheckpointPreset for ClaudePreset {
         };
 
         // Extract file_path from tool_input if present
-        let edited_filepaths = hook_data
+        let file_path_as_vec = hook_data
             .get("tool_input")
             .and_then(|ti| ti.get("file_path"))
             .and_then(|v| v.as_str())
             .map(|path| vec![path.to_string()]);
+
+        // Check if this is a PreToolUse event (human checkpoint)
+        let hook_event_name = hook_data.get("hook_event_name").and_then(|v| v.as_str());
+
+        if hook_event_name == Some("PreToolUse") {
+            // Early return for human checkpoint
+            return Ok(AgentRunResult {
+                agent_id,
+                is_human: true,
+                transcript: None,
+                repo_working_dir: None,
+                edited_filepaths: None,
+                will_edit_filepaths: file_path_as_vec,
+            });
+        }
 
         Ok(AgentRunResult {
             agent_id,
@@ -92,7 +108,8 @@ impl AgentCheckpointPreset for ClaudePreset {
             transcript: Some(transcript),
             // use default.
             repo_working_dir: None,
-            edited_filepaths,
+            edited_filepaths: file_path_as_vec,
+            will_edit_filepaths: None,
         })
     }
 }
@@ -161,6 +178,7 @@ impl AgentCheckpointPreset for CursorPreset {
                 transcript: None,
                 repo_working_dir: Some(repo_working_dir),
                 edited_filepaths: None,
+                will_edit_filepaths: None,
             });
         }
 
@@ -216,6 +234,7 @@ impl AgentCheckpointPreset for CursorPreset {
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
             edited_filepaths,
+            will_edit_filepaths: None,
         })
     }
 }
@@ -568,6 +587,7 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
             edited_filepaths,
+            will_edit_filepaths: None,
         })
     }
 }
