@@ -5,7 +5,7 @@ use crate::git::repository::{Repository, exec_git};
 use crate::git::sync_authorship::{fetch_authorship_notes, fetch_remote_from_args};
 use crate::utils::debug_log;
 
-pub fn fetch_post_command_hook(
+pub fn fetch_pull_post_command_hook(
     repository: &Repository,
     parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
