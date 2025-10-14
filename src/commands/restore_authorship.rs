@@ -3,7 +3,6 @@ use crate::authorship::rebase_authorship::rewrite_authorship_after_squash_or_reb
 use crate::error::GitAiError;
 use crate::git::refs::get_commits_with_notes_from_list;
 use crate::git::repository::{CommitRange, OwnedCommit, find_repository_in_path};
-use regex::Regex;
 
 pub fn restore_authorship(args: &[String]) {
     // Validate arguments
@@ -144,26 +143,38 @@ async fn reconstruct_authorship_for_commit(
             .output();
     };
 
-    // Step 1: Parse the commit summary and look for a branch name
-    let summary = commit.summary()?;
-    let branch_name = match extract_branch_name(&summary, &default_branch) {
-        Some(name) => name,
+    // Step 1: Check ai-reflog for this merge commit
+    let reflog_note = match get_ai_reflog_note(&repository, &commit_id) {
+        Some(note) => note,
         None => {
             return Err(GitAiError::Generic(format!(
-                "No branch name found in commit message: {}",
-                summary
+                "No ai-reflog entry found for merge commit: {}. Skipping reconstruction.",
+                commit_id
             )));
         }
     };
 
-    eprintln!("  Found branch name: {}", branch_name);
+    let (branch_name, branch_head) = match parse_reflog_note(&reflog_note) {
+        Some((branch, head)) => (branch, head),
+        None => {
+            return Err(GitAiError::Generic(format!(
+                "Invalid ai-reflog note format: {}",
+                reflog_note
+            )));
+        }
+    };
 
-    // Step 2: Fetch the branch into ai/authorship-fix/
+    eprintln!(
+        "  Found ai-reflog entry: branch={}, head={}",
+        branch_name, branch_head
+    );
+
+    // Step 2: Fetch the branch HEAD into temp ref
     let remote = extract_remote(&default_branch).unwrap_or("origin");
     let fetch_result = std::process::Command::new(crate::config::Config::get().git_cmd())
         .arg("fetch")
         .arg(remote)
-        .arg(format!("{}:{}", branch_name, temp_ref))
+        .arg(format!("{}:{}", branch_head, temp_ref))
         .arg("--force")
         .current_dir(&repo_path)
         .output();
@@ -171,8 +182,8 @@ async fn reconstruct_authorship_for_commit(
     if let Err(e) = fetch_result {
         cleanup();
         return Err(GitAiError::Generic(format!(
-            "Failed to fetch branch {}: {}",
-            branch_name, e
+            "Failed to fetch commit {}: {}",
+            branch_head, e
         )));
     }
 
@@ -180,16 +191,15 @@ async fn reconstruct_authorship_for_commit(
     if !output.status.success() {
         cleanup();
         return Err(GitAiError::Generic(format!(
-            "Failed to fetch branch {}: {}",
-            branch_name,
+            "Failed to fetch commit {}: {}",
+            branch_head,
             String::from_utf8_lossy(&output.stderr)
         )));
     }
 
-    eprintln!("  Fetched branch into {}", temp_ref);
+    eprintln!("  Fetched branch HEAD {} into {}", branch_head, temp_ref);
 
-    // Step 3: Check if the first commit in that refname is on the default_branch
-    // Get the first commit of the fetched branch
+    // Step 3: Verify the fetched commit is connected to default branch
     let merge_base_result = std::process::Command::new(crate::config::Config::get().git_cmd())
         .arg("merge-base")
         .arg(&default_branch)
@@ -214,61 +224,14 @@ async fn reconstruct_authorship_for_commit(
         ));
     }
 
-    let merge_base = String::from_utf8_lossy(&merge_base_output.stdout)
-        .trim()
-        .to_string();
-
-    // Verify merge base exists and is on default branch
-    let is_ancestor_result = std::process::Command::new(crate::config::Config::get().git_cmd())
-        .arg("merge-base")
-        .arg("--is-ancestor")
-        .arg(&merge_base)
-        .arg(&default_branch)
-        .current_dir(&repo_path)
-        .output();
-
-    if let Err(e) = is_ancestor_result {
-        cleanup();
-        return Err(GitAiError::Generic(format!(
-            "Failed to verify merge base: {}",
-            e
-        )));
-    }
-
-    if !is_ancestor_result.unwrap().status.success() {
-        cleanup();
-        return Err(GitAiError::Generic(
-            "Merge base is not on default branch. Not enough history to reconstruct.".to_string(),
-        ));
-    }
-
     eprintln!("  Verified branch history is connected to default branch");
-
-    // Step 4: Get the HEAD of the fetched branch
-    let branch_head_result = std::process::Command::new(crate::config::Config::get().git_cmd())
-        .arg("rev-parse")
-        .arg(&temp_ref)
-        .current_dir(&repo_path)
-        .output();
-
-    if let Err(e) = branch_head_result {
-        cleanup();
-        return Err(GitAiError::Generic(format!(
-            "Failed to get branch head: {}",
-            e
-        )));
-    }
-
-    let branch_head = String::from_utf8_lossy(&branch_head_result.unwrap().stdout)
-        .trim()
-        .to_string();
 
     eprintln!(
         "  Reconstructing authorship from {} to {}",
         branch_head, commit_id
     );
 
-    // Step 5: Call rewrite_authorship_after_squash_or_rebase
+    // Step 4: Call rewrite_authorship_after_squash_or_rebase
     let result = rewrite_authorship_after_squash_or_rebase(
         repository,
         "", // destination_branch not used
@@ -295,54 +258,35 @@ async fn reconstruct_authorship_for_commit(
     }
 }
 
-/// Extract branch name from commit message, excluding the default branch
-/// Looks for common merge patterns like:
-/// - "Merge pull request #123 from user/branch-name"
-/// - "Merge branch 'feature/xyz' into main"
-/// - "Merge branch 'branch-name'"
-fn extract_branch_name(summary: &str, default_branch: &str) -> Option<String> {
-    // Extract default branch name without remote prefix (e.g., "main" from "origin/main")
-    let default_branch_name = default_branch.split('/').last().unwrap_or(default_branch);
+/// Get ai-reflog note for a commit if it exists
+fn get_ai_reflog_note(
+    repo: &crate::git::repository::Repository,
+    commit_sha: &str,
+) -> Option<String> {
+    let mut args = repo.global_args_for_exec();
+    args.push("notes".to_string());
+    args.push("--ref=ai-reflog".to_string());
+    args.push("show".to_string());
+    args.push(commit_sha.to_string());
 
-    // Pattern 1: GitHub/GitLab style "from username/branch-name" or "from branch-name"
-    // Matches: "Merge pull request #123 from user/branch-name"
-    let from_pattern = Regex::new(r"from\s+(?:[a-zA-Z0-9_-]+/)?([a-zA-Z0-9_/-]+)").ok()?;
-    if let Some(cap) = from_pattern.captures(summary) {
-        if let Some(branch_match) = cap.get(1) {
-            let branch = branch_match.as_str();
-            if branch != default_branch_name && branch != default_branch {
-                return Some(branch.to_string());
-            }
-        }
+    match crate::git::repository::exec_git(&args) {
+        Ok(output) => String::from_utf8(output.stdout)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        Err(_) => None,
     }
+}
 
-    // Pattern 2: "Merge branch 'branch-name'" or "Merge branch \"branch-name\""
-    // Matches: "Merge branch 'feat/xyz' into main"
-    let branch_quoted_pattern =
-        Regex::new(r#"[Mm]erge\s+branch\s+['"]([a-zA-Z0-9_/-]+)['"]"#).ok()?;
-    if let Some(cap) = branch_quoted_pattern.captures(summary) {
-        if let Some(branch_match) = cap.get(1) {
-            let branch = branch_match.as_str();
-            if branch != default_branch_name && branch != default_branch {
-                return Some(branch.to_string());
-            }
-        }
+/// Parse ai-reflog note format: "{branch_refname} {branch_head_commit}"
+/// Example: "origin/main 8c1a000878cd22bc04a04822da423d87143f728a"
+fn parse_reflog_note(note: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = note.split_whitespace().collect();
+    if parts.len() >= 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
     }
-
-    // Pattern 3: "Merge branch branch-name" (without quotes)
-    // Be more restrictive - require slash in branch name to avoid matching random words
-    let branch_unquoted_pattern =
-        Regex::new(r"[Mm]erge\s+branch\s+([a-zA-Z0-9_-]+/[a-zA-Z0-9_/-]+)").ok()?;
-    if let Some(cap) = branch_unquoted_pattern.captures(summary) {
-        if let Some(branch_match) = cap.get(1) {
-            let branch = branch_match.as_str();
-            if branch != default_branch_name && branch != default_branch {
-                return Some(branch.to_string());
-            }
-        }
-    }
-
-    None
 }
 
 /// Extract remote name from refname (e.g., "origin" from "origin/main")

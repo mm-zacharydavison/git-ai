@@ -676,7 +676,6 @@ dependencies = [
  "once_cell",
  "predicates",
  "rand",
- "regex",
  "rusqlite",
  "serde",
  "serde_json",
