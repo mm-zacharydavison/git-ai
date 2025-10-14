@@ -49,6 +49,10 @@ pub fn handle_git_ai(args: &[String]) {
         "restore-authorship" => {
             commands::restore_authorship::restore_authorship(&args[1..]);
         }
+        "log-pr-closed" => {
+            _ = commands::log_pr_closed::log_pr_closed(&args[1..]);
+            std::process::exit(0);
+        }
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
