@@ -1,6 +1,7 @@
 use crate::git::refs::{
     AI_AUTHORSHIP_PUSH_REFSPEC, copy_ref, merge_notes_from_ref, ref_exists, tracking_ref_for_remote,
 };
+use crate::git::repository::CommitRange;
 use crate::{
     error::GitAiError,
     git::{cli_parser::ParsedGitInvocation, repository::exec_git},
@@ -42,11 +43,11 @@ pub fn fetch_remote_from_args(
 }
 
 // for use with post-fetch and post-pull and post-clone hooks
-pub fn fetch_authorship_notes(
-    repository: &Repository,
+pub fn fetch_authorship_notes<'a>(
+    repository: &'a Repository,
     parsed_args: &ParsedGitInvocation,
     remote_name: &str,
-) -> Result<(), GitAiError> {
+) -> Result<Option<CommitRange<'a>>, GitAiError> {
     // Generate tracking ref for this remote
     let tracking_ref = tracking_ref_for_remote(&remote_name);
     let fetch_refspec = format!("+refs/notes/ai:{}", tracking_ref);
@@ -81,8 +82,6 @@ pub fn fetch_authorship_notes(
             return None;
         });
 
-    debug_log(&format!("default_head_sha: {:?}", &default_head_sha));
-
     if let Err(e) = exec_git(&fetch_authorship) {
         // Treat as best-effort; do not fail the user command if authorship sync fails
         debug_log(&format!("authorship fetch skipped due to error: {}", e));
@@ -116,7 +115,28 @@ pub fn fetch_authorship_notes(
         }
     }
 
-    Ok(())
+    let after_fetch_default_head_sha =
+        repository
+            .remote_head(remote_name)
+            .ok()
+            .map_or(None, |head_refname| {
+                if let Ok(commit_obj) = repository.revparse_single(&head_refname) {
+                    let commit_sha = commit_obj.id();
+                    return Some(commit_sha);
+                }
+                return None;
+            });
+
+    // Only create a CommitRange if we have both start and end commits
+    match (default_head_sha, after_fetch_default_head_sha) {
+        (Some(start), Some(end)) => Ok(Some(CommitRange::new(
+            repository,
+            start,
+            end,
+            tracking_ref.to_string(),
+        ))),
+        _ => Ok(None),
+    }
 }
 // for use with post-push hook
 pub fn push_authorship_notes(

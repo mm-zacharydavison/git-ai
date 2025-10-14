@@ -34,6 +34,145 @@ impl<'a> Object<'a> {
     }
 }
 
+#[derive(Debug)]
+pub struct CommitRange<'a> {
+    repo: &'a Repository,
+    pub start_oid: String,
+    pub end_oid: String,
+    pub refname: String,
+}
+
+impl<'a> CommitRange<'a> {
+    pub fn new(repo: &'a Repository, start_oid: String, end_oid: String, refname: String) -> Self {
+        Self {
+            repo,
+            start_oid,
+            end_oid,
+            refname,
+        }
+    }
+
+    pub fn is_valid(&self) -> Result<(), GitAiError> {
+        // Check that both commits exist
+        self.repo.find_commit(self.start_oid.clone())?;
+        self.repo.find_commit(self.end_oid.clone())?;
+
+        // Check that both commits exist on the refname
+        // Use git merge-base --is-ancestor <commit> <refname>
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.start_oid.clone());
+        args.push(self.refname.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not reachable from refname {}",
+                self.start_oid, self.refname
+            ))
+        })?;
+
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.end_oid.clone());
+        args.push(self.refname.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not reachable from refname {}",
+                self.end_oid, self.refname
+            ))
+        })?;
+
+        // Check that start is an ancestor of end (direct path between them)
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.start_oid.clone());
+        args.push(self.end_oid.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not an ancestor of {}",
+                self.start_oid, self.end_oid
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    pub fn length(&self) -> usize {
+        // Use git rev-list --count to get the number of commits between start and end
+        // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-list".to_string());
+        args.push("--count".to_string());
+        args.push(format!("{}..{}", self.start_oid, self.end_oid));
+
+        match exec_git(&args) {
+            Ok(output) => {
+                let count_str = String::from_utf8(output.stdout).unwrap_or_default();
+                count_str.trim().parse().unwrap_or(0)
+            }
+            Err(_) => 0, // If they don't share lineage or error occurs, return 0
+        }
+    }
+}
+
+impl<'a> IntoIterator for CommitRange<'a> {
+    type Item = Commit<'a>;
+    type IntoIter = CommitRangeIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // Use git rev-list to get all commits between start and end
+        // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-list".to_string());
+        args.push(format!("{}..{}", self.start_oid, self.end_oid));
+
+        let commit_oids: Vec<String> = match exec_git(&args) {
+            Ok(output) => {
+                let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+                stdout
+                    .lines()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+            Err(_) => Vec::new(), // If they don't share lineage or error occurs, return empty
+        };
+
+        CommitRangeIterator {
+            repo: self.repo,
+            commit_oids,
+            index: 0,
+        }
+    }
+}
+
+pub struct CommitRangeIterator<'a> {
+    repo: &'a Repository,
+    commit_oids: Vec<String>,
+    index: usize,
+}
+
+impl<'a> Iterator for CommitRangeIterator<'a> {
+    type Item = Commit<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.commit_oids.len() {
+            return None;
+        }
+        let oid = self.commit_oids[self.index].clone();
+        self.index += 1;
+        Some(Commit {
+            repo: self.repo,
+            oid,
+        })
+    }
+}
+
 pub struct Signature<'a> {
     #[allow(dead_code)]
     repo: &'a Repository,
@@ -464,6 +603,7 @@ impl<'a> Iterator for References<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Repository {
     global_args: Vec<String>,
     git_dir: PathBuf,
@@ -891,11 +1031,11 @@ impl Repository {
         Ok(remotes.get(0).map(|s| s.to_string()))
     }
 
-    pub fn fetch_authorship(
-        &self,
+    pub fn fetch_authorship<'a>(
+        &'a self,
         parsed_args: &ParsedGitInvocation,
         remote_name: &str,
-    ) -> Result<(), GitAiError> {
+    ) -> Result<Option<CommitRange<'a>>, GitAiError> {
         fetch_authorship_notes(self, parsed_args, remote_name)
     }
 

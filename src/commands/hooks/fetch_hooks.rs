@@ -15,5 +15,5 @@ pub fn fetch_pull_post_command_hook(
     }
 
     let remote = fetch_remote_from_args(repository, parsed_args).ok();
-    _ = fetch_authorship_notes(repository, parsed_args, remote.unwrap().as_str());
+    let fetched_authorship = repository.fetch_authorship(parsed_args, remote.unwrap().as_str());
 }

@@ -46,7 +46,9 @@ pub fn handle_git_ai(args: &[String]) {
                 std::process::exit(1);
             }
         }
-
+        "restore-authorship" => {
+            commands::restore_authorship::restore_authorship(&args[1..]);
+        }
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }

@@ -5,5 +5,6 @@ pub mod git_ai_handlers;
 pub mod git_handlers;
 pub mod hooks;
 pub mod install_hooks;
+pub mod restore_authorship;
 pub mod squash_authorship;
 pub mod stats_delta;
