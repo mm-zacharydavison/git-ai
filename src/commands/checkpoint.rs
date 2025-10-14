@@ -39,6 +39,12 @@ pub fn run(
     let repo_storage = RepoStorage::for_repo_path(repo.path());
     let working_log = repo_storage.working_log_for_base_commit(&base_commit);
 
+    // Determine if this is a human checkpoint
+    let is_human = agent_run_result
+        .as_ref()
+        .map(|result| result.is_human)
+        .unwrap_or(true);
+
     // Extract edited filepaths from agent_run_result if available
     // For human checkpoints, use will_edit_filepaths to narrow git status scope
     // For AI checkpoints, use edited_filepaths
@@ -153,8 +159,8 @@ pub fn run(
         let mut checkpoint =
             Checkpoint::new(combined_hash.clone(), author.to_string(), entries.clone());
 
-        // Set transcript and agent_id if provided
-        if let Some(agent_run) = &agent_run_result {
+        // Set transcript and agent_id if provided and not a human checkpoint
+        if !is_human && let Some(agent_run) = &agent_run_result {
             checkpoint.transcript = Some(agent_run.transcript.clone().unwrap_or_default());
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
@@ -167,7 +173,7 @@ pub fn run(
         checkpoints.push(checkpoint);
     }
 
-    let agent_tool = if let Some(agent_run_result) = &agent_run_result {
+    let agent_tool = if !is_human && let Some(agent_run_result) = &agent_run_result {
         Some(agent_run_result.agent_id.tool.as_str())
     } else {
         None
@@ -195,15 +201,7 @@ pub fn run(
             // All files with changes got entries
             eprintln!(
                 "{}{} changed {} file(s) that have changed since the last {}",
-                if agent_run_result
-                    .as_ref()
-                    .map(|r| r.is_human)
-                    .unwrap_or(true)
-                {
-                    "Human: "
-                } else {
-                    "AI: "
-                },
+                if is_human { "Human: " } else { "AI: " },
                 log_author,
                 files_with_entries,
                 label
@@ -212,15 +210,7 @@ pub fn run(
             // Some files were already checkpointed
             eprintln!(
                 "{}{} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
-                if agent_run_result
-                    .as_ref()
-                    .map(|r| r.is_human)
-                    .unwrap_or(true)
-                {
-                    "Human: "
-                } else {
-                    "AI: "
-                },
+                if is_human { "Human: " } else { "AI: " },
                 log_author,
                 files_with_entries,
                 total_uncommitted_files,
