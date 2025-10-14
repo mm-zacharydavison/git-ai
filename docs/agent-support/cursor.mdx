@@ -22,12 +22,12 @@ If you'd like to verify that Cursor has picked up your hooks:
   "hooks": {
     "afterFileEdit": [
       {
-        "command": "/Users/svarlamov/projects/git-ai/target/debug/git-ai checkpoint cursor --hook-input \"$(cat)\""
+        "command": "/absolute/path/to/git-ai checkpoint cursor --hook-input stdin"
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "/Users/svarlamov/projects/git-ai/target/debug/git-ai checkpoint cursor --hook-input \"$(cat)\""
+        "command": "/absolute/path/to/git-ai checkpoint cursor --hook-input stdin"
       }
     ]
   },
