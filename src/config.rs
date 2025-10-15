@@ -13,6 +13,7 @@ pub struct Config {
     git_path: String,
     ignore_prompts: bool,
     allow_repositories: HashSet<String>,
+    exclude_repositories: HashSet<String>,
 }
 #[derive(Deserialize)]
 struct FileConfig {
@@ -22,6 +23,8 @@ struct FileConfig {
     ignore_prompts: Option<bool>,
     #[serde(default)]
     allow_repositories: Option<Vec<String>>,
+    #[serde(default)]
+    exclude_repositories: Option<Vec<String>>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -49,7 +52,21 @@ impl Config {
     }
 
     pub fn is_allowed_repository(&self, repository: &Option<Repository>) -> bool {
-        // If allowlist is empty, allow everything
+
+        // First check if repository is in exclusion list - exclusions take precedence
+        if !self.exclude_repositories.is_empty() && let Some(repository) = repository {
+            if let Some(remotes) = repository.remotes_with_urls().ok() {
+                // If any remote matches the exclusion list, deny access
+                if remotes
+                    .iter()
+                    .any(|remote| self.exclude_repositories.contains(&remote.1))
+                {
+                    return false;
+                }
+            }
+        }
+
+        // If allowlist is empty, allow everything (unless excluded above)
         if self.allow_repositories.is_empty() {
             return true;
         }
@@ -86,6 +103,12 @@ fn build_config() -> Config {
         .unwrap_or(vec![])
         .into_iter()
         .collect();
+    let exclude_repositories = file_cfg
+        .as_ref()
+        .and_then(|c| c.exclude_repositories.clone())
+        .unwrap_or(vec![])
+        .into_iter()
+        .collect();
 
     let git_path = resolve_git_path(&file_cfg);
 
@@ -93,6 +116,7 @@ fn build_config() -> Config {
         git_path,
         ignore_prompts,
         allow_repositories,
+        exclude_repositories,
     }
 }
 
@@ -167,4 +191,62 @@ fn is_executable(path: &Path) -> bool {
     // Basic check: existence is sufficient for our purposes; OS will enforce exec perms.
     // On Unix we could check permissions, but many filesystems differ. Keep it simple.
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_config(
+        allow_repositories: Vec<String>,
+        exclude_repositories: Vec<String>,
+    ) -> Config {
+        Config {
+            git_path: "/usr/bin/git".to_string(),
+            ignore_prompts: false,
+            allow_repositories: allow_repositories.into_iter().collect(),
+            exclude_repositories: exclude_repositories.into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn test_exclusion_takes_precedence_over_allow() {
+        let config = create_test_config(
+            vec!["https://github.com/allowed/repo".to_string()],
+            vec!["https://github.com/allowed/repo".to_string()],
+        );
+
+        // Test with None repository - should return false when allowlist is active
+        assert!(!config.is_allowed_repository(&None));
+    }
+
+    #[test]
+    fn test_empty_allowlist_allows_everything() {
+        let config = create_test_config(vec![], vec![]);
+
+        // With empty allowlist, should allow everything
+        assert!(config.is_allowed_repository(&None));
+    }
+
+    #[test]
+    fn test_exclude_without_allow() {
+        let config = create_test_config(
+            vec![],
+            vec!["https://github.com/excluded/repo".to_string()],
+        );
+
+        // With empty allowlist but exclusions, should allow everything (exclusions only matter when checking remotes)
+        assert!(config.is_allowed_repository(&None));
+    }
+
+    #[test]
+    fn test_allow_without_exclude() {
+        let config = create_test_config(
+            vec!["https://github.com/allowed/repo".to_string()],
+            vec![],
+        );
+
+        // With allowlist but no exclusions, should deny when no repository provided
+        assert!(!config.is_allowed_repository(&None));
+    }
 }
