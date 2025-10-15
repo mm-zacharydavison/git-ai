@@ -1,8 +1,9 @@
 
 <img src="assets/docs/git-ai.png" align="right"
-     alt="Git AI by acunniffe/git-ai" width="120" height="120">
+     alt="Git AI by acunniffe/git-ai" width="100" height="100">
 
 <h1 align="left"><b>git-ai</b></h1>
+
 <p align="left">Track the AI Code in your repositories</p>
 
 ## Quick Start 
