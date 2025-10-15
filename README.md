@@ -1,6 +1,6 @@
 
 <img src="assets/docs/git-ai.png" align="right"
-     alt="Git AI by acunniffe/git-ai" width="100" height="100" >
+     alt="Git AI by acunniffe/git-ai" width="70" height="70" >
 
 <h1 align="left" style="margin-top: 90px"><b>git-ai</b></h1>
 
