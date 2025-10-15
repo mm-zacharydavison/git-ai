@@ -49,12 +49,6 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Unnoticiable impact even in xxl repos (<100ms). **we test in [Chromium](https://github.com/chromium/chromium)**
 
 
-
-
-
-
-
-
 ## Agent Support
 
 `git-ai` automatically sets up all supported agent hooks using the `git-ai install-hooks` command
@@ -72,101 +66,16 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 
 > **Want to add yours?** All PRs welcome! Add documentation to `docs/agent-support/`
 
-### How it works
 
-`git-ai` is a git CLI wrapper. It proxies commands, args, and flags to your `git` binary. You and your IDEs won't notice the difference, but all your code will be annotated with AI Authorship.
-
-Internally, `git-ai` creates checkpoints to establish authorship of specific lines of code. Agents call `git-ai checkpoint` before they write to the file system to mark any previous edits as yours. After they write to the file system, they call `checkpoint agent-name ...` to mark their contributions as AI-generated and to save the associated propmpts. These checkpoints work similarly to how IDEs handle local history and they do not leave your machine. When you commit, `git-ai` compresses and packages the final authorship log and prompt transcripts into a git note attached to the commit.
+## How `git-ai` works 
+[▶️ Video](https://youtube.com) [🗺️ Diagram](https://github.com/acunniffe/git-ai)
 
 
-### `git-ai` commands
+## Installing the PR Bot (in development)
 
-All `git-ai` commands follow this pattern:
+> [Request early access here](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
 
-```bash
-git-ai <command> [options]
-```
-##### `stats`
-
-Show AI authorship statistics for a commit. Displays how much code was written by humans vs AI.
-
-```bash
-# Show stats for current HEAD
-git-ai stats
-
-# Show stats for specific commit
-git-ai stats <commit-sha>
-
-# Output in JSON format
-git-ai stats --json
-git-ai stats <commit-sha> --json
-```
-
-**Options:**
-- `<commit-sha>` - Optional commit SHA (defaults to HEAD)
-- `--json` - Output statistics in JSON format
-
-##### `blame`
-
-Enhanced version of `git blame` that shows AI authorship attribution alongside traditional git blame.
-
-```bash
-git-ai blame <file>
-```
-
-**Arguments:**
-- `<file>` - Path to the file to blame (required)
-
-**Options:**
-Mostly API Compatible, supports same options as [`git blame`](https://git-scm.com/docs/git-blame). 
-
-##### `install-hooks`
-
-Automatically configure Claude Code, Cursor and GitHub Copilot to send authorship information to the `git-ai` binary 
-
-```bash
-git-ai install-hooks
-```
-
-### `git` proxy behavior 
-
-After the `git-ai` binary is installed and put on the `$PATH`, it handles all invocations of `git` and `git-ai`. 
-
-`git-ai` aims to be a transparent proxy with an unnoticeable performance impact. We reguarly run builds against [`git`'s unit tests](https://github.com/git/git/tree/master/t) to maximize cross platform compatibility and test the performance of our AI checkpointing code.
-
-There two behavior changes `git-ai` introduces:
-
-1. After commits, `git-ai` adds an AI Authorship log linked to the commit in `notes/ai` and print this visualization for developers: 
-
-![alt](/assets/docs/graph.jpg)
-
-2. In Git, notes do not sync by default. `git-ai` will append the refspec for `notes/ai` to `fetch` / `push` calls so they are always synced. 
+![alt](assets/docs/bot.png)
 
 
-### Known limitations
-
-- Tab completions (from AI or traditional intellisense) are currently considered human edits.
-- Authorship logs will not survive rebase, unless the rebase operation is run without git-ai (for ex, if the rebase is done on GitHub, the authorship logs from the affected commits will be quietly lost).
-- AI deletions are not measured, only AI Additions and Total AI Line Count in the repo
-
-## Developing `git-ai`
-
-```bash
-git clone https://github.com/acunniffe/git-ai.git
-cd git-ai
-cargo build
-cargo test
-```
-
-Putting a development build of `git-ai` on your path
-
-```
-sh scripts/dev-symlinks.sh
-task debug:local 
-```
-_you'll need to install [taskfile_](https://taskfile.dev/docs/installation)_
-
-
-### License
-
-MIT
+## Guides
