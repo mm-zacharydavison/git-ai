@@ -27,15 +27,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 <img src="assets/docs/supported-agents.png" width="320" />
 
-> *More coming soon*
+### Next step: **Just code and commit!**
+Once `git-ai` is installed Cursor, Claude Code and GitHub Copilot will automatically call the CLI to mark the code they generate as AI-authored. 
 
-#### Next step: **Just code and commit!**
-The Coding Agents (above) use `git-ai` to mark all the code they generate as AI-authored. 
+When you create a new commit, `git-ai` adds a git note that tracks which lines were AI-authored and prints the code authorship: 
 
-On commit, `git-ai` adds a note that tracks which lines were AI-authored andoutput AI stats:
-
-
-<img src="assets/docs/graph.jpg" width="300" />
+<img src="assets/docs/graph.jpg" width="400" />
 
 If you're curious about the AI authorship of any file `git-ai blame` will show you which lines are AI generated:
 
