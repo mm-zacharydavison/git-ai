@@ -17,7 +17,7 @@ title: Claude Code
       {
         "hooks": [
           {
-            "command": "git-ai checkpoint claude --hook-input \"$(cat)\" 2>/dev/null || true",
+            "command": "git-ai checkpoint claude --hook-input stdin",
             "type": "command"
           }
         ],
@@ -28,7 +28,7 @@ title: Claude Code
       {
         "hooks": [
           {
-            "command": "git-ai checkpoint 2>/dev/null || true",
+            "command": "git-ai checkpoint claude --hook-input stdin",
             "type": "command"
           }
         ],

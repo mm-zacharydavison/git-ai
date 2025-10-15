@@ -11,7 +11,6 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 pub struct AgentCheckpointFlags {
-    pub prompt_id: Option<String>,
     pub hook_input: Option<String>,
 }
 
@@ -20,6 +19,8 @@ pub struct AgentRunResult {
     pub is_human: bool,
     pub transcript: Option<AiTranscript>,
     pub repo_working_dir: Option<String>,
+    pub edited_filepaths: Option<Vec<String>>,
+    pub will_edit_filepaths: Option<Vec<String>>,
 }
 
 pub trait AgentCheckpointPreset {
@@ -79,12 +80,36 @@ impl AgentCheckpointPreset for ClaudePreset {
             model: model.unwrap_or_else(|| "unknown".to_string()),
         };
 
+        // Extract file_path from tool_input if present
+        let file_path_as_vec = hook_data
+            .get("tool_input")
+            .and_then(|ti| ti.get("file_path"))
+            .and_then(|v| v.as_str())
+            .map(|path| vec![path.to_string()]);
+
+        // Check if this is a PreToolUse event (human checkpoint)
+        let hook_event_name = hook_data.get("hook_event_name").and_then(|v| v.as_str());
+
+        if hook_event_name == Some("PreToolUse") {
+            // Early return for human checkpoint
+            return Ok(AgentRunResult {
+                agent_id,
+                is_human: true,
+                transcript: None,
+                repo_working_dir: None,
+                edited_filepaths: None,
+                will_edit_filepaths: file_path_as_vec,
+            });
+        }
+
         Ok(AgentRunResult {
             agent_id,
             is_human: false,
             transcript: Some(transcript),
             // use default.
             repo_working_dir: None,
+            edited_filepaths: file_path_as_vec,
+            will_edit_filepaths: None,
         })
     }
 }
@@ -152,11 +177,10 @@ impl AgentCheckpointPreset for CursorPreset {
                 is_human: true,
                 transcript: None,
                 repo_working_dir: Some(repo_working_dir),
+                edited_filepaths: None,
+                will_edit_filepaths: None,
             });
         }
-
-        // Use prompt_id if provided, otherwise use conversation_id
-        let composer_id = flags.prompt_id.unwrap_or(conversation_id);
 
         // Locate Cursor storage
         let user_dir = Self::cursor_user_dir()?;
@@ -171,12 +195,12 @@ impl AgentCheckpointPreset for CursorPreset {
             )));
         }
 
-        // Fetch the composer data and extract transcript + model
-        let payload = Self::fetch_composer_payload(&global_db, &composer_id)?;
+        // Fetch the composer data and extract transcript + model + edited filepaths
+        let payload = Self::fetch_composer_payload(&global_db, &conversation_id)?;
         let (transcript, model) = Self::transcript_data_from_composer_payload(
             &payload,
             &global_db,
-            &composer_id,
+            &conversation_id,
         )?
         .unwrap_or_else(|| {
             // Return empty transcript as default
@@ -188,9 +212,19 @@ impl AgentCheckpointPreset for CursorPreset {
             (AiTranscript::new(), "unknown".to_string())
         });
 
+        // Extract edited filepaths
+        let mut edited_filepaths: Option<Vec<String>> = None;
+        let file_path = hook_data
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !file_path.is_empty() {
+            edited_filepaths = Some(vec![file_path.to_string()]);
+        }
+
         let agent_id = AgentId {
             tool: "cursor".to_string(),
-            id: composer_id,
+            id: conversation_id,
             model,
         };
 
@@ -199,6 +233,8 @@ impl AgentCheckpointPreset for CursorPreset {
             is_human: false,
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
+            edited_filepaths,
+            will_edit_filepaths: None,
         })
     }
 }
@@ -404,46 +440,51 @@ impl CursorPreset {
                         }
                     }
 
-                    // Handle content arrays for tool_use and structured content
-                    if let Some(content_array) =
-                        bubble_content.get("content").and_then(|v| v.as_array())
-                    {
-                        for item in content_array {
-                            match item.get("type").and_then(|v| v.as_str()) {
-                                Some("text") => {
-                                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                        let trimmed = text.trim();
-                                        if !trimmed.is_empty() {
-                                            let role = header
-                                                .get("type")
-                                                .and_then(|v| v.as_i64())
-                                                .unwrap_or(0);
-                                            if role == 1 {
-                                                transcript.add_message(Message::user(
-                                                    trimmed.to_string(),
-                                                    bubble_created_at.clone(),
-                                                ));
-                                            } else {
-                                                transcript.add_message(Message::assistant(
-                                                    trimmed.to_string(),
-                                                    bubble_created_at.clone(),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                                Some("tool_use") => {
-                                    let name_opt = item.get("name").and_then(|v| v.as_str());
-                                    let input_val = item.get("input").cloned();
-                                    if let (Some(name), Some(input)) = (name_opt, input_val) {
-                                        transcript.add_message(Message::tool_use(
-                                            name.to_string(),
-                                            input,
-                                        ));
-                                    }
-                                }
-                                _ => {}
+                    // Handle tool calls and edits
+                    if let Some(tool_former_data) = bubble_content.get("toolFormerData") {
+                        let tool_name = tool_former_data
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let raw_args_str = tool_former_data
+                            .get("rawArgs")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("{}");
+                        let raw_args_json = serde_json::from_str::<serde_json::Value>(raw_args_str)
+                            .unwrap_or(serde_json::Value::Null);
+                        match tool_name {
+                            "edit_file" => {
+                                let target_file =
+                                    raw_args_json.get("target_file").and_then(|v| v.as_str());
+                                transcript.add_message(Message::tool_use(
+                                    tool_name.to_string(),
+                                    // Explicitly clear out everything other than target_file (renamed to file_path for consistency in git-ai) (too much data in rawArgs)
+                                    serde_json::json!({ "file_path": target_file.unwrap_or("") }),
+                                ));
                             }
+                            "apply_patch"
+                            | "edit_file_v2_apply_patch"
+                            | "search_replace"
+                            | "edit_file_v2_search_replace"
+                            | "write"
+                            | "MultiEdit" => {
+                                let file_path =
+                                    raw_args_json.get("file_path").and_then(|v| v.as_str());
+                                transcript.add_message(Message::tool_use(
+                                    tool_name.to_string(),
+                                    // Explicitly clear out everything other than file_path (too much data in rawArgs)
+                                    serde_json::json!({ "file_path": file_path.unwrap_or("") }),
+                                ));
+                            }
+                            "codebase_search" | "grep" | "read_file" | "web_search"
+                            | "run_terminal_cmd" | "glob_file_search" | "todo_write"
+                            | "file_search" | "grep_search" | "list_dir" | "ripgrep" => {
+                                transcript.add_message(Message::tool_use(
+                                    tool_name.to_string(),
+                                    raw_args_json,
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -531,7 +572,7 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             .to_string();
 
         // Build transcript and model via helper
-        let (transcript, detected_model) =
+        let (transcript, detected_model, edited_filepaths) =
             GithubCopilotPreset::transcript_and_model_from_copilot_session_json(&session_content)?;
 
         let agent_id = AgentId {
@@ -545,15 +586,17 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             is_human: false,
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
+            edited_filepaths,
+            will_edit_filepaths: None,
         })
     }
 }
 
 impl GithubCopilotPreset {
-    /// Translate a GitHub Copilot chat session JSON string into an AiTranscript and optional model.
+    /// Translate a GitHub Copilot chat session JSON string into an AiTranscript, optional model, and edited filepaths.
     pub fn transcript_and_model_from_copilot_session_json(
         session_json_str: &str,
-    ) -> Result<(AiTranscript, Option<String>), GitAiError> {
+    ) -> Result<(AiTranscript, Option<String>, Option<Vec<String>>), GitAiError> {
         let session_json: serde_json::Value =
             serde_json::from_str(session_json_str).map_err(|e| GitAiError::JsonError(e))?;
 
@@ -569,6 +612,7 @@ impl GithubCopilotPreset {
 
         let mut transcript = AiTranscript::new();
         let mut detected_model: Option<String> = None;
+        let mut edited_filepaths: Vec<String> = Vec::new();
 
         for request in requests {
             // Parse the human timestamp once per request (unix ms and RFC3339)
@@ -630,7 +674,29 @@ impl GithubCopilotPreset {
                                 }
                             }
                             // Other structured response elements worth capturing
-                            "textEditGroup" | "prepareToolInvocation" => {
+                            "textEditGroup" => {
+                                // Extract file path from textEditGroup
+                                if let Some(uri_obj) = item.get("uri") {
+                                    let path_opt = uri_obj
+                                        .get("fsPath")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                        .or_else(|| {
+                                            uri_obj
+                                                .get("path")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                        });
+                                    if let Some(p) = path_opt {
+                                        if !edited_filepaths.contains(&p) {
+                                            edited_filepaths.push(p);
+                                        }
+                                    }
+                                }
+                                transcript
+                                    .add_message(Message::tool_use(kind.to_string(), item.clone()));
+                            }
+                            "prepareToolInvocation" => {
                                 transcript
                                     .add_message(Message::tool_use(kind.to_string(), item.clone()));
                             }
@@ -745,6 +811,6 @@ impl GithubCopilotPreset {
             }
         }
 
-        Ok((transcript, detected_model))
+        Ok((transcript, detected_model, Some(edited_filepaths)))
     }
 }

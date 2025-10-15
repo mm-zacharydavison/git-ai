@@ -4,7 +4,7 @@ use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::debug_log;
+use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ pub fn run(
     quiet: bool,
     agent_run_result: Option<AgentRunResult>,
 ) -> Result<(usize, usize, usize), GitAiError> {
+    let total_timer = Timer::default();
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
         Ok(head) => match head.target() {
@@ -38,7 +39,81 @@ pub fn run(
     let repo_storage = RepoStorage::for_repo_path(repo.path());
     let working_log = repo_storage.working_log_for_base_commit(&base_commit);
 
-    let files = get_all_tracked_files(repo, &base_commit, &working_log)?;
+    // Determine if this is a human checkpoint
+    let is_human = agent_run_result
+        .as_ref()
+        .map(|result| result.is_human)
+        .unwrap_or(true);
+
+    // Extract edited filepaths from agent_run_result if available
+    // For human checkpoints, use will_edit_filepaths to narrow git status scope
+    // For AI checkpoints, use edited_filepaths
+    // Filter out paths outside the repository to prevent git call crashes
+    let mut filtered_pathspec: Option<Vec<String>> = None;
+    let pathspec_filter = agent_run_result.as_ref().and_then(|result| {
+        let paths = if result.is_human {
+            result.will_edit_filepaths.as_ref()
+        } else {
+            result.edited_filepaths.as_ref()
+        };
+
+        paths.and_then(|p| {
+            let repo_workdir = repo.workdir().ok()?;
+            let filtered: Vec<String> = p
+                .iter()
+                .filter_map(|path| {
+                    // Check if path is absolute and outside repo
+                    if std::path::Path::new(path).is_absolute() {
+                        // For absolute paths, check if they start with repo_workdir
+                        if !std::path::Path::new(path).starts_with(&repo_workdir) {
+                            return None;
+                        }
+                    } else {
+                        // For relative paths, join with workdir and canonicalize to check
+                        let joined = repo_workdir.join(path);
+                        // Try to canonicalize to resolve .. and . components
+                        if let Ok(canonical) = joined.canonicalize() {
+                            if !canonical.starts_with(&repo_workdir) {
+                                return None;
+                            }
+                        } else {
+                            // If we can't canonicalize (file doesn't exist), check the joined path
+                            // Convert both to canonical form if possible, otherwise use as-is
+                            let normalized_joined = joined.components().fold(
+                                std::path::PathBuf::new(),
+                                |mut acc, component| {
+                                    match component {
+                                        std::path::Component::ParentDir => {
+                                            acc.pop();
+                                        }
+                                        std::path::Component::CurDir => {}
+                                        _ => acc.push(component),
+                                    }
+                                    acc
+                                },
+                            );
+                            if !normalized_joined.starts_with(&repo_workdir) {
+                                return None;
+                            }
+                        }
+                    }
+                    Some(path.clone())
+                })
+                .collect();
+
+            if filtered.is_empty() {
+                None
+            } else {
+                filtered_pathspec = Some(filtered);
+                filtered_pathspec.as_ref()
+            }
+        })
+    });
+
+    let end_get_files_clock = Timer::default().start_quiet("checkpoint: get tracked files");
+    let files = get_all_tracked_files(repo, &base_commit, &working_log, pathspec_filter)?;
+    let get_files_duration = end_get_files_clock();
+    Timer::default().print_duration("checkpoint: get tracked files", get_files_duration);
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
         working_log.reset_working_log()?;
@@ -95,11 +170,15 @@ pub fn run(
                 debug_log("");
             }
         }
+        Timer::default().print_duration("checkpoint: total", total_timer.epoch.elapsed());
         return Ok((0, files.len(), checkpoints.len()));
     }
 
     // Save current file states and get content hashes
+    let end_save_states_clock = Timer::default().start_quiet("checkpoint: persist file versions");
     let file_content_hashes = save_current_file_states(&working_log, &files)?;
+    let save_states_duration = end_save_states_clock();
+    Timer::default().print_duration("checkpoint: persist file versions", save_states_duration);
 
     // Order file hashes by key and create a hash of the ordered hashes
     let mut ordered_hashes: Vec<_> = file_content_hashes.iter().collect();
@@ -113,6 +192,7 @@ pub fn run(
     let combined_hash = format!("{:x}", combined_hasher.finalize());
 
     // If this is not the first checkpoint, diff against the last saved state
+    let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
         get_initial_checkpoint_entries(repo, &files, &base_commit, &file_content_hashes)?
@@ -125,24 +205,29 @@ pub fn run(
             checkpoints.last(),
         )?
     };
+    let entries_duration = end_entries_clock();
+    Timer::default().print_duration("checkpoint: compute entries", entries_duration);
 
     // Skip adding checkpoint if there are no changes
     if !entries.is_empty() {
         let mut checkpoint =
             Checkpoint::new(combined_hash.clone(), author.to_string(), entries.clone());
 
-        // Set transcript and agent_id if provided
-        if let Some(agent_run) = &agent_run_result {
+        // Set transcript and agent_id if provided and not a human checkpoint
+        if !is_human && let Some(agent_run) = &agent_run_result {
             checkpoint.transcript = Some(agent_run.transcript.clone().unwrap_or_default());
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
 
         // Append checkpoint to the working log
+        let end_append_clock = Timer::default().start_quiet("checkpoint: append working log");
         working_log.append_checkpoint(&checkpoint)?;
+        let append_duration = end_append_clock();
+        Timer::default().print_duration("checkpoint: append working log", append_duration);
         checkpoints.push(checkpoint);
     }
 
-    let agent_tool = if let Some(agent_run_result) = &agent_run_result {
+    let agent_tool = if !is_human && let Some(agent_run_result) = &agent_run_result {
         Some(agent_run_result.agent_id.tool.as_str())
     } else {
         None
@@ -170,11 +255,7 @@ pub fn run(
             // All files with changes got entries
             eprintln!(
                 "{}{} changed {} file(s) that have changed since the last {}",
-                if agent_run_result.is_some() {
-                    "AI: "
-                } else {
-                    "Human: "
-                },
+                if is_human { "Human: " } else { "AI: " },
                 log_author,
                 files_with_entries,
                 label
@@ -183,11 +264,7 @@ pub fn run(
             // Some files were already checkpointed
             eprintln!(
                 "{}{} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
-                if agent_run_result.is_some() {
-                    "AI: "
-                } else {
-                    "Human: "
-                },
+                if is_human { "Human: " } else { "AI: " },
                 log_author,
                 files_with_entries,
                 total_uncommitted_files,
@@ -198,14 +275,24 @@ pub fn run(
     }
 
     // Return the requested values: (entries_len, files_len, working_log_len)
+    Timer::default().print_duration("checkpoint: total", total_timer.epoch.elapsed());
     Ok((entries.len(), files.len(), checkpoints.len()))
 }
 
-fn get_all_files(repo: &Repository) -> Result<Vec<String>, GitAiError> {
+fn get_all_files(
+    repo: &Repository,
+    edited_filepaths: Option<&Vec<String>>,
+) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
 
+    // Convert edited_filepaths to HashSet for git status if provided
+    let pathspec = edited_filepaths.map(|paths| {
+        use std::collections::HashSet;
+        paths.iter().cloned().collect::<HashSet<String>>()
+    });
+
     // Use porcelain v2 format to get status
-    let statuses = repo.status(None)?;
+    let statuses = repo.status(pathspec.as_ref())?;
 
     for entry in statuses {
         // Skip ignored files
@@ -248,8 +335,9 @@ fn get_all_tracked_files(
     repo: &Repository,
     _base_commit: &str,
     working_log: &PersistedWorkingLog,
+    edited_filepaths: Option<&Vec<String>>,
 ) -> Result<Vec<String>, GitAiError> {
-    let mut files = get_all_files(repo)?;
+    let mut files = get_all_files(repo, edited_filepaths)?;
 
     // Also include files that were in previous checkpoints but might not show up in git status
     // This ensures we track deletions when files return to their original state
@@ -808,6 +896,53 @@ mod tests {
             entries_len, 0,
             "Should have 0 entries (conflicted file should be skipped)"
         );
+    }
+
+    #[test]
+    fn test_checkpoint_with_paths_outside_repo() {
+        use crate::authorship::transcript::AiTranscript;
+        use crate::authorship::working_log::AgentId;
+        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+
+        // Create a repo with an initial commit
+        let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+
+        // Make changes to the file
+        file.append("New line added\n").unwrap();
+
+        // Create agent run result with paths outside the repo
+        let agent_run_result = AgentRunResult {
+            agent_id: AgentId {
+                tool: "test_tool".to_string(),
+                id: "test_session".to_string(),
+                model: "test_model".to_string(),
+            },
+            transcript: Some(AiTranscript { messages: vec![] }),
+            is_human: false,
+            repo_working_dir: None,
+            edited_filepaths: Some(vec![
+                "/tmp/outside_file.txt".to_string(),
+                "../outside_parent.txt".to_string(),
+                file.filename().to_string(), // This one is valid
+            ]),
+            will_edit_filepaths: None,
+        };
+
+        // Run checkpoint - should not crash even with paths outside repo
+        let result =
+            tmp_repo.trigger_checkpoint_with_agent_result("test_user", Some(agent_run_result));
+
+        // Should succeed without crashing
+        assert!(
+            result.is_ok(),
+            "Checkpoint should succeed even with paths outside repo: {:?}",
+            result.err()
+        );
+
+        let (entries_len, files_len, _) = result.unwrap();
+        // Should only process the valid file
+        assert_eq!(files_len, 1, "Should process 1 valid file");
+        assert_eq!(entries_len, 1, "Should create 1 entry");
     }
 
     #[test]

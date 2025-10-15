@@ -10,6 +10,7 @@ use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::utils::Timer;
 use std::io::IsTerminal;
+use std::io::Read;
 
 pub fn handle_git_ai(args: &[String]) {
     if args.is_empty() {
@@ -65,24 +66,30 @@ pub fn handle_git_ai(args: &[String]) {
 fn print_help() {
     eprintln!("git-ai - git proxy with AI authorship tracking");
     eprintln!("");
-    eprintln!("Usage: git-ai <git or git-ai command> [args...]");
+    eprintln!("Usage: git-ai <command> [args...]");
     eprintln!("");
     eprintln!("Commands:");
-    eprintln!("  checkpoint         checkpoint working changes and specify author");
-    eprintln!("    Presets: claude, cursor. Debug/Testing presets mock_ai");
-    eprintln!("    --show-working-log    Display current working log");
-    eprintln!("    --reset               Reset working log");
-    eprintln!("  blame              [override] git blame with AI authorship tracking");
+    eprintln!("  checkpoint         Checkpoint working changes and attribute author");
+    eprintln!("    Presets: claude, cursor, github-copilot, mock_ai");
     eprintln!(
-        "  commit             [wrapper] pass through to 'git commit' with git-ai before/after hooks"
+        "    --hook-input <json|stdin>   JSON payload required by presets, or 'stdin' to read from stdin"
     );
-    eprintln!("  stats              Show AI authorship statistics for a commit");
-    eprintln!("    <commit>               Optional commit SHA (defaults to current HEAD)");
+    eprintln!("    --show-working-log          Display current working log");
+    eprintln!("    --reset                     Reset working log");
+    eprintln!("  blame <file>       Git blame with AI authorship overlay");
+    eprintln!("  stats [commit]     Show AI authorship statistics for a commit");
     eprintln!("    --json                 Output in JSON format");
+    eprintln!(
+        "  stats-delta        Generate authorship logs for children of commits with working logs"
+    );
+    eprintln!("    --json                 Output created notes as JSON");
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
     eprintln!("  squash-authorship  Generate authorship from squashed commits");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
+    eprintln!("  git-path           Print the path to the underlying git executable");
+    eprintln!("  version, -v, --version     Print the git-ai version");
+    eprintln!("  help, -h, --help           Show this help message");
     eprintln!("");
     std::process::exit(0);
 }
@@ -94,24 +101,13 @@ fn handle_checkpoint(args: &[String]) {
         .to_string();
 
     // Parse checkpoint-specific arguments
-    let mut author = None;
     let mut show_working_log = false;
     let mut reset = false;
-    let mut prompt_id = None;
     let mut hook_input = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--author" => {
-                if i + 1 < args.len() {
-                    author = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --author requires a value");
-                    std::process::exit(1);
-                }
-            }
             "--show-working-log" => {
                 show_working_log = true;
                 i += 1;
@@ -120,21 +116,29 @@ fn handle_checkpoint(args: &[String]) {
                 reset = true;
                 i += 1;
             }
-            "--prompt-id" => {
-                if i + 1 < args.len() {
-                    prompt_id = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: --prompt-id requires a value");
-                    std::process::exit(1);
-                }
-            }
             "--hook-input" => {
                 if i + 1 < args.len() {
                     hook_input = Some(args[i + 1].clone());
+                    if hook_input.as_ref().unwrap() == "stdin" {
+                        let mut stdin = std::io::stdin();
+                        let mut buffer = String::new();
+                        if let Err(e) = stdin.read_to_string(&mut buffer) {
+                            eprintln!("Failed to read stdin for hook input: {}", e);
+                            std::process::exit(1);
+                        }
+                        if !buffer.trim().is_empty() {
+                            hook_input = Some(buffer);
+                        } else {
+                            eprintln!("No hook input provided (via --hook-input or stdin).");
+                            std::process::exit(1);
+                        }
+                    } else if hook_input.as_ref().unwrap().trim().is_empty() {
+                        eprintln!("Error: --hook-input requires a value");
+                        std::process::exit(1);
+                    }
                     i += 2;
                 } else {
-                    eprintln!("Error: --hook-input requires a value");
+                    eprintln!("Error: --hook-input requires a value or 'stdin' to read from stdin");
                     std::process::exit(1);
                 }
             }
@@ -151,10 +155,12 @@ fn handle_checkpoint(args: &[String]) {
         match args[0].as_str() {
             "claude" => {
                 match ClaudePreset.run(AgentCheckpointFlags {
-                    prompt_id: prompt_id.clone(),
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
+                        if agent_run.repo_working_dir.is_some() {
+                            repository_working_dir = agent_run.repo_working_dir.clone().unwrap();
+                        }
                         agent_run_result = Some(agent_run);
                     }
                     Err(e) => {
@@ -165,18 +171,13 @@ fn handle_checkpoint(args: &[String]) {
             }
             "cursor" => {
                 match CursorPreset.run(AgentCheckpointFlags {
-                    prompt_id: prompt_id.clone(),
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
-                        if agent_run.is_human {
-                            agent_run_result = None;
-                            if agent_run.repo_working_dir.is_some() {
-                                repository_working_dir = agent_run.repo_working_dir.unwrap();
-                            }
-                        } else {
-                            agent_run_result = Some(agent_run);
+                        if agent_run.repo_working_dir.is_some() {
+                            repository_working_dir = agent_run.repo_working_dir.clone().unwrap();
                         }
+                        agent_run_result = Some(agent_run);
                     }
                     Err(e) => {
                         eprintln!("Error running Cursor preset: {}", e);
@@ -186,7 +187,6 @@ fn handle_checkpoint(args: &[String]) {
             }
             "github-copilot" => {
                 match GithubCopilotPreset.run(AgentCheckpointFlags {
-                    prompt_id: prompt_id.clone(),
                     hook_input: hook_input.clone(),
                 }) {
                     Ok(agent_run) => {
@@ -208,6 +208,8 @@ fn handle_checkpoint(args: &[String]) {
                     is_human: false,
                     transcript: None,
                     repo_working_dir: None,
+                    edited_filepaths: None,
+                    will_edit_filepaths: None,
                 });
             }
             _ => {}
@@ -236,11 +238,9 @@ fn handle_checkpoint(args: &[String]) {
         }
     };
 
-    let final_author = author.as_ref().unwrap_or(&default_user_name);
-
     if let Err(e) = commands::checkpoint::run(
         &repo,
-        final_author,
+        &default_user_name,
         show_working_log,
         reset,
         false,

@@ -15,12 +15,12 @@ const MIN_CLAUDE_VERSION: (u32, u32) = (2, 0);
 
 // Command patterns for hooks (after "git-ai")
 // Claude Code hooks (uses shell, so relative path works)
-const CLAUDE_PRE_TOOL_CMD: &str = "checkpoint 2>/dev/null || true";
-const CLAUDE_POST_TOOL_CMD: &str = "checkpoint claude --hook-input \"$(cat)\" 2>/dev/null || true";
+const CLAUDE_PRE_TOOL_CMD: &str = "checkpoint claude --hook-input stdin";
+const CLAUDE_POST_TOOL_CMD: &str = "checkpoint claude --hook-input stdin";
 
 // Cursor hooks (requires absolute path to avoid shell config loading delay)
-const CURSOR_BEFORE_SUBMIT_CMD: &str = "checkpoint cursor --hook-input \"$(cat)\"";
-const CURSOR_AFTER_EDIT_CMD: &str = "checkpoint cursor --hook-input \"$(cat)\"";
+const CURSOR_BEFORE_SUBMIT_CMD: &str = "checkpoint cursor --hook-input stdin";
+const CURSOR_AFTER_EDIT_CMD: &str = "checkpoint cursor --hook-input stdin";
 
 pub fn run(args: &[String]) -> Result<(), GitAiError> {
     // Parse --dry-run flag (default: false)
@@ -492,7 +492,7 @@ fn install_claude_code_hooks(dry_run: bool) -> Result<Option<String>, GitAiError
 
         for (idx, hook) in hooks_array.iter().enumerate() {
             if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                if is_git_ai_checkpoint_command(cmd, *hook_type == "PostToolUse") {
+                if is_git_ai_checkpoint_command(cmd) {
                     if found_idx.is_none() {
                         found_idx = Some(idx);
                         // Check if it matches exactly what we want
@@ -521,7 +521,7 @@ fn install_claude_code_hooks(dry_run: bool) -> Result<Option<String>, GitAiError
                         current_idx += 1;
                         true
                     } else if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                        let is_dup = is_git_ai_checkpoint_command(cmd, *hook_type == "PostToolUse");
+                        let is_dup = is_git_ai_checkpoint_command(cmd);
                         current_idx += 1;
                         !is_dup // Keep if it's NOT a git-ai checkpoint command
                     } else {
@@ -588,24 +588,12 @@ fn install_claude_code_hooks(dry_run: bool) -> Result<Option<String>, GitAiError
 }
 
 /// Check if a command is a git-ai checkpoint command
-fn is_git_ai_checkpoint_command(cmd: &str, is_post_tool: bool) -> bool {
+fn is_git_ai_checkpoint_command(cmd: &str) -> bool {
     // Must contain "git-ai" and "checkpoint"
     if !cmd.contains("git-ai") || !cmd.contains("checkpoint") {
         return false;
     }
-
-    // For PostToolUse, we're more specific - looking for commands with/without "claude" or "--hook-input"
-    // For PreToolUse, just "git-ai checkpoint" is enough
-    if is_post_tool {
-        // Match any of: "git-ai checkpoint claude", "git-ai checkpoint --hook-input", or just "git-ai checkpoint"
-        // We want to catch all variations to update them
-        cmd.contains("git-ai checkpoint")
-    } else {
-        // For PreToolUse, match "git-ai checkpoint" (without claude/hook-input since PreToolUse doesn't use those)
-        cmd.contains("git-ai checkpoint")
-            && !cmd.contains("claude")
-            && !cmd.contains("--hook-input")
-    }
+    true
 }
 
 fn install_cursor_hooks(binary_path: &Path, dry_run: bool) -> Result<Option<String>, GitAiError> {
@@ -1539,7 +1527,7 @@ mod tests {
 
             for (idx, hook) in hooks_array.iter().enumerate() {
                 if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                    if is_git_ai_checkpoint_command(cmd, *hook_type == "PostToolUse") {
+                    if is_git_ai_checkpoint_command(cmd) {
                         if found_idx.is_none() {
                             found_idx = Some(idx);
                             if cmd != *desired_cmd {
@@ -1569,7 +1557,7 @@ mod tests {
                         true
                     } else if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
                         // Remove if it's another git-ai checkpoint command
-                        !is_git_ai_checkpoint_command(cmd, *hook_type == "PostToolUse")
+                        !is_git_ai_checkpoint_command(cmd)
                     } else {
                         true
                     };
@@ -1800,41 +1788,30 @@ mod tests {
     #[test]
     fn test_is_git_ai_checkpoint_command() {
         // PreToolUse commands (is_post_tool = false)
-        assert!(is_git_ai_checkpoint_command("git-ai checkpoint", false));
+        assert!(is_git_ai_checkpoint_command("git-ai checkpoint"));
+        assert!(is_git_ai_checkpoint_command(&format!(
+            "git-ai {}",
+            CLAUDE_PRE_TOOL_CMD
+        )));
+        assert!(is_git_ai_checkpoint_command("git-ai checkpoint claude"));
         assert!(is_git_ai_checkpoint_command(
-            &format!("git-ai {}", CLAUDE_PRE_TOOL_CMD),
-            false
-        ));
-        assert!(!is_git_ai_checkpoint_command(
-            "git-ai checkpoint claude",
-            false
-        )); // Should not match PreToolUse
-        assert!(!is_git_ai_checkpoint_command(
-            "git-ai checkpoint --hook-input",
-            false
-        )); // Should not match PreToolUse
-
-        // PostToolUse commands (is_post_tool = true)
-        assert!(is_git_ai_checkpoint_command(
-            "git-ai checkpoint claude",
-            true
+            "git-ai checkpoint --hook-input"
         ));
         assert!(is_git_ai_checkpoint_command(
-            "git-ai checkpoint claude --hook-input \"$(cat)\"",
-            true
+            "git-ai checkpoint claude --hook-input \"$(cat)\""
         ));
+        assert!(is_git_ai_checkpoint_command(&format!(
+            "git-ai {}",
+            CLAUDE_POST_TOOL_CMD
+        )));
         assert!(is_git_ai_checkpoint_command(
-            &format!("git-ai {}", CLAUDE_POST_TOOL_CMD),
-            true
-        ));
-        assert!(is_git_ai_checkpoint_command(
-            "git-ai checkpoint --hook-input \"$(cat)\"",
-            true
+            "git-ai checkpoint --hook-input \"$(cat)\""
         ));
 
         // Non-matching commands
-        assert!(!is_git_ai_checkpoint_command("echo hello", false));
-        assert!(!is_git_ai_checkpoint_command("git status", false));
-        assert!(!is_git_ai_checkpoint_command("checkpoint", false));
+        assert!(!is_git_ai_checkpoint_command("echo hello"));
+        assert!(!is_git_ai_checkpoint_command("git status"));
+        assert!(!is_git_ai_checkpoint_command("checkpoint"));
+        assert!(!is_git_ai_checkpoint_command("git-ai"));
     }
 }
