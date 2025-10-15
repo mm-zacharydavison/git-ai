@@ -23,16 +23,19 @@ curl -sSL https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh | b
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/acunniffe/git-ai/main/install.ps1 | iex"
 ```
 
-🎊 That's it! No per-repo setup. Once installed `git-ai` will work OOTB with any of **Supported Agents** *More coming soon*:
+🎊 That's it! **No per-repo setup.** Once installed `git-ai` will work OOTB with any of these **Supported Agents**:  
 
 <img src="assets/docs/supported-agents.png" width="320" />
+
+> *More coming soon*
 
 #### Next step: **Just code and commit!**
 The Coding Agents (above) use `git-ai` to mark all the code they generate as AI-authored. 
 
 On commit, `git-ai` adds a note that tracks which lines were AI-authored andoutput AI stats:
 
-![alt](/assets/docs/graph.jpg) 
+
+<img src="assets/docs/graph.jpg" width="300" />
 
 If you're curious about the AI authorship of any file `git-ai blame` will show you which lines are AI generated:
 
@@ -74,11 +77,33 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 [▶️ Video](https://youtube.com) [🗺️ Diagram](https://github.com/acunniffe/git-ai)
 
 
-## Installing the PR Bot (in development)
+## Installing the PR Bot (currently in-development)
+
+We're building a PR Bot to aggregate `git-ai` data at the PR, Repository and Organization levels. 
+
+- See AI-Authorship for every Pull Request
+- Measure % of your Code that is AI generated (and the trend)
+- AI Cost per-PR and Accepted AI Rate (low when a lot of AI code is deleted and regenerated, high when it gets it right the first time). 
 
 > [Request early access here](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
 
 ![alt](assets/docs/bot.png)
 
 
-## Guides
+## Documentation
+
+- How `git-ai` works and its limitations 
+- Installing `git-ai`
+- Performance and Compatibility  
+- Configuring `git-ai` for the enterprise
+
+
+**Agent Guides**
+- Cursor
+- Claude Code
+- GitHub Copilot 
+
+**Contributing**
+- Adding Support for new Agents
+- Contributors Guide 
+
