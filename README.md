@@ -23,12 +23,12 @@ curl -sSL https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh | b
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/acunniffe/git-ai/main/install.ps1 | iex"
 ```
 
-🎊 That's it! **No per-repo setup.** Once installed `git-ai` will work OOTB with any of these **Supported Agents**:  
+🎊 That's it! **No per-repo setup.** Once installed Git AI will work OOTB with any of these **Supported Agents**:  
 
 <img src="assets/docs/supported-agents.png" width="320" />
 
 ### Next step: **Just code and commit!**
-Once `git-ai` is installed Cursor, Claude Code and GitHub Copilot will automatically call the CLI to mark the code they generate as AI-authored. 
+Once installed, Cursor, Claude Code and GitHub Copilot will automatically call the CLI to mark the code they generate as AI-authored. 
 
 When you create a new commit, `git-ai` adds a git note that tracks which lines were AI-authored and prints the code authorship: 
 
@@ -42,15 +42,15 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 
 ## Goals of `git-ai` project
 
-🤖 **Track AI code in a Multi-Agent** world. Because developers get to choose their tools, engineering teams need a **vendor agnostic** way to track AI impact and keep track of the AI code in their repos. 
+🤖 **Track AI code in a Multi-Agent** world. Because developers get to choose their tools, engineering teams need a **vendor agnostic** way to track AI impact in their repos. 
 
-🎯 **Accurate attribution** from Laptop → Pull Request → Merged. Claude Code, Cursor and Copilot do not count correctly because they can not see what happens to code after it's generated. 
+🎯 **Accurate attribution** from Laptop → Pull Request → Merged. Claude Code, Cursor and Copilot cannot track code after generation—Git AI follows it through the entire workflow. 
 
 🔄 **Support real-world git workflows** by making sure AI-Authorship annotations survive a `merge --squash`, `rebase`, `reset`, `cherry-pick` etc.
 
-🔗 **Maintain link between prompts and code** - there is a lot of valuable context and requirments in your team's prompts -- don't throw them away. 
+🔗 **Maintain link between prompts and code** - there is valuable context and requirements in team prompts—preserve them alongside code. 
 
-🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Unnoticiable impact even in xxl repos (<100ms). **we test in [Chromium](https://github.com/chromium/chromium)**
+🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Negligible impact even in large repos (<100ms). Tested in [Chromium](https://github.com/chromium/chromium).
 
 
 ## Agent Support
@@ -77,23 +77,24 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 
 ## Installing the PR Bot (currently in-development)
 
-We're building a PR Bot to aggregate `git-ai` data at the PR, Repository and Organization levels. 
+A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels: 
 
-- See AI-Authorship for every Pull Request
-- Measure % of your Code that is AI generated (and the trend)
-- AI Cost per-PR and Accepted AI Rate (low when a lot of AI code is deleted and regenerated, high when it gets it right the first time). 
+- AI authorship breakdown for every Pull Request
+- Measure % of code that is AI generated (and the trend)
+- AI Cost per-PR and accepted AI rate (measures how often AI code is accepted on first generation)
 
-> [Request early access here](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
+> [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
 
 ![alt](assets/docs/bot.png)
 
 
 ## Documentation
 
-- How `git-ai` works and its limitations
-- Configuring `git-ai` for the enterprise
+- How Git AI works and its limitations
+- Git AI Blame and Stats
+- Configuring Git AI for the enterprise
 
 **Contributing**
-- Adding Support for new Agents
-- Contributors Guide 
+- Adding support for new agents
+- Contributors guide 
 

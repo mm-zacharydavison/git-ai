@@ -26,7 +26,14 @@ All the options in `config.json` are optional, and will fall back to default val
 }
 ```
 
-## Installing `git-ai` binary on developer machines
+# Distribution Options
+
+There are two ways to distribute `git-ai` to developer machines: 
+
+- As a Git Wrapper via MDM or an install script (recommended)
+- By installing git-ai and configuring core hooks (much more complex, but avoids wrapping git)
+
+## Installing `git-ai` as a Git Wrapper on developer machines
 
 When `git-ai` is installed using the [`install.sh` script](https://github.com/acunniffe/git-ai?tab=readme-ov-file#install) (reccomended for personal use) the downloaded binary will be configured to handle calls to both `git` and `git-ai`, effectively creating a wrapper/proxy to `git`. 
 
@@ -79,4 +86,22 @@ Our official install scripts implement all of these requirements and can serve a
 
 These scripts handle edge cases like detecting the original git path, preventing recursive installations, and gracefully handling errors. 
 
+## Installing Git AI with `core.hooksPath`
 
+Git version 2.35 (released in 2022) introduced support for configuring git hooks in a central location across all repositories on a machine. 
+
+**Important:** `core.hooksPath` overrides rather than extends repo-specific hooks. Each Git AI hook must be configured to invoke both:
+1. The Git AI-specific logic
+2. The hooks in the repository's `.git/hooks` folder
+
+The following hooks must be implemented:
+- `pre-commit`
+- `post-commit`
+- `pre-push`
+- `post-checkout`
+- `post-rewrite`
+- `pre-rebase`
+- `post-rebase`
+- `post-reset`
+
+This approach is more complex than the git wrapper method. We're still working on public documentation for this approach and figuring out the best practices. If you're interested in rolling out Git AI without having to proxy git on developer machines [schedule a call with one of the maintainers and we'll help you get started.](https://calendly.com/acunniffe/meeting-with-git-ai-authors).
