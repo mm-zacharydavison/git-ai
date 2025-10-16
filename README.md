@@ -64,15 +64,10 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Negligible impact even in large repos (<100ms). Tested in [Chromium](https://github.com/chromium/chromium).
 
 
-## How `git-ai` works 
-[▶️ Video](https://youtube.com) [🗺️ Diagram](https://github.com/acunniffe/git-ai)
-
 ## Documentation
-
-- [How Git AI works and its limitations](https://usegitai.com/docs/how-git-ai-works)
+- How Git AI Works and its Limitations [▶️ Video](https://youtube.com) [🗺️ Diagram](https://usegitai.com/docs/how-git-ai-works)
 - [Git AI Commands](https://usegitai.com/docs/reference)
 - [Configuring Git AI for the enterprise](https://usegitai.com/docs/enterprise-configuration)
-
 
 ## Agent Support
 
