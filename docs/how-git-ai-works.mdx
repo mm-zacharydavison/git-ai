@@ -1,5 +1,7 @@
 ---
-title: How Git AI works
+title: How Git AI Works - Technical Architecture and Design
+description: Learn how Git AI tracks AI code authorship through checkpoints, authorship logs, and git notes. Understand the technical design behind accurate AI attribution through the entire development lifecycle.
+keywords: git ai architecture, authorship logs, git notes, checkpoints, ai code tracking, code attribution, git blame, operational transforms
 ---
 
 Most attempts to quantify and track AI code authorship focus on counting lines of code at the moment of insertion. That approach tends to overcount AI code because it doesn't track code through the entire development lifecycle. What if a developer undoes the AI change? Copies an AI function to a new part of the repo? Performs a rebase? Cherry-picks the code many commits later on a different branch? Accurate measurement requires following code from the development machine through to merge.
