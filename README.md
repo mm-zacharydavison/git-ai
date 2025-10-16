@@ -90,11 +90,11 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 
 ## Documentation
 
-- How Git AI works and its limitations
-- Git AI Blame and Stats
-- Configuring Git AI for the enterprise
+- [How Git AI works and its limitations](https://usegitai.com/docs/how-git-ai-works)
+- [Git AI Commands](https://usegitai.com/docs/reference)
+- [Configuring Git AI for the enterprise](https://usegitai.com/docs/enterprise-configuration)
 
-**Contributing**
+<!-- **Contributing**
 - Adding support for new agents
 - Contributors guide 
-
+ -->
