@@ -92,7 +92,7 @@ pub fn handle_git(args: &[String]) {
     let skip_hooks = !config.is_allowed_repository(&repository_option);
     if skip_hooks {
         debug_log(
-            "Skipping git-ai hooks because repository does not have at least one remote in allow_repositories list",
+            "Skipping git-ai hooks because repository is excluded or not in allow_repositories list",
         );
     }
 

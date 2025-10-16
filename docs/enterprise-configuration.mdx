@@ -15,12 +15,16 @@ All the options in `config.json` are optional, and will fall back to default val
 | `git_path` `Path` | The path to the (unaltered) `git` binary you distribute on developer machines | Defaults to whichever git is on the shell path |
 | `ignore_prompts` `boolean` flag | Prompts be excluded from authorship logs | `false` |
 | `allow_repositories` `Path[]` | Allow `git-ai` in only these remotes | If not specified or set to an empty list, all repositories are allowed.  |
+| `exclude_repositories` `Path[]` | Exclude `git-ai` from these remotes | If a repository is present in both allow and exclude lists, exclusion takes precedence. |
 
 ```json
 {
     "git_path": "/usr/bin/git",
     "ignore_prompts": false,
     "allow_repositories": [
+        "https://github.com/acunniffe/git-ai.git"
+    ],
+    "exclude_repositories": [
         "https://github.com/acunniffe/git-ai.git"
     ]
 }
