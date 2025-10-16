@@ -143,7 +143,3 @@ task debug:local
 ```
 _you'll need to install [taskfile_](https://taskfile.dev/docs/installation)_
 
-
-### License
-
-MIT
