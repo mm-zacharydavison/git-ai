@@ -1,0 +1,118 @@
+---
+title: Enterprise Deployment - Git Wrapper
+description: Deploy Git AI as a Git wrapper across your organization using MDM or custom install scripts. Recommended enterprise deployment method for tracking AI code at scale.
+keywords: git ai wrapper, git proxy, enterprise deployment, mdm installation, git ai rollout, install script
+---
+
+The recommended way to distribute Git AI to developer machines is as a Git wrapper. This approach intercepts git commands and allows Git AI to track AI-assisted changes without modifying git's core behavior.
+
+## Overview
+
+When Git AI is installed as a wrapper:
+1. Calls to `git` are handled by the `git-ai` binary
+2. Git AI processes the command and collects necessary metadata
+3. The command is passed through to the original git binary
+4. Hooks are automatically triggered at the appropriate times
+
+This is the same method used by the [`install.sh`](https://github.com/acunniffe/git-ai/blob/main/install.sh) and [`install.ps1`](https://github.com/acunniffe/git-ai/blob/main/install.ps1) scripts for personal installations.
+
+## Installation Requirements
+
+### Directory Structure
+
+**Unix/Linux/macOS:**
+- Install the `git-ai` binary to: `$HOME/.git-ai/bin/git-ai`
+- Create a symlink: `$HOME/.git-ai/bin/git` → `$HOME/.git-ai/bin/git-ai`
+- Create a symlink: `$HOME/.git-ai/bin/git-og` → `/path/to/original/git`
+- Make the binary executable: `chmod +x $HOME/.git-ai/bin/git-ai`
+- On macOS only: Remove quarantine attribute: `xattr -d com.apple.quarantine $HOME/.git-ai/bin/git-ai`
+
+**Windows:**
+- Install the binary to: `%USERPROFILE%\.git-ai\bin\git-ai.exe`
+- Create a copy: `%USERPROFILE%\.git-ai\bin\git.exe` (copy of `git-ai.exe`)
+- Create a batch file: `%USERPROFILE%\.git-ai\bin\git-og.cmd` that calls the original git executable
+- Unblock the downloaded files (PowerShell: `Unblock-File`)
+
+### PATH Configuration
+
+**Unix/Linux/macOS:**
+- Add `$HOME/.git-ai/bin` to the beginning of the user's PATH
+- Update the appropriate shell config file (`.zshrc`, `.bashrc`, etc.)
+
+**Windows:**
+- Add `%USERPROFILE%\.git-ai\bin` to the System PATH
+- The directory should be positioned **before** any existing Git installation directories to ensure the git-ai wrapper takes precedence
+
+### Configuration File
+
+Create `$HOME/.git-ai/config.json` (or `%USERPROFILE%\.git-ai\config.json` on Windows) with your organization's settings. See [Enterprise Configuration](/enterprise-configuration) for details.
+
+Example:
+```json
+{
+    "git_path": "/usr/bin/git",
+    "ignore_prompts": false,
+    "allow_repositories": [
+        "https://github.com/yourorg/*"
+    ]
+}
+```
+
+### IDE/Agent Hook Installation
+
+After installing the binary and configuring PATH, run:
+
+```bash
+git-ai install-hooks
+```
+
+This sets up integration with supported IDEs and AI coding agents (Cursor, VS Code with GitHub Copilot, etc.).
+
+## MDM Deployment
+
+For enterprise deployments, you can use your MDM (Mobile Device Management) solution to:
+
+1. **Distribute the Binary**: Package and deploy the `git-ai` binary to the appropriate directory
+2. **Configure PATH**: Use login scripts or profiles to add the git-ai directory to PATH
+3. **Deploy Configuration**: Push the `config.json` file with organization-specific settings
+4. **Run Post-Install**: Execute `git-ai install-hooks` via script after installation
+
+## Custom Install Script
+
+You can create a custom installation script for your organization. Our official install scripts serve as references:
+- Unix/Linux/macOS: [`install.sh`](https://github.com/acunniffe/git-ai/blob/main/install.sh)
+- Windows: [`install.ps1`](https://github.com/acunniffe/git-ai/blob/main/install.ps1)
+
+These scripts handle edge cases like:
+- Detecting the original git path
+- Preventing recursive installations
+- Gracefully handling errors
+- Setting proper permissions
+
+## Verification
+
+After installation, verify the setup:
+
+```bash
+# Should show git-ai wrapper
+which git
+
+# Should show git-ai version
+git --version
+
+# Should show original git
+git-og --version
+```
+
+## Advantages of the Wrapper Method
+
+- **Simple Setup**: Single binary deployment, no per-repository configuration
+- **Automatic Hook Triggering**: Works without modifying repository hooks
+- **User Transparency**: Developers use `git` commands as normal
+- **Easy Updates**: Replace the binary to update all users
+- **No Repository Modification**: Doesn't change `.git/hooks` in repositories
+
+## Alternative Deployment
+
+If you prefer not to wrap git, see [Enterprise Deployment: Git Hooks](/enterprise-deployment-hooks) for the core.hooksPath approach.
+

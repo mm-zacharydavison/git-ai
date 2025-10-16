@@ -1,24 +1,26 @@
 ---
-title: Enterprise Configuration and Deployment - Git AI
-display: Enterprise Configuration
-description: Configure and deploy Git AI across your organization with custom installation options, repository controls, and MDM distribution. Enterprise-grade setup for tracking AI code at scale.
-keywords: git ai enterprise, enterprise deployment, mdm installation, git wrapper configuration, core.hooksPath, repository allowlist, git ai config
+title: Enterprise Configuration
+description: Configure Git AI's behavior across your organization using the config.json file to control prompts, repository access, and git binary paths.
+keywords: git ai config, config.json, git ai configuration, enterprise settings, repository allowlist, git path configuration
 ---
 
-`git-ai`'s behavior can be configured on developer machines by writing a JSON file in the user's home directory. 
+Git AI's behavior can be configured on developer machines by writing a JSON file in the user's home directory.
 
 On Linux and macOS, this file is located at `$HOME/.git-ai/config.json`.
 On Windows, this file is located at `%USERPROFILE%\.git-ai\config.json`.
 
-## Options 
+## Configuration Options
 
-All the options in `config.json` are optional, and will fall back to default values if not provided. 
+All options in `config.json` are optional and will fall back to default values if not provided.
 
-| --- | --- | --- |
-| `git_path` `Path` | The path to the (unaltered) `git` binary you distribute on developer machines | Defaults to whichever git is on the shell path |
-| `ignore_prompts` `boolean` flag | Prompts be excluded from authorship logs | `false` |
-| `allow_repositories` `Path[]` | Allow `git-ai` in only these remotes | If not specified or set to an empty list, all repositories are allowed.  |
-| `exclude_repositories` `Path[]` | Exclude `git-ai` from these remotes | If a repository is present in both allow and exclude lists, exclusion takes precedence. |
+| Option | Type | Description | Default |
+| --- | --- | --- | --- |
+| `git_path` | `Path` | The path to the (unaltered) `git` binary you distribute on developer machines | Whichever git is on the shell path |
+| `ignore_prompts` | `boolean` | Whether prompts should be excluded from authorship logs | `false` |
+| `allow_repositories` | `Path[]` | Allow `git-ai` in only these remotes | If not specified or set to an empty list, all repositories are allowed |
+| `exclude_repositories` | `Path[]` | Exclude `git-ai` from these remotes | If a repository is present in both allow and exclude lists, exclusion takes precedence |
+
+## Example Configuration
 
 ```json
 {
@@ -28,87 +30,51 @@ All the options in `config.json` are optional, and will fall back to default val
         "https://github.com/acunniffe/git-ai.git"
     ],
     "exclude_repositories": [
-        "https://github.com/acunniffe/git-ai.git"
+        "https://github.com/internal/private-repo.git"
     ]
 }
 ```
 
-# Distribution Options
+## Configuration Use Cases
 
-There are two ways to distribute `git-ai` to developer machines: 
+### Limiting to Specific Repositories
 
-- As a Git Wrapper via MDM or an install script (recommended)
-- By installing git-ai and configuring core hooks (much more complex, but avoids wrapping git)
+Use `allow_repositories` to enable Git AI only for approved repositories:
 
-## Installing `git-ai` as a Git Wrapper on developer machines
-
-When `git-ai` is installed using the [`install.sh` script](https://github.com/acunniffe/git-ai?tab=readme-ov-file#install) (reccomended for personal use) the downloaded binary will be configured to handle calls to both `git` and `git-ai`, effectively creating a wrapper/proxy to `git`. 
-
-If you would like to create a custom installation here is what `git-ai` requires to works correctly cross platform: 
-
-### Directory Structure
-
-**Unix/Linux/macOS:**
-- Install the `git-ai` binary to: `$HOME/.git-ai/bin/git-ai`
-- Create a symlink: `$HOME/.git-ai/bin/git` → `$HOME/.git-ai/bin/git-ai`
-- Create a symlink: `$HOME/.git-ai/bin/git-og` → `/path/to/original/git`
-- Make the binary executable: `chmod +x $HOME/.git-ai/bin/git-ai`
-- On macOS only: Remove quarantine attribute: `xattr -d com.apple.quarantine $HOME/.git-ai/bin/git-ai`
-
-**Windows:**
-- Install the binary to: `%USERPROFILE%\.git-ai\bin\git-ai.exe`
-- Create a copy: `%USERPROFILE%\.git-ai\bin\git.exe` (copy of `git-ai.exe`)
-- Create a batch file: `%USERPROFILE%\.git-ai\bin\git-og.cmd` that calls the original git executable
-- Unblock the downloaded files (PowerShell: `Unblock-File`)
-
-### PATH Configuration
-
-**Unix/Linux/macOS:**
-- Add `$HOME/.git-ai/bin` to the beginning of the user's PATH
-- Update the appropriate shell config file (`.zshrc`, `.bashrc`, etc.)
-
-**Windows:**
-- Add `%USERPROFILE%\.git-ai\bin` to the System PATH
-- The directory should be positioned **before** any existing Git installation directories to ensure the git-ai shim takes precedence
-
-### Configuration File
-
-Create `$HOME/.git-ai/config.json` (or `%USERPROFILE%\.git-ai\config.json` on Windows) with the options outlined at the top of this page. 
-
-### IDE/Agent Hook Installation
-
-After installing the binary and configuring PATH, run:
-
-```bash
-git-ai install-hooks
+```json
+{
+    "allow_repositories": [
+        "https://github.com/yourorg/product-repo.git",
+        "https://github.com/yourorg/mobile-app.git"
+    ]
+}
 ```
 
-This sets up integration with supported IDEs and AI coding agents (Cursor, VS Code with GitHub Copilot, etc.).
+### Excluding Sensitive Repositories
 
-### Reference Implementation
+Use `exclude_repositories` to prevent Git AI from tracking specific repositories:
 
-Our official install scripts implement all of these requirements and can serve as references:
-- Unix/Linux/macOS: [`install.sh`](https://github.com/acunniffe/git-ai/blob/main/install.sh)
-- Windows: [`install.ps1`](https://github.com/acunniffe/git-ai/blob/main/install.ps1)
+```json
+{
+    "exclude_repositories": [
+        "https://github.com/yourorg/secrets-manager.git",
+        "https://github.com/yourorg/compliance-docs.git"
+    ]
+}
+```
 
-These scripts handle edge cases like detecting the original git path, preventing recursive installations, and gracefully handling errors. 
+### Privacy-First Setup
 
-## Installing Git AI with `core.hooksPath`
+Set `ignore_prompts` to `true` to exclude all prompts from authorship logs:
 
-Git version 2.35 (released in 2022) introduced support for configuring git hooks in a central location across all repositories on a machine. 
+```json
+{
+    "ignore_prompts": true
+}
+```
 
-**Important:** `core.hooksPath` overrides rather than extends repo-specific hooks. Each Git AI hook must be configured to invoke both:
-1. The Git AI-specific logic
-2. The hooks in the repository's `.git/hooks` folder
+## Deployment
 
-The following hooks must be implemented:
-- `pre-commit`
-- `post-commit`
-- `pre-push`
-- `post-checkout`
-- `post-rewrite`
-- `pre-rebase`
-- `post-rebase`
-- `post-reset`
-
-This approach is more complex than the git wrapper method. We're still working on public documentation for this approach and figuring out the best practices. If you're interested in rolling out Git AI without having to proxy git on developer machines [schedule a call with one of the maintainers and we'll help you get started.](https://calendly.com/acunniffe/meeting-with-git-ai-authors).
+See the deployment guides for instructions on rolling out Git AI and configuration files to developer machines:
+- [Enterprise Deployment: Git Wrapper](/enterprise-deployment-wrapper)
+- [Enterprise Deployment: Git Hooks](/enterprise-deployment-hooks)

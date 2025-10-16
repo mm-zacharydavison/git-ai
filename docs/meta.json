@@ -9,6 +9,9 @@
         "claude-code",
         "vs-code-github-copilot",
         "---Enterprise Deployment---",
-        "enterprise-configuration"
+        "enterprise-configuration",
+        "enterprise-deployment-wrapper",
+        "enterprise-deployment-hooks",
+        "performance"
     ]
 }
