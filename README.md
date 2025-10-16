@@ -1,6 +1,6 @@
 
 <div>
-<img src="assets/docs/git-ai.png" align="right"
+<img src="https://github.com/acunniffe/git-ai/raw/main/assets/docs/git-ai.png" align="right"
      alt="Git AI by acunniffe/git-ai" width="100" height="100" >
 
 </div>
@@ -25,18 +25,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 🎊 That's it! **No per-repo setup.** Once installed Git AI will work OOTB with any of these **Supported Agents**:  
 
-<img src="assets/docs/supported-agents.png" width="320" />
+<img src="https://github.com/acunniffe/git-ai/raw/main/assets/docs/supported-agents.png" width="320" />
 
 ### Next step: **Just code and commit!**
 Once installed, Cursor, Claude Code and GitHub Copilot will automatically call the CLI to mark the code they generate as AI-authored. 
 
 When you create a new commit, `git-ai` adds a git note that tracks which lines were AI-authored and prints the code authorship: 
 
-<img src="assets/docs/graph.jpg" width="400" />
+<img src="https://github.com/acunniffe/git-ai/raw/main/assets/docs/graph.jpg" width="400" />
 
 If you're curious about the AI authorship of any file `git-ai blame` will show you which lines are AI generated:
 
-![alt](/assets/docs/blame-cmd.jpg)
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/blame-cmd.jpg)
 
 ## Installing the PR Bot (currently in-development)
 
@@ -48,7 +48,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 
 > [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
 
-![alt](assets/docs/bot.png)
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/bot.png)
 
 
 ## Goals of `git-ai` project

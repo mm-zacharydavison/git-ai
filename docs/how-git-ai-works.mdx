@@ -56,7 +56,7 @@ Coding agents like Cursor, Claude Code, and GitHub Copilot mark their changes as
 
 Git AI requires two hooks: one before and one after the agent edits code. The pre-edit checkpoint ensures any human changes since the last agent edit are marked as human authored. The post-edit checkpoint picks up newly inserted AI code and marks it as AI authored.
 
-![alt](assets/docs/checkpoint.png)
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/checkpoint.png)
 
 When code is committed, Git AI condenses all checkpoints into an Authorship Log optimized for fast lookups:
 
@@ -107,7 +107,7 @@ Notes (ai):
 
 For line 2 of `file.ts` inserted by commit `6e4d6f2`, Git AI looks up the Authorship Log for that commit to determine if the line was written by an AI prompt. Even if lines have shifted in intervening commits, `git blame --line-porcelain <file>` provides the original line position for correct lookups and overlay.
 
-![alt](/assets/docs/blame-cmd.jpg)
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/blame-cmd.jpg)
 
 ## Part 2: Distribution
 
