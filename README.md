@@ -39,6 +39,7 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 ![alt](/assets/docs/blame-cmd.jpg)
 
 
+
 ## Goals of `git-ai` project
 
 🤖 **Track AI code in a Multi-Agent** world. Because developers get to choose their tools, engineering teams need a **vendor agnostic** way to track AI impact and keep track of the AI code in their repos. 
@@ -89,16 +90,8 @@ We're building a PR Bot to aggregate `git-ai` data at the PR, Repository and Org
 
 ## Documentation
 
-- How `git-ai` works and its limitations 
-- Installing `git-ai`
-- Performance and Compatibility  
+- How `git-ai` works and its limitations
 - Configuring `git-ai` for the enterprise
-
-
-**Agent Guides**
-- Cursor
-- Claude Code
-- GitHub Copilot 
 
 **Contributing**
 - Adding Support for new Agents
