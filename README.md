@@ -89,10 +89,3 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 | RovoDev CLI |  |  |
 | _your agent here_ |  |  |
 
-> **Want to add yours?** All PRs welcome! Add documentation to `docs/agent-support/`
-
-
-<!-- **Contributing**
-- Adding support for new agents
-- Contributors guide 
- -->
