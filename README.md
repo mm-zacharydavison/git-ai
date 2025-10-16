@@ -1,7 +1,7 @@
 
 <div>
 <img src="https://github.com/acunniffe/git-ai/raw/main/assets/docs/git-ai.png" align="right"
-     alt="Git AI by acunniffe/git-ai" width="100" height="100" >
+     alt="Git AI by acunniffe/git-ai" width="100" height="100" />
 
 </div>
 <div style="margin-top: 90px">
