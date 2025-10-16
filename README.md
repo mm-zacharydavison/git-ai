@@ -38,6 +38,17 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 
 ![alt](/assets/docs/blame-cmd.jpg)
 
+## Installing the PR Bot (currently in-development)
+
+A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels: 
+
+- AI authorship breakdown for every Pull Request
+- Measure % of code that is AI generated (and the trend)
+- AI Cost per-PR and accepted AI rate (measures how often AI code is accepted on first generation)
+
+> [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
+
+![alt](assets/docs/bot.png)
 
 
 ## Goals of `git-ai` project
@@ -51,6 +62,16 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 🔗 **Maintain link between prompts and code** - there is valuable context and requirements in team prompts—preserve them alongside code. 
 
 🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Negligible impact even in large repos (<100ms). Tested in [Chromium](https://github.com/chromium/chromium).
+
+
+## How `git-ai` works 
+[▶️ Video](https://youtube.com) [🗺️ Diagram](https://github.com/acunniffe/git-ai)
+
+## Documentation
+
+- [How Git AI works and its limitations](https://usegitai.com/docs/how-git-ai-works)
+- [Git AI Commands](https://usegitai.com/docs/reference)
+- [Configuring Git AI for the enterprise](https://usegitai.com/docs/enterprise-configuration)
 
 
 ## Agent Support
@@ -70,29 +91,6 @@ If you're curious about the AI authorship of any file `git-ai blame` will show y
 
 > **Want to add yours?** All PRs welcome! Add documentation to `docs/agent-support/`
 
-
-## How `git-ai` works 
-[▶️ Video](https://youtube.com) [🗺️ Diagram](https://github.com/acunniffe/git-ai)
-
-
-## Installing the PR Bot (currently in-development)
-
-A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels: 
-
-- AI authorship breakdown for every Pull Request
-- Measure % of code that is AI generated (and the trend)
-- AI Cost per-PR and accepted AI rate (measures how often AI code is accepted on first generation)
-
-> [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
-
-![alt](assets/docs/bot.png)
-
-
-## Documentation
-
-- [How Git AI works and its limitations](https://usegitai.com/docs/how-git-ai-works)
-- [Git AI Commands](https://usegitai.com/docs/reference)
-- [Configuring Git AI for the enterprise](https://usegitai.com/docs/enterprise-configuration)
 
 <!-- **Contributing**
 - Adding support for new agents
