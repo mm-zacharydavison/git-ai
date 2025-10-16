@@ -4,6 +4,8 @@ description: Learn how Git AI tracks AI code authorship through checkpoints, aut
 keywords: git ai architecture, authorship logs, git notes, checkpoints, ai code tracking, code attribution, git blame, operational transforms
 ---
 
+[Demo Video](https://www.youtube.com/watch?v=b_DZTC1PKHI)
+
 Most attempts to quantify and track AI code authorship focus on counting lines of code at the moment of insertion. That approach tends to overcount AI code because it doesn't track code through the entire development lifecycle. What if a developer undoes the AI change? Copies an AI function to a new part of the repo? Performs a rebase? Cherry-picks the code many commits later on a different branch? Accurate measurement requires following code from the development machine through to merge.
 
 Git AI approaches the problem differently: by building an accurate `git blame` for tracking AI code, accurate stats follow naturally. Git AI preserves AI code attribution as it moves from local development environments, through a PR, through code review, and onto the main branch.
