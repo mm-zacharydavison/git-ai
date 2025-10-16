@@ -65,7 +65,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 
 
 ## Documentation
-- How Git AI Works and its Limitations [▶️ Video](https://youtube.com) [🗺️ Diagram](https://usegitai.com/docs/how-git-ai-works)
+- How Git AI Works and its Limitations [▶️ Video](https://www.youtube.com/watch?v=b_DZTC1PKHI) [🗺️ Diagram](https://usegitai.com/docs/how-git-ai-works)
 - [Git AI Commands](https://usegitai.com/docs/reference)
 - [Configuring Git AI for the enterprise](https://usegitai.com/docs/enterprise-configuration)
 
