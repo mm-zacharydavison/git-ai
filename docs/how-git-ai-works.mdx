@@ -200,7 +200,7 @@ Since AI authorship is indexed by commit SHA, rewriting operations that create n
 The system handles rewrite operations as follows:
 
 - **Rebase (1:1 mapping):** Authorship logs are copied from original to rebased commits. If trees differ, logs are reconstructed by replaying commits in the new context.
-- **Squash/Merge (many-to-one):** Multiple commit authorships are merged—AI code from any squashed commit is preserved in the final commit's log.
+- **Squash/Merge (many-to-one):** Multiple commit Authorship logs are merged—AI code from any squashed commit is preserved in the final commit's log.
 - **Cherry-pick (1:1 mapping):** Similar to rebase—authorship from the source commit is transferred to the new commit.
 - **Reset:** When resetting backward, working logs are reconstructed to preserve recent authorship state. Forward resets preserve existing authorship.
 
