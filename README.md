@@ -61,7 +61,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 
 🔗 **Maintain link between prompts and code** - there is valuable context and requirements in team prompts—preserve them alongside code. 
 
-🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Negligible impact even in large repos (<100ms). Tested in [Chromium](https://github.com/chromium/chromium).
+🚀 **Git-native + Fast** - `git-ai` is built on git plumbing commands. Negligible impact even in large repos (&lt;100ms). Tested in [Chromium](https://github.com/chromium/chromium).
 
 
 ## Documentation
