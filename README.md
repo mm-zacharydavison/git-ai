@@ -4,7 +4,7 @@
      alt="Git AI by acunniffe/git-ai" width="100" height="100" />
 
 </div>
-<div style="margin-top: 90px">
+<div>
 <h1 align="left"><b>git-ai</b></h1>
 </div>
 <p align="left">Track the AI Code in your repositories</p>
