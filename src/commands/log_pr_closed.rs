@@ -51,8 +51,12 @@ pub fn log_pr_closed(args: &[String]) -> Result<(), GitAiError> {
 
     // Step 4: Add a new note with format "{refname} {branch HEAD commit}"
     // attached to the merge commit
-    let note_content = format!("{} {}", branch_refname, branch_head_commit);
-    add_note_to_commit(&bare_repo_path, merge_commit, &note_content)?;
+    add_note_to_commit(
+        &bare_repo_path,
+        branch_refname,
+        branch_head_commit,
+        merge_commit,
+    )?;
 
     // Step 5: Merge the tracking ref into local notes/ai-reflog (if it exists)
     let tracking_ref = format!("refs/notes/{}-tracking", AI_REFLOG_REFNAME);
@@ -140,10 +144,13 @@ pub fn fetch_notes_reflog(repo_path: &Path) -> Result<(), GitAiError> {
 /// Add a note to a specific commit
 pub fn add_note_to_commit(
     repo_path: &Path,
+    branch_refname: &str,
+    branch_head_commit: &str,
     commit_sha: &str,
-    note_content: &str,
 ) -> Result<(), GitAiError> {
     use crate::git::repository::exec_git_stdin;
+
+    let note_content = format!("{} {}", branch_refname, branch_head_commit);
 
     let args = vec![
         "-C".to_string(),
