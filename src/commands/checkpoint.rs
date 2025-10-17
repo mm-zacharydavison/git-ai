@@ -1,4 +1,4 @@
-use crate::authorship::working_log::{Checkpoint, Line, WorkingLogEntry};
+use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
 use crate::authorship::attribution_tracker::{Attribution, AttributionTracker};
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
@@ -192,7 +192,7 @@ pub fn run(
     let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-        get_initial_checkpoint_entries(kind, repo, &files, &base_commit, &file_content_hashes)?
+        get_initial_checkpoint_entries(kind, repo, &files, &base_commit, &file_content_hashes, agent_run_result.as_ref())?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
@@ -201,6 +201,7 @@ pub fn run(
             &files,
             &file_content_hashes,
             &checkpoints,
+            agent_run_result.as_ref(),
         )?
     };
     let entries_duration = end_entries_clock();
@@ -210,6 +211,12 @@ pub fn run(
     if !entries.is_empty() {
         let mut checkpoint =
             Checkpoint::new(kind.clone(), combined_hash.clone(), author.to_string(), entries.clone());
+
+        // Compute and set line stats
+        let end_stats_clock = Timer::default().start_quiet("checkpoint: compute line stats");
+        checkpoint.line_stats = compute_line_stats(repo, &working_log, &files, &checkpoints, kind)?;
+        let stats_duration = end_stats_clock();
+        Timer::default().print_duration("checkpoint: compute line stats", stats_duration);
 
         // Set transcript and agent_id if provided and not a human checkpoint
         if kind != CheckpointKind::Human && let Some(agent_run) = &agent_run_result {
@@ -387,8 +394,25 @@ fn get_initial_checkpoint_entries(
     files: &[String],
     _base_commit: &str,
     file_content_hashes: &HashMap<String, String>,
+    agent_run_result: Option<&AgentRunResult>,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
+
+    // Determine author_id based on checkpoint kind and agent_id
+    let author_id = if kind != CheckpointKind::Human {
+        // For AI checkpoints, use session hash
+        agent_run_result
+            .map(|result| {
+                crate::authorship::authorship_log_serialization::generate_short_hash(
+                    &result.agent_id.id,
+                    &result.agent_id.tool,
+                )
+            })
+            .unwrap_or_else(|| kind.to_str())
+    } else {
+        // For human checkpoints, use checkpoint kind string
+        kind.to_str()
+    };
 
     // Diff working directory against HEAD tree for each file
     let head_commit = repo
@@ -421,7 +445,7 @@ fn get_initial_checkpoint_entries(
 
         // Current content from filesystem
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
-        
+
         // TODO Get previous attributions from authorship log
         let prev_attributions = Vec::new();
 
@@ -430,8 +454,9 @@ fn get_initial_checkpoint_entries(
             &previous_content,
             &current_content,
             &prev_attributions,
-            kind.to_str().as_str(),
+            &author_id,
         )?;
+        let filtered_attributions = new_attributions.iter().filter(|a| a.author_id != CheckpointKind::Human.to_str()).cloned().collect::<Vec<Attribution>>();
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
@@ -442,7 +467,7 @@ fn get_initial_checkpoint_entries(
         entries.push(WorkingLogEntry::new(
             file_path.clone(),
             blob_sha,
-            new_attributions,
+            filtered_attributions,
         ));
     }
 
@@ -455,8 +480,25 @@ fn get_subsequent_checkpoint_entries(
     files: &[String],
     file_content_hashes: &HashMap<String, String>,
     previous_checkpoints: &Vec<Checkpoint>,
+    agent_run_result: Option<&AgentRunResult>,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
+
+    // Determine author_id based on checkpoint kind and agent_id
+    let author_id = if kind != CheckpointKind::Human {
+        // For AI checkpoints, use session hash
+        agent_run_result
+            .map(|result| {
+                crate::authorship::authorship_log_serialization::generate_short_hash(
+                    &result.agent_id.id,
+                    &result.agent_id.tool,
+                )
+            })
+            .unwrap_or_else(|| kind.to_str())
+    } else {
+        // For human checkpoints, use checkpoint kind string
+        kind.to_str()
+    };
 
     // Build a map of file path -> blob_sha by iterating through previous checkpoints in reverse
     // to find the most recent previous file hash for each filepath
@@ -476,22 +518,24 @@ fn get_subsequent_checkpoint_entries(
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
         // Read the previous content from the blob storage using the previous checkpoint's blob_sha
-        let previous_content = if let Some((prev_content_hash, _)) = previous_file_hashes_with_attributions.get(file_path)
+        let (previous_content, prev_attributions) = if let Some((prev_content_hash, prev_attrs)) = previous_file_hashes_with_attributions.get(file_path)
         {
-            working_log
-                .get_file_version(prev_content_hash)
-                .unwrap_or_default()
+            (
+                working_log.get_file_version(prev_content_hash).unwrap_or_default(),
+                prev_attrs.clone(),
+            )
         } else {
-            String::new() // No previous version, treat as empty
+            (String::new(), Vec::new()) // No previous version, treat as empty
         };
 
         let tracker = AttributionTracker::new();
         let new_attributions = tracker.update_attributions(
             &previous_content,
             &current_content,
-            &previous_file_hashes_with_attributions.get(file_path).unwrap().1,
-            kind.to_str().as_str(),
+            &prev_attributions,
+            &author_id,
         )?;
+        let filtered_attributions = new_attributions.iter().filter(|a| a.author_id != CheckpointKind::Human.to_str()).cloned().collect::<Vec<Attribution>>();
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
@@ -502,11 +546,104 @@ fn get_subsequent_checkpoint_entries(
         entries.push(WorkingLogEntry::new(
             file_path.clone(),
             blob_sha,
-            new_attributions,
+            filtered_attributions,
         ));
     }
 
     Ok(entries)
+}
+
+/// Compute line statistics by diffing files against their previous versions
+fn compute_line_stats(
+    repo: &Repository,
+    working_log: &PersistedWorkingLog,
+    files: &[String],
+    previous_checkpoints: &[Checkpoint],
+    kind: CheckpointKind,
+) -> Result<crate::authorship::working_log::CheckpointLineStats, GitAiError> {
+    // Start with previous checkpoint's stats (if exists)
+    let mut stats = previous_checkpoints
+        .last()
+        .map(|cp| cp.line_stats.clone())
+        .unwrap_or_default();
+
+    // Build a map of file path -> previous blob_sha
+    let mut previous_file_hashes: HashMap<String, String> = HashMap::new();
+    for checkpoint in previous_checkpoints.iter().rev() {
+        for entry in &checkpoint.entries {
+            previous_file_hashes.entry(entry.file.clone())
+                .or_insert_with(|| entry.blob_sha.clone());
+        }
+    }
+
+    // Count added/deleted lines for each file in this checkpoint
+    let mut total_additions = 0u32;
+    let mut total_deletions = 0u32;
+
+    for file_path in files {
+        let abs_path = working_log.repo_root.join(file_path);
+        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+        // Get previous content
+        let previous_content = if let Some(prev_hash) = previous_file_hashes.get(file_path) {
+            working_log.get_file_version(prev_hash).unwrap_or_default()
+        } else {
+            // No previous version, try to get from HEAD
+            let head_commit = repo.head().ok()
+                .and_then(|h| h.target().ok())
+                .and_then(|oid| repo.find_commit(oid).ok());
+            let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
+
+            if let Some(tree) = head_tree {
+                match tree.get_path(std::path::Path::new(file_path)) {
+                    Ok(entry) => {
+                        if let Ok(blob) = repo.find_blob(entry.id()) {
+                            let blob_content = blob.content().unwrap_or_default();
+                            String::from_utf8_lossy(&blob_content).to_string()
+                        } else {
+                            String::new()
+                        }
+                    }
+                    Err(_) => String::new(),
+                }
+            } else {
+                String::new()
+            }
+        };
+
+        // Use TextDiff to count line changes
+        let diff = TextDiff::from_lines(&previous_content, &current_content);
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Insert => {
+                    total_additions += change.value().lines().count() as u32;
+                }
+                ChangeTag::Delete => {
+                    total_deletions += change.value().lines().count() as u32;
+                }
+                ChangeTag::Equal => {}
+            }
+        }
+    }
+
+    // Accumulate based on checkpoint kind
+    match kind {
+        CheckpointKind::Human => {
+            stats.human_additions += total_additions;
+            stats.human_deletions += total_deletions;
+        }
+        CheckpointKind::AiAgent => {
+            stats.ai_agent_additions += total_additions;
+            stats.ai_agent_deletions += total_deletions;
+        }
+        CheckpointKind::AiTab => {
+            stats.ai_tab_additions += total_additions;
+            stats.ai_tab_deletions += total_deletions;
+        }
+    }
+
+    Ok(stats)
 }
 
 #[cfg(test)]

@@ -42,6 +42,7 @@ pub fn post_commit(
     // --- NEW: Serialize authorship log and store it in notes/ai/{commit_sha} ---
     let mut authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
         &filtered_working_log,
+        &working_log,
         &parent_sha,
         Some(&human_author),
     );
@@ -96,36 +97,48 @@ pub fn post_commit(
         let new_working_log = repo_storage.working_log_for_base_commit(&commit_sha);
 
         for mut checkpoint in parent_checkpoints {
-            // Filter entries to only include unstaged lines
+            // Filter entries to only include unstaged attributions
             for entry in &mut checkpoint.entries {
                 if let Some(unstaged_ranges) = unstaged_hunks.get(&entry.file) {
-                    // Expand all lines from added_lines, filter to unstaged, then recompress
-                    let mut all_lines: Vec<u32> = Vec::new();
-                    for line in &entry.added_lines {
-                        match line {
-                            crate::authorship::working_log::Line::Single(l) => all_lines.push(*l),
-                            crate::authorship::working_log::Line::Range(start, end) => {
-                                all_lines.extend(*start..=*end);
+                    // Get file content from blob storage to convert line ranges to char positions
+                    let file_content = parent_working_log
+                        .get_file_version(&entry.blob_sha)
+                        .unwrap_or_default();
+
+                    // Convert unstaged line ranges to character ranges
+                    let unstaged_char_ranges = convert_line_ranges_to_char_ranges(
+                        &file_content,
+                        unstaged_ranges,
+                    );
+
+                    // Filter attributions to only those within unstaged character ranges
+                    let mut filtered_attributions = Vec::new();
+                    for attr in &entry.attributions {
+                        // Check if attribution overlaps with any unstaged range
+                        for (range_start, range_end) in &unstaged_char_ranges {
+                            if attr.start < *range_end && attr.end > *range_start {
+                                // Calculate intersection
+                                let new_start = attr.start.max(*range_start);
+                                let new_end = attr.end.min(*range_end);
+                                filtered_attributions.push(
+                                    crate::authorship::attribution_tracker::Attribution::new(
+                                        new_start,
+                                        new_end,
+                                        attr.author_id.clone(),
+                                    ),
+                                );
                             }
                         }
                     }
 
-                    // Keep only unstaged lines
-                    all_lines.retain(|l| unstaged_ranges.iter().any(|range| range.contains(*l)));
-
-                    // Recompress to Line format
-                    entry.added_lines = crate::authorship::authorship_log_serialization::compress_lines_to_working_log_format(&all_lines);
-
-                    // Clear deleted_lines since they're relative to the old base commit
-                    // After a commit, the base commit changes, so old deletions are no longer relevant
-                    entry.deleted_lines.clear();
+                    entry.attributions = filtered_attributions;
                 }
             }
 
-            // Remove entries with no lines left
+            // Remove entries with no attributions left
             checkpoint
                 .entries
-                .retain(|entry| !entry.added_lines.is_empty());
+                .retain(|entry| !entry.attributions.is_empty());
 
             // Only append if there are entries left
             if !checkpoint.entries.is_empty() {
@@ -305,6 +318,56 @@ fn convert_authorship_log_to_commit_coordinates(
     authorship_log
         .attestations
         .retain(|file| !file.entries.is_empty());
+}
+
+/// Convert line ranges to character ranges
+///
+/// Takes a file's content and line ranges, and converts them to character position ranges.
+/// This is needed to filter attributions (which are character-based) by unstaged line ranges.
+/// Logic mirrors line_ranges_to_attributions in authorship_log_serialization.rs
+fn convert_line_ranges_to_char_ranges(
+    content: &str,
+    line_ranges: &[LineRange],
+) -> Vec<(usize, usize)> {
+    let mut char_ranges = Vec::new();
+
+    // Build a map of line number -> (start_char, end_char)
+    let mut line_char_positions: Vec<(usize, usize)> = Vec::new();
+    let mut current_pos = 0usize;
+
+    for line in content.lines() {
+        let line_start = current_pos;
+        let line_len = line.len();
+        let line_end = current_pos + line_len;
+        line_char_positions.push((line_start, line_end));
+        current_pos = line_end + 1; // +1 for newline
+    }
+
+    // Convert each line range to character range
+    for range in line_ranges {
+        let line_numbers = range.expand();
+
+        if line_numbers.is_empty() {
+            continue;
+        }
+
+        // Get the character range spanning all these lines
+        let first_line = line_numbers[0];
+        let last_line = line_numbers[line_numbers.len() - 1];
+
+        if first_line > 0 && (first_line as usize) <= line_char_positions.len() {
+            let char_start = line_char_positions[(first_line - 1) as usize].0;
+            let char_end = if (last_line as usize) <= line_char_positions.len() {
+                line_char_positions[(last_line - 1) as usize].1
+            } else {
+                content.len()
+            };
+
+            char_ranges.push((char_start, char_end));
+        }
+    }
+
+    char_ranges
 }
 
 #[cfg(test)]

@@ -271,7 +271,7 @@ pub fn prepare_working_log_after_squash(
 
     // Step 9: Convert authorship log to checkpoints
     let mut checkpoints = new_authorship_log
-        .convert_to_checkpoints_for_squash(human_author)
+        .convert_to_checkpoints_for_squash(human_author, repo)
         .map_err(|e| {
             GitAiError::Generic(format!(
                 "Failed to convert authorship log to checkpoints: {}",
@@ -717,6 +717,7 @@ pub fn rewrite_authorship_after_commit_amend(
     for checkpoint in &checkpoints {
         authorship_log.apply_checkpoint(
             checkpoint,
+            &working_log,
             Some(&human_author),
             &mut session_additions,
             &mut session_deletions,
@@ -941,7 +942,7 @@ fn reconstruct_authorship_from_diff(
                     ));
 
                     // For each inserted line, try to find the same content in the hanging commit
-                    for (i, inserted_line) in inserted.iter().enumerate() {
+                    for (_i, inserted_line) in inserted.iter().enumerate() {
                         // Find a matching line number in hanging content, prefer the first not yet used
                         let mut matched_hanging_line: Option<u32> = None;
                         for (idx, h_line) in hanging_lines.iter().enumerate() {
@@ -1395,7 +1396,7 @@ pub fn reconstruct_working_log_after_reset(
 
     // Step 4: Convert to checkpoints
     let mut checkpoints = new_authorship_log
-        .convert_to_checkpoints_for_squash(human_author)
+        .convert_to_checkpoints_for_squash(human_author, repo)
         .map_err(|e| {
             GitAiError::Generic(format!(
                 "Failed to convert authorship log to checkpoints: {}",
@@ -1534,6 +1535,7 @@ fn create_authorship_log_for_hanging_commit(
         for checkpoint in &checkpoints {
             authorship_log.apply_checkpoint(
                 checkpoint,
+                &working_log,
                 Some(human_author),
                 &mut session_additions,
                 &mut session_deletions,

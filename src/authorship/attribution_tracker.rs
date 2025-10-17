@@ -55,6 +55,27 @@ impl Attribution {
             None
         }
     }
+
+    /// Convert character position to line number (1-indexed)
+    pub fn char_pos_to_line_num(content: &str, pos: usize) -> u32 {
+        content[..pos.min(content.len())]
+            .chars()
+            .filter(|&c| c == '\n') // TODO More robust line counting
+            .count() as u32
+            + 1
+    }
+
+    /// Convert this attribution to a list of line numbers it covers
+    pub fn to_line_numbers(&self, content: &str) -> Vec<u32> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+
+        let start_line = Self::char_pos_to_line_num(content, self.start);
+        let end_line = Self::char_pos_to_line_num(content, self.end.saturating_sub(1));
+
+        (start_line..=end_line).collect()
+    }
 }
 
 /// Represents a deletion operation from the diff

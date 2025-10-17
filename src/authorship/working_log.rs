@@ -1,5 +1,4 @@
 use crate::authorship::transcript::AiTranscript;
-use crate::error::GitAiError;
 use crate::authorship::attribution_tracker::Attribution;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -108,10 +107,49 @@ impl CheckpointKind {
             CheckpointKind::Human => "human".to_string(),
             CheckpointKind::AiAgent => "ai_agent".to_string(),
             CheckpointKind::AiTab => "ai_tab".to_string(),
-            _ => panic!("Invalid checkpoint kind: {}", self),
         }
     }
 }
+
+/// Line-level statistics tracked per checkpoint kind
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CheckpointLineStats {
+    pub human_additions: u32,
+    pub human_deletions: u32,
+    pub ai_agent_additions: u32,
+    pub ai_agent_deletions: u32,
+    pub ai_tab_additions: u32,
+    pub ai_tab_deletions: u32,
+}
+
+impl CheckpointLineStats {
+    pub fn additions_for_kind(&self, kind: CheckpointKind) -> u32 {
+        match kind {
+            CheckpointKind::Human => self.human_additions,
+            CheckpointKind::AiAgent => self.ai_agent_additions,
+            CheckpointKind::AiTab => self.ai_tab_additions,
+        }
+    }
+
+    pub fn deletions_for_kind(&self, kind: CheckpointKind) -> u32 {
+        match kind {
+            CheckpointKind::Human => self.human_deletions,
+            CheckpointKind::AiAgent => self.ai_agent_deletions,
+            CheckpointKind::AiTab => self.ai_tab_deletions,
+        }
+    }
+
+    /// Total AI additions (for authorship log - collapses ai_agent and ai_tab)
+    pub fn total_ai_additions(&self) -> u32 {
+        self.ai_agent_additions + self.ai_tab_additions
+    }
+
+    /// Total AI deletions (for authorship log - collapses ai_agent and ai_tab)
+    pub fn total_ai_deletions(&self) -> u32 {
+        self.ai_agent_deletions + self.ai_tab_deletions
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub kind: CheckpointKind,
@@ -121,6 +159,8 @@ pub struct Checkpoint {
     pub timestamp: u64,
     pub transcript: Option<AiTranscript>,
     pub agent_id: Option<AgentId>,
+    #[serde(default)]
+    pub line_stats: CheckpointLineStats,
 }
 
 impl Checkpoint {
@@ -138,6 +178,7 @@ impl Checkpoint {
             timestamp,
             transcript: None,
             agent_id: None,
+            line_stats: CheckpointLineStats::default(),
         }
     }
 }
