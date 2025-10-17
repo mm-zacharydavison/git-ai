@@ -109,7 +109,7 @@ fn clone_bare_for_notes(remote_url: &str, target_path: &Path) -> Result<(), GitA
 }
 
 /// Fetch notes/ai-reflog from the remote into a tracking ref
-fn fetch_notes_reflog(
+pub fn fetch_notes_reflog(
     repo_path: &Path,
     remote_url: &str,
     tracking_ref: &str,
@@ -141,7 +141,7 @@ fn fetch_notes_reflog(
 }
 
 /// Add a note to a specific commit
-fn add_note_to_commit(
+pub fn add_note_to_commit(
     repo_path: &Path,
     commit_sha: &str,
     note_content: &str,

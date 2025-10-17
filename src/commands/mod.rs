@@ -9,3 +9,5 @@ pub mod log_pr_closed;
 pub mod restore_authorship;
 pub mod squash_authorship;
 pub mod stats_delta;
+
+pub use log_pr_closed::{add_note_to_commit, fetch_notes_reflog};
