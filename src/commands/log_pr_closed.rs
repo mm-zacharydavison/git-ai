@@ -47,8 +47,7 @@ pub fn log_pr_closed(args: &[String]) -> Result<(), GitAiError> {
     }
 
     // Step 3: Fetch latest notes/ai-reflog into a tracking ref
-    let tracking_ref = format!("refs/notes/{}-tracking", AI_REFLOG_REFNAME);
-    fetch_notes_reflog(&bare_repo_path, remote_url, &tracking_ref)?;
+    fetch_notes_reflog(&bare_repo_path)?;
 
     // Step 4: Add a new note with format "{refname} {branch HEAD commit}"
     // attached to the merge commit
@@ -56,6 +55,7 @@ pub fn log_pr_closed(args: &[String]) -> Result<(), GitAiError> {
     add_note_to_commit(&bare_repo_path, merge_commit, &note_content)?;
 
     // Step 5: Merge the tracking ref into local notes/ai-reflog (if it exists)
+    let tracking_ref = format!("refs/notes/{}-tracking", AI_REFLOG_REFNAME);
     if ref_exists_in_repo(&bare_repo_path, &tracking_ref) {
         if ref_exists_in_repo(&bare_repo_path, AI_REFLOG_REF) {
             // Both exist - merge them
@@ -72,7 +72,7 @@ pub fn log_pr_closed(args: &[String]) -> Result<(), GitAiError> {
     }
 
     // Step 6: Push the notes back
-    push_notes_reflog(&bare_repo_path, remote_url)?;
+    push_notes_reflog(&bare_repo_path)?;
 
     debug_log("log_pr_closed completed successfully");
     Ok(())
@@ -109,11 +109,8 @@ fn clone_bare_for_notes(remote_url: &str, target_path: &Path) -> Result<(), GitA
 }
 
 /// Fetch notes/ai-reflog from the remote into a tracking ref
-pub fn fetch_notes_reflog(
-    repo_path: &Path,
-    remote_url: &str,
-    tracking_ref: &str,
-) -> Result<(), GitAiError> {
+pub fn fetch_notes_reflog(repo_path: &Path) -> Result<(), GitAiError> {
+    let tracking_ref = format!("refs/notes/{}-tracking", AI_REFLOG_REFNAME);
     let fetch_refspec = format!("+{}:{}", AI_REFLOG_REF, tracking_ref);
 
     let args = vec![
@@ -126,7 +123,7 @@ pub fn fetch_notes_reflog(
         "--no-write-fetch-head".to_string(),
         "--no-write-commit-graph".to_string(),
         "--no-auto-maintenance".to_string(),
-        remote_url.to_string(),
+        "origin".to_string(),
         fetch_refspec,
     ];
 
@@ -223,7 +220,7 @@ fn copy_ref_in_repo(repo_path: &Path, source_ref: &str, dest_ref: &str) -> Resul
 }
 
 /// Push notes/ai-reflog back to the remote
-fn push_notes_reflog(repo_path: &Path, remote_url: &str) -> Result<(), GitAiError> {
+fn push_notes_reflog(repo_path: &Path) -> Result<(), GitAiError> {
     // Push without force (requires fast-forward). Creating new refs works without force.
     // We've already merged remote notes before pushing, so we should always be ahead.
     let push_refspec = format!("{}:{}", AI_REFLOG_REF, AI_REFLOG_REF);
@@ -236,7 +233,7 @@ fn push_notes_reflog(repo_path: &Path, remote_url: &str) -> Result<(), GitAiErro
         "push".to_string(),
         "--quiet".to_string(),
         "--no-verify".to_string(),
-        remote_url.to_string(),
+        "origin".to_string(),
         push_refspec,
     ];
 
