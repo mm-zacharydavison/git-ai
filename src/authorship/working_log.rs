@@ -136,8 +136,6 @@ pub struct Checkpoint {
     pub timestamp: u64,
     pub transcript: Option<AiTranscript>,
     pub agent_id: Option<AgentId>,
-    #[serde(default)]
-    pub allow_reset_to_checkpoint: bool,
 }
 
 impl Checkpoint {
@@ -154,7 +152,6 @@ impl Checkpoint {
             timestamp,
             transcript: None,
             agent_id: None,
-            allow_reset_to_checkpoint: false,
         }
     }
 }
