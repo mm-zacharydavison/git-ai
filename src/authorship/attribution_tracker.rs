@@ -4,6 +4,7 @@
 //! authorship information even through moves, edits, and whitespace changes.
 
 use diff_match_patch_rs::dmp::Diff;
+use crate::error::GitAiError;
 use diff_match_patch_rs::{Compat, DiffMatchPatch, Ops};
 use std::collections::HashMap;
 
@@ -147,12 +148,12 @@ impl AttributionTracker {
         new_content: &str,
         old_attributions: &[Attribution],
         current_author: &str,
-    ) -> Result<Vec<Attribution>, String> {
+    ) -> Result<Vec<Attribution>, GitAiError> {
         // Phase 1: Compute diff
         let diffs = self
             .dmp
             .diff_main::<Compat>(old_content, new_content)
-            .map_err(|e| format!("Diff computation failed: {:?}", e))?;
+            .map_err(|e| GitAiError::Generic(format!("Diff computation failed: {:?}", e)))?;
 
         // Phase 2: Build deletion and insertion catalogs
         let (deletions, insertions) = self.build_diff_catalog(&diffs);

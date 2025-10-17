@@ -1,4 +1,5 @@
 use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
+use crate::authorship::working_log::CheckpointKind;
 use crate::config;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -750,6 +751,7 @@ impl AuthorshipLog {
                 );
 
                 let mut ai_checkpoint = Checkpoint::new(
+                    CheckpointKind::AiAgent, // TODO: Figure out best way to get this from the prompt record
                     String::new(), // Empty diff hash
                     "ai".to_string(),
                     vec![entry],
@@ -769,47 +771,6 @@ impl AuthorshipLog {
 
         Ok(checkpoints)
     }
-}
-
-/// Convert line numbers to working log Line format (Single/Range)
-#[allow(dead_code)]
-pub fn compress_lines_to_working_log_format(
-    lines: &[u32],
-) -> Vec<crate::authorship::working_log::Line> {
-    use crate::authorship::working_log::Line;
-
-    if lines.is_empty() {
-        return vec![];
-    }
-
-    let mut result = Vec::new();
-    let mut start = lines[0];
-    let mut end = lines[0];
-
-    for &line in &lines[1..] {
-        if line == end + 1 {
-            // Consecutive line, extend range
-            end = line;
-        } else {
-            // Gap found, save current range and start new one
-            if start == end {
-                result.push(Line::Single(start));
-            } else {
-                result.push(Line::Range(start, end));
-            }
-            start = line;
-            end = line;
-        }
-    }
-
-    // Add the final range
-    if start == end {
-        result.push(Line::Single(start));
-    } else {
-        result.push(Line::Range(start, end));
-    }
-
-    result
 }
 
 impl Default for AuthorshipLog {

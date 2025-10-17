@@ -1,5 +1,5 @@
 use crate::authorship::stats::stats_command;
-use crate::authorship::working_log::AgentId;
+use crate::authorship::working_log::{AgentId, CheckpointKind};
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
@@ -205,7 +205,7 @@ fn handle_checkpoint(args: &[String]) {
                         id: "ai-thread".to_string(),
                         model: "unknown".to_string(),
                     },
-                    is_human: false,
+                    checkpoint_kind: CheckpointKind::AiAgent,
                     transcript: None,
                     repo_working_dir: None,
                     edited_filepaths: None,
@@ -229,6 +229,11 @@ fn handle_checkpoint(args: &[String]) {
         }
     };
 
+    let checkpoint_kind = agent_run_result
+        .as_ref()
+        .map(|r| r.checkpoint_kind)
+        .unwrap_or(CheckpointKind::Human);
+
     // Get the current user name from git config
     let default_user_name = match repo.config_get_str("user.name") {
         Ok(Some(name)) if !name.trim().is_empty() => name,
@@ -241,6 +246,7 @@ fn handle_checkpoint(args: &[String]) {
     if let Err(e) = commands::checkpoint::run(
         &repo,
         &default_user_name,
+        checkpoint_kind,
         show_working_log,
         reset,
         false,

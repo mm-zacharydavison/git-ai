@@ -1,7 +1,7 @@
 use crate::{
     authorship::{
         transcript::{AiTranscript, Message},
-        working_log::AgentId,
+        working_log::{AgentId, CheckpointKind},
     },
     error::GitAiError,
 };
@@ -16,7 +16,7 @@ pub struct AgentCheckpointFlags {
 
 pub struct AgentRunResult {
     pub agent_id: AgentId,
-    pub is_human: bool,
+    pub checkpoint_kind: CheckpointKind,
     pub transcript: Option<AiTranscript>,
     pub repo_working_dir: Option<String>,
     pub edited_filepaths: Option<Vec<String>>,
@@ -94,7 +94,7 @@ impl AgentCheckpointPreset for ClaudePreset {
             // Early return for human checkpoint
             return Ok(AgentRunResult {
                 agent_id,
-                is_human: true,
+                checkpoint_kind: CheckpointKind::Human,
                 transcript: None,
                 repo_working_dir: None,
                 edited_filepaths: None,
@@ -104,7 +104,7 @@ impl AgentCheckpointPreset for ClaudePreset {
 
         Ok(AgentRunResult {
             agent_id,
-            is_human: false,
+            checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
             // use default.
             repo_working_dir: None,
@@ -174,7 +174,7 @@ impl AgentCheckpointPreset for CursorPreset {
                     id: conversation_id.clone(),
                     model: "unknown".to_string(),
                 },
-                is_human: true,
+                checkpoint_kind: CheckpointKind::Human,
                 transcript: None,
                 repo_working_dir: Some(repo_working_dir),
                 edited_filepaths: None,
@@ -230,7 +230,7 @@ impl AgentCheckpointPreset for CursorPreset {
 
         Ok(AgentRunResult {
             agent_id,
-            is_human: false,
+            checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
             edited_filepaths,
@@ -583,7 +583,7 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
 
         Ok(AgentRunResult {
             agent_id,
-            is_human: false,
+            checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
             repo_working_dir: Some(repo_working_dir),
             edited_filepaths,
