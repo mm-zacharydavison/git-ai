@@ -58,26 +58,6 @@ pub fn log_pr_closed(args: &[String]) -> Result<(), GitAiError> {
         merge_commit,
     )?;
 
-    // Step 5: Merge the tracking ref into local notes/ai-reflog (if it exists)
-    let tracking_ref = format!("refs/notes/{}-tracking", AI_REFLOG_REFNAME);
-    if ref_exists_in_repo(&bare_repo_path, &tracking_ref) {
-        if ref_exists_in_repo(&bare_repo_path, AI_REFLOG_REF) {
-            // Both exist - merge them
-            debug_log(&format!("Merging {} into {}", tracking_ref, AI_REFLOG_REF));
-            merge_notes_reflog(&bare_repo_path, &tracking_ref)?;
-        } else {
-            // Only tracking ref exists - copy it to local
-            debug_log(&format!(
-                "Initializing {} from {}",
-                AI_REFLOG_REF, tracking_ref
-            ));
-            copy_ref_in_repo(&bare_repo_path, &tracking_ref, AI_REFLOG_REF)?;
-        }
-    }
-
-    // Step 6: Push the notes back
-    push_notes_reflog(&bare_repo_path)?;
-
     debug_log("log_pr_closed completed successfully");
     Ok(())
 }
@@ -170,6 +150,27 @@ pub fn add_note_to_commit(
     ));
 
     exec_git_stdin(&args, note_content.as_bytes())?;
+
+    // Step 5: Merge the tracking ref into local notes/ai-reflog (if it exists)
+    let tracking_ref = format!("refs/notes/{}-tracking", AI_REFLOG_REFNAME);
+    if ref_exists_in_repo(&repo_path, &tracking_ref) {
+        if ref_exists_in_repo(&repo_path, AI_REFLOG_REF) {
+            // Both exist - merge them
+            debug_log(&format!("Merging {} into {}", tracking_ref, AI_REFLOG_REF));
+            merge_notes_reflog(&repo_path, &tracking_ref)?;
+        } else {
+            // Only tracking ref exists - copy it to local
+            debug_log(&format!(
+                "Initializing {} from {}",
+                AI_REFLOG_REF, tracking_ref
+            ));
+            copy_ref_in_repo(&repo_path, &tracking_ref, AI_REFLOG_REF)?;
+        }
+    }
+
+    // Step 6: Push the notes back
+    push_notes_reflog(&repo_path)?;
+
     Ok(())
 }
 
