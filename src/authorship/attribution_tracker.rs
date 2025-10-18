@@ -20,6 +20,59 @@ pub struct Attribution {
     pub author_id: String,
 }
 
+/// Represents attribution for a range of lines.
+/// Both start_line and end_line are inclusive (1-indexed).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct LineAttribution {
+    /// Line number where this attribution starts (inclusive, 1-indexed)
+    pub start_line: u32,
+    /// Line number where this attribution ends (inclusive, 1-indexed)
+    pub end_line: u32,
+    /// Identifier for the author of this range
+    pub author_id: String,
+}
+
+impl LineAttribution {
+    pub fn new(start_line: u32, end_line: u32, author_id: String) -> Self {
+        LineAttribution {
+            start_line,
+            end_line,
+            author_id,
+        }
+    }
+
+    /// Returns the number of lines this attribution covers
+    pub fn line_count(&self) -> u32 {
+        if self.start_line > self.end_line {
+            0
+        } else {
+            self.end_line - self.start_line + 1
+        }
+    }
+
+    /// Checks if this line attribution is empty
+    pub fn is_empty(&self) -> bool {
+        self.start_line > self.end_line
+    }
+
+    /// Checks if this attribution overlaps with a given line range (inclusive)
+    pub fn overlaps(&self, start_line: u32, end_line: u32) -> bool {
+        self.start_line <= end_line && self.end_line >= start_line
+    }
+
+    /// Returns the overlapping portion of this attribution with a given line range
+    pub fn intersection(&self, start_line: u32, end_line: u32) -> Option<(u32, u32)> {
+        let overlap_start = self.start_line.max(start_line);
+        let overlap_end = self.end_line.min(end_line);
+
+        if overlap_start <= overlap_end {
+            Some((overlap_start, overlap_end))
+        } else {
+            None
+        }
+    }
+}
+
 impl Attribution {
     pub fn new(start: usize, end: usize, author_id: String) -> Self {
         Attribution {
@@ -523,6 +576,206 @@ impl Default for AttributionTracker {
     }
 }
 
+/// Helper struct to track line boundaries in content
+struct LineBoundaries {
+    /// Maps line number (1-indexed) to (start_char, end_char) exclusive end
+    line_ranges: Vec<(usize, usize)>,
+}
+
+impl LineBoundaries {
+    fn new(content: &str) -> Self {
+        let mut line_ranges = Vec::new();
+        let mut start = 0;
+
+        for (idx, _) in content.match_indices('\n') {
+            // Line from start to idx (inclusive of newline)
+            line_ranges.push((start, idx + 1));
+            start = idx + 1;
+        }
+
+        // Handle last line if it doesn't end with newline
+        if start < content.len() {
+            line_ranges.push((start, content.len()));
+        } else if start == content.len() && content.is_empty() {
+            // Empty file - no lines
+        } else if start == content.len() && !content.is_empty() {
+            // File ends with newline, last line is already added
+        }
+
+        LineBoundaries { line_ranges }
+    }
+
+    fn line_count(&self) -> u32 {
+        self.line_ranges.len() as u32
+    }
+
+    fn get_line_range(&self, line_num: u32) -> Option<(usize, usize)> {
+        if line_num < 1 || line_num as usize > self.line_ranges.len() {
+            None
+        } else {
+            Some(self.line_ranges[line_num as usize - 1])
+        }
+    }
+}
+
+/// Remove all attributions for a given author ID from a vector of attributions.
+///
+/// # Arguments
+/// * `attributions` - The attributions to filter
+/// * `author_id` - The author ID to remove
+///
+/// # Returns
+/// A new vector with all attributions for the given author removed
+pub fn discard_attributions_for_author(
+    attributions: &Vec<Attribution>,
+    author_id: &str,
+) -> Vec<Attribution> {
+    attributions
+        .iter()
+        .filter(|attr| attr.author_id != author_id)
+        .cloned()
+        .collect()
+}
+
+/// Convert character-based attributions to line-based attributions.
+/// For each line, selects the "dominant" author based on who contributed
+/// the most non-whitespace characters to that line.
+///
+/// # Arguments
+/// * `attributions` - Character-based attributions
+/// * `content` - The file content being attributed
+///
+/// # Returns
+/// A vector of line attributions with consecutive lines by the same author merged
+pub fn attributions_to_line_attributions(
+    attributions: &Vec<Attribution>,
+    content: &str,
+) -> Vec<LineAttribution> {
+    if content.is_empty() || attributions.is_empty() {
+        return Vec::new();
+    }
+
+    let boundaries = LineBoundaries::new(content);
+    let line_count = boundaries.line_count();
+
+    if line_count == 0 {
+        return Vec::new();
+    }
+
+    // For each line, determine the dominant author
+    let mut line_authors: Vec<Option<String>> = Vec::with_capacity(line_count as usize);
+
+    for line_num in 1..=line_count {
+        let author = find_dominant_author_for_line(
+            line_num,
+            &boundaries,
+            attributions,
+            content,
+        );
+        line_authors.push(author);
+    }
+
+    // Merge consecutive lines with the same author
+    merge_consecutive_line_attributions(line_authors)
+}
+
+/// Find the dominant author for a specific line based on non-whitespace character count
+fn find_dominant_author_for_line(
+    line_num: u32,
+    boundaries: &LineBoundaries,
+    attributions: &Vec<Attribution>,
+    content: &str,
+) -> Option<String> {
+    let (line_start, line_end) = boundaries.get_line_range(line_num)?;
+
+    // Count non-whitespace chars per author
+    let mut author_counts: HashMap<String, usize> = HashMap::new();
+
+    for attr in attributions {
+        // Check if this attribution overlaps with the line
+        if let Some((overlap_start, overlap_end)) = attr.intersection(line_start, line_end) {
+            // Count non-whitespace characters in the overlap
+            let non_ws_count = content[overlap_start..overlap_end]
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .count();
+
+            *author_counts.entry(attr.author_id.clone()).or_insert(0) += non_ws_count;
+        }
+    }
+
+    // Find author with most non-whitespace chars
+    // In case of tie, use alphabetically first author for determinism
+    author_counts
+        .into_iter()
+        .max_by(|(author_a, count_a), (author_b, count_b)| {
+            match count_a.cmp(count_b) {
+                std::cmp::Ordering::Equal => author_b.cmp(author_a), // Reverse for alphabetically first
+                other => other,
+            }
+        })
+        .map(|(author, _)| author)
+}
+
+/// Merge consecutive lines with the same author into LineAttribution ranges
+fn merge_consecutive_line_attributions(line_authors: Vec<Option<String>>) -> Vec<LineAttribution> {
+    let mut result = Vec::new();
+    let line_count = line_authors.len();
+
+    let mut current_author: Option<String> = None;
+    let mut current_start: u32 = 0;
+
+    for (idx, author) in line_authors.into_iter().enumerate() {
+        let line_num = (idx + 1) as u32;
+
+        match (&current_author, author) {
+            (None, None) => {
+                // No attribution for this line, continue
+            }
+            (None, Some(new_author)) => {
+                // Start a new attribution
+                current_author = Some(new_author);
+                current_start = line_num;
+            }
+            (Some(_), None) => {
+                // End current attribution
+                if let Some(author) = current_author.take() {
+                    result.push(LineAttribution::new(
+                        current_start,
+                        line_num - 1,
+                        author,
+                    ));
+                }
+            }
+            (Some(curr), Some(new_author)) => {
+                if curr == &new_author {
+                    // Continue current attribution
+                } else {
+                    // End current, start new
+                    result.push(LineAttribution::new(
+                        current_start,
+                        line_num - 1,
+                        curr.clone(),
+                    ));
+                    current_author = Some(new_author);
+                    current_start = line_num;
+                }
+            }
+        }
+    }
+
+    // Close final attribution if any
+    if let Some(author) = current_author {
+        result.push(LineAttribution::new(
+            current_start,
+            line_count as u32,
+            author,
+        ));
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -883,6 +1136,346 @@ fn foo() {
             assert!(attr.start >= 51 || attr.end <= 47,
                 "C should not have attribution in the newline range 47-51, but has {:?}", attr);
         }
+    }
+
+    // ========== Discard Attributions Tests ==========
+
+    #[test]
+    fn test_discard_attributions_removes_all_for_author() {
+        let attributions = vec![
+            Attribution::new(0, 10, "Alice".to_string()),
+            Attribution::new(10, 20, "Bob".to_string()),
+            Attribution::new(20, 30, "Alice".to_string()),
+            Attribution::new(30, 40, "Charlie".to_string()),
+        ];
+
+        let result = discard_attributions_for_author(&attributions, "Alice");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].author_id, "Bob");
+        assert_eq!(result[1].author_id, "Charlie");
+    }
+
+    #[test]
+    fn test_discard_attributions_author_not_present() {
+        let attributions = vec![
+            Attribution::new(0, 10, "Alice".to_string()),
+            Attribution::new(10, 20, "Bob".to_string()),
+        ];
+
+        let result = discard_attributions_for_author(&attributions, "Charlie");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].author_id, "Alice");
+        assert_eq!(result[1].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_discard_attributions_empty_input() {
+        let attributions = vec![];
+        let result = discard_attributions_for_author(&attributions, "Alice");
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_discard_attributions_all_same_author() {
+        let attributions = vec![
+            Attribution::new(0, 10, "Alice".to_string()),
+            Attribution::new(10, 20, "Alice".to_string()),
+            Attribution::new(20, 30, "Alice".to_string()),
+        ];
+
+        let result = discard_attributions_for_author(&attributions, "Alice");
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_discard_attributions_preserves_ranges() {
+        let attributions = vec![
+            Attribution::new(0, 15, "Alice".to_string()),
+            Attribution::new(15, 42, "Bob".to_string()),
+            Attribution::new(42, 100, "Alice".to_string()),
+        ];
+
+        let result = discard_attributions_for_author(&attributions, "Alice");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 15);
+        assert_eq!(result[0].end, 42);
+        assert_eq!(result[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_discard_attributions_case_sensitive() {
+        let attributions = vec![
+            Attribution::new(0, 10, "Alice".to_string()),
+            Attribution::new(10, 20, "alice".to_string()),
+            Attribution::new(20, 30, "ALICE".to_string()),
+        ];
+
+        let result = discard_attributions_for_author(&attributions, "Alice");
+
+        // Should only remove exact match "Alice", not "alice" or "ALICE"
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].author_id, "alice");
+        assert_eq!(result[1].author_id, "ALICE");
+    }
+
+    #[test]
+    fn test_discard_attributions_overlapping_preserved() {
+        let attributions = vec![
+            Attribution::new(0, 20, "Alice".to_string()),
+            Attribution::new(5, 15, "Bob".to_string()),
+            Attribution::new(10, 30, "Alice".to_string()),
+        ];
+
+        let result = discard_attributions_for_author(&attributions, "Alice");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 5);
+        assert_eq!(result[0].end, 15);
+        assert_eq!(result[0].author_id, "Bob");
+    }
+
+    // ========== LineAttribution Tests ==========
+
+    #[test]
+    fn test_line_attribution_simple_single_author() {
+        let content = "line 1\nline 2\nline 3\n";
+        let attributions = vec![Attribution::new(0, content.len(), "Alice".to_string())];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].start_line, 1);
+        assert_eq!(line_attrs[0].end_line, 3);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_multiple_authors_distinct_lines() {
+        let content = "line 1\nline 2\nline 3\n";
+        // Alice: line 1, Bob: line 2, Charlie: line 3
+        let attributions = vec![
+            Attribution::new(0, 7, "Alice".to_string()),     // "line 1\n"
+            Attribution::new(7, 14, "Bob".to_string()),      // "line 2\n"
+            Attribution::new(14, 21, "Charlie".to_string()), // "line 3\n"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        assert_eq!(line_attrs.len(), 3);
+        assert_eq!(line_attrs[0].start_line, 1);
+        assert_eq!(line_attrs[0].end_line, 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+        assert_eq!(line_attrs[1].start_line, 2);
+        assert_eq!(line_attrs[1].end_line, 2);
+        assert_eq!(line_attrs[1].author_id, "Bob");
+        assert_eq!(line_attrs[2].start_line, 3);
+        assert_eq!(line_attrs[2].end_line, 3);
+        assert_eq!(line_attrs[2].author_id, "Charlie");
+    }
+
+    #[test]
+    fn test_line_attribution_dominant_author_by_non_whitespace() {
+        // Line with mixed authorship - dominant author has more non-whitespace chars
+        let content = "const x = 123;\n";
+        let attributions = vec![
+            Attribution::new(0, 6, "Alice".to_string()),  // "const "
+            Attribution::new(6, 15, "Bob".to_string()),   // "x = 123;\n"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Bob has "x = 123;\n" = 6 non-ws chars (x,=,1,2,3,;)
+        // Alice has "const " = 5 non-ws chars (c,o,n,s,t)
+        // Bob should win with 6 > 5
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_attribution_whitespace_doesnt_count() {
+        // Test that whitespace is ignored when determining dominant author
+        let content = "    code\n";
+        let attributions = vec![
+            Attribution::new(0, 4, "Alice".to_string()),  // "    " (4 spaces)
+            Attribution::new(4, 9, "Bob".to_string()),    // "code\n"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Alice has 0 non-ws chars, Bob has 4 non-ws chars
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_attribution_merging_consecutive_lines() {
+        let content = "line 1\nline 2\nline 3\nline 4\n";
+        let attributions = vec![
+            Attribution::new(0, 7, "Alice".to_string()),     // line 1
+            Attribution::new(7, 14, "Alice".to_string()),    // line 2
+            Attribution::new(14, 21, "Bob".to_string()),     // line 3
+            Attribution::new(21, 28, "Bob".to_string()),     // line 4
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Should merge consecutive lines with same author
+        assert_eq!(line_attrs.len(), 2);
+        assert_eq!(line_attrs[0].start_line, 1);
+        assert_eq!(line_attrs[0].end_line, 2);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+        assert_eq!(line_attrs[1].start_line, 3);
+        assert_eq!(line_attrs[1].end_line, 4);
+        assert_eq!(line_attrs[1].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_attribution_overlapping_attributions() {
+        let content = "hello world\n";
+        let attributions = vec![
+            Attribution::new(0, 12, "Alice".to_string()), // entire line
+            Attribution::new(6, 11, "Bob".to_string()),   // "world"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Alice has "hello world\n" = 10 non-ws chars (hello=5, world=5)
+        // Bob has "world" = 5 non-ws chars
+        // Alice should win with 10 > 5
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_tie_breaker_alphabetical() {
+        // When two authors have equal non-whitespace chars, alphabetically first wins
+        let content = "ab cd\n";
+        let attributions = vec![
+            Attribution::new(0, 2, "Zara".to_string()),   // "ab"
+            Attribution::new(3, 5, "Alice".to_string()),  // "cd"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Both have 2 non-ws chars, Alice comes first alphabetically
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_empty_content() {
+        let content = "";
+        let attributions = vec![];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        assert_eq!(line_attrs.len(), 0);
+    }
+
+    #[test]
+    fn test_line_attribution_no_trailing_newline() {
+        let content = "line 1\nline 2";
+        let attributions = vec![
+            Attribution::new(0, 7, "Alice".to_string()),
+            Attribution::new(7, 13, "Bob".to_string()),
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        assert_eq!(line_attrs.len(), 2);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+        assert_eq!(line_attrs[1].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_attribution_realistic_code() {
+        let content = r#"fn calculate_sum(a: i32, b: i32) -> i32 {
+    let result = a + b;
+    println!("Sum: {}", result);
+    result
+}
+
+fn main() {
+    let x = 5;
+    let y = 10;
+    let sum = calculate_sum(x, y);
+    println!("Total: {}", sum);
+}
+"#;
+
+        // Alice wrote calculate_sum function (lines 1-5)
+        // Bob wrote main function (lines 7-12)
+        let attributions = vec![
+            Attribution::new(0, 89, "Alice".to_string()),
+            Attribution::new(91, content.len(), "Bob".to_string()),
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Should have Alice's block, then Bob's block
+        assert!(line_attrs.len() >= 2);
+
+        // First attribution should be Alice
+        assert_eq!(line_attrs[0].author_id, "Alice");
+        assert_eq!(line_attrs[0].start_line, 1);
+
+        // Should have a Bob attribution
+        let bob_attrs: Vec<_> = line_attrs.iter().filter(|a| a.author_id == "Bob").collect();
+        assert!(bob_attrs.len() > 0);
+    }
+
+    #[test]
+    fn test_line_attribution_mixed_authorship_per_line() {
+        let content = "let x = foo() + bar();\n";
+        let attributions = vec![
+            Attribution::new(0, 8, "Alice".to_string()),   // "let x = "
+            Attribution::new(8, 13, "Bob".to_string()),    // "foo()"
+            Attribution::new(13, 16, "Alice".to_string()), // " + "
+            Attribution::new(16, 21, "Charlie".to_string()), // "bar()"
+            Attribution::new(21, 23, "Alice".to_string()), // ";\n"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Alice: "let x = " (6) + " + " (1) + ";\n" (1) = 8 non-ws chars
+        // Bob: "foo()" (5) = 5 non-ws chars
+        // Charlie: "bar()" (5) = 5 non-ws chars
+        // Alice should win
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_all_whitespace_line() {
+        let content = "code\n    \nmore code\n";
+        let attributions = vec![
+            Attribution::new(0, 5, "Alice".to_string()),     // "code\n"
+            Attribution::new(5, 10, "Bob".to_string()),      // "    \n" (whitespace line)
+            Attribution::new(10, 20, "Charlie".to_string()), // "more code\n"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Line 2 has only whitespace from Bob, so Bob still wins (only contributor)
+        assert_eq!(line_attrs.len(), 3);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+        assert_eq!(line_attrs[1].author_id, "Bob"); // Even with 0 non-ws, Bob is only author
+        assert_eq!(line_attrs[2].author_id, "Charlie");
+    }
+
+    #[test]
+    fn test_line_attribution_helper_methods() {
+        let line_attr = LineAttribution::new(5, 10, "Alice".to_string());
+
+        assert_eq!(line_attr.line_count(), 6);
+        assert!(!line_attr.is_empty());
+        assert!(line_attr.overlaps(8, 12));
+        assert!(!line_attr.overlaps(1, 4));
+        assert_eq!(line_attr.intersection(8, 12), Some((8, 10)));
+        assert_eq!(line_attr.intersection(1, 4), None);
     }
 
     #[test]
