@@ -90,58 +90,119 @@ pub fn post_commit(
             repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
         }
     } else {
-        // Filter the working log to remove committed lines, keeping only unstaged ones
+        // Transfer working log entries for files with unstaged changes
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
         let parent_checkpoints = parent_working_log.read_all_checkpoints()?;
 
         let new_working_log = repo_storage.working_log_for_base_commit(&commit_sha);
 
-        for mut checkpoint in parent_checkpoints {
-            // Filter entries to only include unstaged attributions
-            for entry in &mut checkpoint.entries {
-                if let Some(unstaged_ranges) = unstaged_hunks.get(&entry.file) {
-                    // Get file content from blob storage to convert line ranges to char positions
-                    let file_content = parent_working_log
-                        .get_file_version(&entry.blob_sha)
-                        .unwrap_or_default();
+        // Build a map of file -> (most recent entry, checkpoint)
+        // The last checkpoint for a given file contains the full attribution snapshot
+        let mut file_to_latest: HashMap<String, (crate::authorship::working_log::WorkingLogEntry, &crate::authorship::working_log::Checkpoint)> = HashMap::new();
 
-                    // Convert unstaged line ranges to character ranges
-                    let unstaged_char_ranges = convert_line_ranges_to_char_ranges(
-                        &file_content,
-                        unstaged_ranges,
-                    );
+        for checkpoint in &parent_checkpoints {
+            for entry in &checkpoint.entries {
+                // Later checkpoints override earlier ones (we want the most recent snapshot)
+                file_to_latest.insert(entry.file.clone(), (entry.clone(), checkpoint));
+            }
+        }
 
-                    // Filter attributions to only those within unstaged character ranges
-                    let mut filtered_attributions = Vec::new();
-                    for attr in &entry.attributions {
-                        // Check if attribution overlaps with any unstaged range
-                        for (range_start, range_end) in &unstaged_char_ranges {
-                            if attr.start < *range_end && attr.end > *range_start {
-                                // Calculate intersection
-                                let new_start = attr.start.max(*range_start);
-                                let new_end = attr.end.min(*range_end);
-                                filtered_attributions.push(
-                                    crate::authorship::attribution_tracker::Attribution::new(
-                                        new_start,
-                                        new_end,
-                                        attr.author_id.clone(),
-                                    ),
-                                );
+        // Collect author_ids from attributions that overlap with unstaged lines
+        let mut referenced_author_ids: HashSet<String> = HashSet::new();
+        
+        for (file, (entry, _)) in &file_to_latest {
+            if let Some(unstaged_ranges) = unstaged_hunks.get(file) {
+                // Check line attributions for overlaps with unstaged ranges
+                for line_attr in &entry.line_attributions {
+                    for unstaged_range in unstaged_ranges {
+                        // Check if this line attribution overlaps with any unstaged range
+                        let unstaged_lines = unstaged_range.expand();
+                        for unstaged_line in unstaged_lines {
+                            if line_attr.start_line <= unstaged_line && unstaged_line <= line_attr.end_line {
+                                referenced_author_ids.insert(line_attr.author_id.clone());
+                                break;
                             }
                         }
                     }
-
-                    entry.attributions = filtered_attributions;
                 }
             }
+        }
 
-            // Remove entries with no attributions left
-            checkpoint
-                .entries
-                .retain(|entry| !entry.attributions.is_empty());
+        // Build a map of author_id -> latest checkpoint with that author_id
+        // This ensures we preserve transcripts for AI authors referenced in unstaged lines
+        let mut author_to_latest_checkpoint: HashMap<String, &crate::authorship::working_log::Checkpoint> = HashMap::new();
+        
+        for checkpoint in &parent_checkpoints {
+            // Compute the author_id for this checkpoint (same logic as in checkpoint.rs)
+            let checkpoint_author_id = if checkpoint.kind != crate::authorship::working_log::CheckpointKind::Human {
+                if let Some(agent_id) = &checkpoint.agent_id {
+                    crate::authorship::authorship_log_serialization::generate_short_hash(
+                        &agent_id.id,
+                        &agent_id.tool,
+                    )
+                } else {
+                    checkpoint.kind.to_str()
+                }
+            } else {
+                checkpoint.kind.to_str()
+            };
+            
+            // If this checkpoint's author_id is referenced by unstaged lines, track it
+            // Later checkpoints override earlier ones (we want the latest version)
+            if referenced_author_ids.contains(&checkpoint_author_id) {
+                author_to_latest_checkpoint.insert(checkpoint_author_id, checkpoint);
+            }
+        }
 
-            // Only append if there are entries left
-            if !checkpoint.entries.is_empty() {
+        // Group entries by their author_id for files with unstaged changes
+        // We create one checkpoint per unique author_id that has unstaged lines
+        let mut author_checkpoint_groups: HashMap<String, (crate::authorship::working_log::Checkpoint, Vec<crate::authorship::working_log::WorkingLogEntry>)> = HashMap::new();
+        
+        for (file, (entry, _original_checkpoint)) in file_to_latest {
+            // Only process files with unstaged changes
+            if !unstaged_hunks.contains_key(&file) {
+                continue;
+            }
+            
+            // Check which author_ids from this entry have unstaged lines
+            if let Some(unstaged_ranges) = unstaged_hunks.get(&file) {
+                let mut authors_in_unstaged_lines: HashSet<String> = HashSet::new();
+                
+                for line_attr in &entry.line_attributions {
+                    for unstaged_range in unstaged_ranges {
+                        let unstaged_lines = unstaged_range.expand();
+                        for unstaged_line in &unstaged_lines {
+                            if line_attr.start_line <= *unstaged_line && *unstaged_line <= line_attr.end_line {
+                                authors_in_unstaged_lines.insert(line_attr.author_id.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // For each author with unstaged lines, add the entry to their checkpoint group
+                for author_id in authors_in_unstaged_lines {
+                    if let Some((_, entries)) = author_checkpoint_groups.get_mut(&author_id) {
+                        // Check if this file is already in the entries
+                        if !entries.iter().any(|e| e.file == entry.file) {
+                            entries.push(entry.clone());
+                        }
+                    } else if let Some(checkpoint) = author_to_latest_checkpoint.get(&author_id) {
+                        // Create a new checkpoint group with the latest checkpoint for this author
+                        // Set line stats to zero to avoid double counting
+                        let mut new_checkpoint = (*checkpoint).clone();
+                        new_checkpoint.line_stats = crate::authorship::working_log::CheckpointLineStats::default();
+                        new_checkpoint.entries = vec![entry.clone()];
+                        author_checkpoint_groups.insert(author_id, (new_checkpoint, vec![entry.clone()]));
+                    }
+                }
+            }
+        }
+
+        // Append all checkpoint groups to the new working log
+        for (_, (mut checkpoint, entries)) in author_checkpoint_groups {
+            if !entries.is_empty() {
+                checkpoint.entries = entries;
                 new_working_log.append_checkpoint(&checkpoint)?;
             }
         }
@@ -318,56 +379,6 @@ fn convert_authorship_log_to_commit_coordinates(
     authorship_log
         .attestations
         .retain(|file| !file.entries.is_empty());
-}
-
-/// Convert line ranges to character ranges
-///
-/// Takes a file's content and line ranges, and converts them to character position ranges.
-/// This is needed to filter attributions (which are character-based) by unstaged line ranges.
-/// Logic mirrors line_ranges_to_attributions in authorship_log_serialization.rs
-fn convert_line_ranges_to_char_ranges(
-    content: &str,
-    line_ranges: &[LineRange],
-) -> Vec<(usize, usize)> {
-    let mut char_ranges = Vec::new();
-
-    // Build a map of line number -> (start_char, end_char)
-    let mut line_char_positions: Vec<(usize, usize)> = Vec::new();
-    let mut current_pos = 0usize;
-
-    for line in content.lines() {
-        let line_start = current_pos;
-        let line_len = line.len();
-        let line_end = current_pos + line_len;
-        line_char_positions.push((line_start, line_end));
-        current_pos = line_end + 1; // +1 for newline
-    }
-
-    // Convert each line range to character range
-    for range in line_ranges {
-        let line_numbers = range.expand();
-
-        if line_numbers.is_empty() {
-            continue;
-        }
-
-        // Get the character range spanning all these lines
-        let first_line = line_numbers[0];
-        let last_line = line_numbers[line_numbers.len() - 1];
-
-        if first_line > 0 && (first_line as usize) <= line_char_positions.len() {
-            let char_start = line_char_positions[(first_line - 1) as usize].0;
-            let char_end = if (last_line as usize) <= line_char_positions.len() {
-                line_char_positions[(last_line - 1) as usize].1
-            } else {
-                content.len()
-            };
-
-            char_ranges.push((char_start, char_end));
-        }
-    }
-
-    char_ranges
 }
 
 #[cfg(test)]

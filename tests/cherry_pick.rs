@@ -138,12 +138,25 @@ fn test_cherry_pick_abort() {
     repo.git(&["checkout", "-b", "feature"]).unwrap();
     file.replace_at(1, "AI modification of line 2".ai());
     repo.stage_all_and_commit("AI feature").unwrap();
+
+    // Assert intermediary blame
+    file.assert_lines_and_blame(lines![
+        "Line 1".human(),
+        "AI modification of line 2".ai(),
+    ]);
+
     let feature_commit = repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
 
     // Switch back to main and make conflicting change (also modify line 2)
     repo.git(&["checkout", &main_branch]).unwrap();
     file.replace_at(1, "Human modification of line 2".human());
     repo.stage_all_and_commit("Human change").unwrap();
+
+    // Assert intermediary blame
+    file.assert_lines_and_blame(lines![
+        "Line 1".human(),
+        "Human modification of line 2".human(),
+    ]);
 
     // Try to cherry-pick (should conflict)
     let cherry_pick_result = repo.git(&["cherry-pick", &feature_commit]);

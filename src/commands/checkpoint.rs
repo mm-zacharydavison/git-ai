@@ -449,26 +449,14 @@ fn get_initial_checkpoint_entries(
         // TODO Get previous attributions from authorship log
         let prev_attributions = Vec::new();
 
-        let tracker = AttributionTracker::new();
-        let new_attributions = tracker.update_attributions(
-            &previous_content,
-            &current_content,
-            &prev_attributions,
-            &author_id,
-        )?;
-        let filtered_attributions = new_attributions.iter().filter(|a| a.author_id != CheckpointKind::Human.to_str()).cloned().collect::<Vec<Attribution>>();
-
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
             .get(file_path)
             .cloned()
             .unwrap_or_default();
 
-        entries.push(WorkingLogEntry::new(
-            file_path.clone(),
-            blob_sha,
-            filtered_attributions,
-        ));
+        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content)?;
+        entries.push(entry);
     }
 
     Ok(entries)
@@ -500,14 +488,11 @@ fn get_subsequent_checkpoint_entries(
         kind.to_str()
     };
 
-    // Build a map of file path -> blob_sha by iterating through previous checkpoints in reverse
-    // to find the most recent previous file hash for each filepath
+    // Build a map of file path -> (blob_sha, attributions) by iterating through previous checkpoints to get the latest
     let mut previous_file_hashes_with_attributions: HashMap<String, (String, Vec<Attribution>)> = HashMap::new();
-    for checkpoint in previous_checkpoints.iter().rev() {
+    for checkpoint in previous_checkpoints {
         for entry in &checkpoint.entries {
-            // Only insert if we haven't seen this file yet (since we're iterating from most recent)
-            previous_file_hashes_with_attributions.entry(entry.file.clone())
-                .or_insert_with(|| (entry.blob_sha.clone(), entry.attributions.clone()));
+            previous_file_hashes_with_attributions.insert(entry.file.clone(), (entry.blob_sha.clone(), entry.attributions.clone()));
         }
     }
 
@@ -528,29 +513,37 @@ fn get_subsequent_checkpoint_entries(
             (String::new(), Vec::new()) // No previous version, treat as empty
         };
 
-        let tracker = AttributionTracker::new();
-        let new_attributions = tracker.update_attributions(
-            &previous_content,
-            &current_content,
-            &prev_attributions,
-            &author_id,
-        )?;
-        let filtered_attributions = new_attributions.iter().filter(|a| a.author_id != CheckpointKind::Human.to_str()).cloned().collect::<Vec<Attribution>>();
-
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
             .get(file_path)
             .cloned()
             .unwrap_or_default();
 
-        entries.push(WorkingLogEntry::new(
-            file_path.clone(),
-            blob_sha,
-            filtered_attributions,
-        ));
+        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content)?;
+        entries.push(entry);
     }
 
     Ok(entries)
+}
+
+fn make_entry_for_file(
+    file_path: &str,
+    blob_sha: &str,
+    author_id: &str,
+    previous_content: &str,
+    previous_attributions: &Vec<Attribution>,
+    content: &str,
+) -> Result<WorkingLogEntry, GitAiError> {
+    let tracker = AttributionTracker::new();
+    let new_attributions = tracker.update_attributions(
+        previous_content,
+        content,
+        previous_attributions,
+        author_id,
+    )?;
+    let filtered_attributions = crate::authorship::attribution_tracker::discard_attributions_for_author(&new_attributions, &CheckpointKind::Human.to_str());
+    let line_attributions = crate::authorship::attribution_tracker::attributions_to_line_attributions(&filtered_attributions, content);
+    Ok(WorkingLogEntry::new(file_path.to_string(), blob_sha.to_string(), filtered_attributions, line_attributions))
 }
 
 /// Compute line statistics by diffing files against their previous versions
@@ -567,12 +560,11 @@ fn compute_line_stats(
         .map(|cp| cp.line_stats.clone())
         .unwrap_or_default();
 
-    // Build a map of file path -> previous blob_sha
+    // Build a map of file path -> most recent blob_sha
     let mut previous_file_hashes: HashMap<String, String> = HashMap::new();
-    for checkpoint in previous_checkpoints.iter().rev() {
+    for checkpoint in previous_checkpoints {
         for entry in &checkpoint.entries {
-            previous_file_hashes.entry(entry.file.clone())
-                .or_insert_with(|| entry.blob_sha.clone());
+            previous_file_hashes.insert(entry.file.clone(), entry.blob_sha.clone());
         }
     }
 
@@ -649,7 +641,6 @@ fn compute_line_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authorship::working_log::Line;
     use crate::git::test_utils::TmpRepo;
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit;
+use crate::authorship::working_log::CheckpointKind;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
@@ -269,9 +270,26 @@ pub fn prepare_working_log_after_squash(
     delete_hanging_commit(repo, &hanging_commit_sha)?;
     delete_hanging_commit(repo, &temp_commit.to_string())?;
 
-    // Step 9: Convert authorship log to checkpoints
+    // Step 9: Build file contents map from staged files
+    use std::collections::HashMap;
+    let mut file_contents: HashMap<String, String> = HashMap::new();
+    for file_attestation in &new_authorship_log.attestations {
+        let file_path = &file_attestation.file_path;
+        // Read the staged version of the file using git show :path
+        let mut args = repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push(format!(":{}", file_path));
+
+        let output = crate::git::repository::exec_git(&args)?;
+        let file_content = String::from_utf8(output.stdout).map_err(|_| {
+            GitAiError::Generic(format!("Failed to read staged file: {}", file_path))
+        })?;
+        file_contents.insert(file_path.clone(), file_content);
+    }
+
+    // Step 10: Convert authorship log to checkpoints
     let mut checkpoints = new_authorship_log
-        .convert_to_checkpoints_for_squash(human_author, repo)
+        .convert_to_checkpoints_for_squash(&file_contents)
         .map_err(|e| {
             GitAiError::Generic(format!(
                 "Failed to convert authorship log to checkpoints: {}",
@@ -280,9 +298,9 @@ pub fn prepare_working_log_after_squash(
         })?;
 
     // Filter to keep only AI checkpoints - we don't track human-only changes in working logs
-    checkpoints.retain(|checkpoint| checkpoint.agent_id.is_some());
+    checkpoints.retain(|checkpoint| checkpoint.kind != CheckpointKind::Human);
 
-    // Step 10: For each checkpoint, read the staged file content and save blobs
+    // Step 11: For each checkpoint, read the staged file content and save blobs
     let working_log = repo
         .storage
         .working_log_for_base_commit(target_branch_head_sha);
@@ -717,7 +735,6 @@ pub fn rewrite_authorship_after_commit_amend(
     for checkpoint in &checkpoints {
         authorship_log.apply_checkpoint(
             checkpoint,
-            &working_log,
             Some(&human_author),
             &mut session_additions,
             &mut session_deletions,
@@ -1394,9 +1411,24 @@ pub fn reconstruct_working_log_after_reset(
         new_authorship_log.metadata.prompts.len()
     ));
 
-    // Step 4: Convert to checkpoints
+    // Step 4: Build file contents map from index
+    use std::collections::HashMap;
+    let mut file_contents: HashMap<String, String> = HashMap::new();
+    for file_attestation in &new_authorship_log.attestations {
+        // Read from index using git show :path
+        let mut args = repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push(format!(":{}", file_attestation.file_path));
+
+        let output = crate::git::repository::exec_git(&args)?;
+        let file_content = String::from_utf8(output.stdout)
+            .map_err(|_| GitAiError::Generic(format!("Failed to read file: {}", file_attestation.file_path)))?;
+        file_contents.insert(file_attestation.file_path.clone(), file_content);
+    }
+
+    // Step 5: Convert to checkpoints
     let mut checkpoints = new_authorship_log
-        .convert_to_checkpoints_for_squash(human_author, repo)
+        .convert_to_checkpoints_for_squash(&file_contents)
         .map_err(|e| {
             GitAiError::Generic(format!(
                 "Failed to convert authorship log to checkpoints: {}",
@@ -1405,9 +1437,9 @@ pub fn reconstruct_working_log_after_reset(
         })?;
 
     // Filter to keep only AI checkpoints - we don't track human-only changes in working logs
-    checkpoints.retain(|checkpoint| checkpoint.agent_id.is_some());
+    checkpoints.retain(|checkpoint| checkpoint.kind != CheckpointKind::Human);
 
-    // Step 5: Persist blobs and write working log
+    // Step 6: Persist blobs and write working log
     let new_working_log = repo.storage.working_log_for_base_commit(target_commit_sha);
     // reset first (can have stuff in it from before if you're operating on HEAD)
     new_working_log.reset_working_log()?;
@@ -1417,7 +1449,7 @@ pub fn reconstruct_working_log_after_reset(
         new_working_log.append_checkpoint(checkpoint)?;
     }
 
-    // Step 6: Cleanup hanging commits
+    // Step 7: Cleanup hanging commits
     delete_hanging_commit(repo, &hanging_commit_sha.to_string())?;
     delete_hanging_commit(repo, &temp_working_commit.to_string())?;
 
@@ -1535,7 +1567,6 @@ fn create_authorship_log_for_hanging_commit(
         for checkpoint in &checkpoints {
             authorship_log.apply_checkpoint(
                 checkpoint,
-                &working_log,
                 Some(human_author),
                 &mut session_additions,
                 &mut session_deletions,

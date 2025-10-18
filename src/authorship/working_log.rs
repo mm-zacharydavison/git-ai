@@ -1,50 +1,8 @@
 use crate::authorship::transcript::AiTranscript;
-use crate::authorship::attribution_tracker::Attribution;
+use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/* Types  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Line {
-    Single(u32),
-    Range(u32, u32),
-}
-
-#[allow(dead_code)]
-impl Line {
-    pub fn start(&self) -> u32 {
-        match self {
-            Line::Single(line) => *line,
-            Line::Range(start, _) => *start,
-        }
-    }
-
-    pub fn end(&self) -> u32 {
-        match self {
-            Line::Single(line) => *line,
-            Line::Range(_, end) => *end,
-        }
-    }
-
-    /// Check if this line/range contains a given line number
-    pub fn contains(&self, line_number: u32) -> bool {
-        match self {
-            Line::Single(line) => *line == line_number,
-            Line::Range(start, end) => line_number >= *start && line_number <= *end,
-        }
-    }
-}
-
-impl fmt::Display for Line {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Line::Single(line) => write!(f, "{}", line),
-            Line::Range(start, end) => write!(f, "[{}, {}]", start, end),
-        }
-    }
-}
 
 /// Represents a working log entry for a specific file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +12,10 @@ pub struct WorkingLogEntry {
     /// SHA256 hash of the file content at this checkpoint
     #[serde(default)]
     pub blob_sha: String,
+    #[serde(default)]
     pub attributions: Vec<Attribution>,
+    #[serde(default)]
+    pub line_attributions: Vec<LineAttribution>,
 }
 
 impl WorkingLogEntry {
@@ -63,11 +24,13 @@ impl WorkingLogEntry {
         file: String,
         blob_sha: String,
         attributions: Vec<Attribution>,
+        line_attributions: Vec<LineAttribution>,
     ) -> Self {
         Self {
             file,
             blob_sha,
             attributions,
+            line_attributions,
         }
     }
 }
@@ -189,28 +152,11 @@ mod tests {
     use crate::authorship::transcript::Message;
 
     #[test]
-    fn test_line_serialization() {
-        let single_line = Line::Single(5);
-        let range_line = Line::Range(10, 15);
-
-        let single_json = serde_json::to_string(&single_line).unwrap();
-        let range_json = serde_json::to_string(&range_line).unwrap();
-
-        assert_eq!(single_json, "5");
-        assert_eq!(range_json, "[10,15]");
-
-        let deserialized_single: Line = serde_json::from_str(&single_json).unwrap();
-        let deserialized_range: Line = serde_json::from_str(&range_json).unwrap();
-
-        assert_eq!(deserialized_single, single_line);
-        assert_eq!(deserialized_range, range_line);
-    }
-
-    #[test]
     fn test_checkpoint_serialization() {
         let entry = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "abc123def456".to_string(),
+            Vec::new(),
             Vec::new(),
         );
         let checkpoint = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "claude".to_string(), vec![entry]);
@@ -242,12 +188,14 @@ mod tests {
             "src/xyz.rs".to_string(),
             "sha1".to_string(),
             Vec::new(),
+            Vec::new(),
         );
         let checkpoint1 = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "claude".to_string(), vec![entry1]);
 
         let entry2 = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "sha2".to_string(),
+            Vec::new(),
             Vec::new(),
         );
         let checkpoint2 = Checkpoint::new(
@@ -273,25 +221,11 @@ mod tests {
     }
 
     #[test]
-    fn test_line_contains() {
-        let single = Line::Single(5);
-        let range = Line::Range(10, 15);
-
-        assert!(single.contains(5));
-        assert!(!single.contains(6));
-
-        assert!(range.contains(10));
-        assert!(range.contains(12));
-        assert!(range.contains(15));
-        assert!(!range.contains(9));
-        assert!(!range.contains(16));
-    }
-
-    #[test]
     fn test_checkpoint_with_transcript() {
         let entry = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "test_sha".to_string(),
+            Vec::new(),
             Vec::new(),
         );
 

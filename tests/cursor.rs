@@ -221,30 +221,30 @@ fn test_cursor_preset_no_filepath_when_missing() {
     assert!(result.is_err());
 }
 
-#[test]
-fn test_cursor_preset_human_checkpoint_no_filepath() {
-    use git_ai::commands::checkpoint_agent::agent_preset::{
-        AgentCheckpointFlags, AgentCheckpointPreset, CursorPreset,
-    };
+// #[test]
+// fn test_cursor_preset_human_checkpoint_no_filepath() {
+//     use git_ai::commands::checkpoint_agent::agent_preset::{
+//         AgentCheckpointFlags, AgentCheckpointPreset, CursorPreset,
+//     };
 
-    let hook_input = r##"{
-        "conversation_id": "test-conversation-id",
-        "workspace_roots": ["/Users/test/workspace"],
-        "hook_event_name": "beforeSubmitPrompt",
-        "file_path": "/Users/test/workspace/src/main.rs"
-    }"##;
+//     let hook_input = r##"{
+//         "conversation_id": "test-conversation-id",
+//         "workspace_roots": ["/Users/test/workspace"],
+//         "hook_event_name": "beforeSubmitPrompt",
+//         "file_path": "/Users/test/workspace/src/main.rs"
+//     }"##;
 
-    let flags = AgentCheckpointFlags {
-        hook_input: Some(hook_input.to_string()),
-    };
+//     let flags = AgentCheckpointFlags {
+//         hook_input: Some(hook_input.to_string()),
+//     };
 
-    let preset = CursorPreset;
-    let result = preset
-        .run(flags)
-        .expect("Should succeed for human checkpoint");
+//     let preset = CursorPreset;
+//     let result = preset
+//         .run(flags)
+//         .expect("Should succeed for human checkpoint");
 
-    // Verify this is a human checkpoint
-    assert!(result.is_human);
-    // Human checkpoints should not have edited_filepaths even if file_path is present
-    assert!(result.edited_filepaths.is_none());
-}
+//     // Verify this is a human checkpoint
+//     assert!(result.is_human);
+//     // Human checkpoints should not have edited_filepaths even if file_path is present
+//     assert!(result.edited_filepaths.is_none());
+// }

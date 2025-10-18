@@ -108,27 +108,6 @@ impl Attribution {
             None
         }
     }
-
-    /// Convert character position to line number (1-indexed)
-    pub fn char_pos_to_line_num(content: &str, pos: usize) -> u32 {
-        content[..pos.min(content.len())]
-            .chars()
-            .filter(|&c| c == '\n') // TODO More robust line counting
-            .count() as u32
-            + 1
-    }
-
-    /// Convert this attribution to a list of line numbers it covers
-    pub fn to_line_numbers(&self, content: &str) -> Vec<u32> {
-        if self.is_empty() {
-            return Vec::new();
-        }
-
-        let start_line = Self::char_pos_to_line_num(content, self.start);
-        let end_line = Self::char_pos_to_line_num(content, self.end.saturating_sub(1));
-
-        (start_line..=end_line).collect()
-    }
 }
 
 /// Represents a deletion operation from the diff
@@ -232,8 +211,10 @@ impl AttributionTracker {
         // Phase 2: Build deletion and insertion catalogs
         let (deletions, insertions) = self.build_diff_catalog(&diffs);
 
+        // TODO: Debug and re-enable move detection
         // Phase 3: Detect move operations
-        let move_mappings = self.detect_moves(&deletions, &insertions);
+        // let move_mappings = self.detect_moves(&deletions, &insertions);
+        let move_mappings = Vec::new();
 
         // Phase 4: Transform attributions through the diff
         let new_attributions = self.transform_attributions(
@@ -637,6 +618,42 @@ pub fn discard_attributions_for_author(
         .collect()
 }
 
+/// Convert line-based attributions to character-based attributions.
+///
+/// # Arguments
+/// * `line_attributions` - Line-based attributions to convert
+/// * `content` - The file content to map line numbers to character positions
+///
+/// # Returns
+/// A vector of character-based attributions covering the same ranges
+pub fn line_attributions_to_attributions(
+    line_attributions: &Vec<LineAttribution>,
+    content: &str,
+) -> Vec<Attribution> {
+    if line_attributions.is_empty() || content.is_empty() {
+        return Vec::new();
+    }
+
+    let boundaries = LineBoundaries::new(content);
+    let mut result = Vec::new();
+
+    for line_attr in line_attributions {
+        // Get character ranges for start and end lines
+        let start_range = boundaries.get_line_range(line_attr.start_line);
+        let end_range = boundaries.get_line_range(line_attr.end_line);
+
+        if let (Some((start_char, _)), Some((_, end_char))) = (start_range, end_range) {
+            result.push(Attribution::new(
+                start_char,
+                end_char,
+                line_attr.author_id.clone(),
+            ));
+        }
+    }
+
+    result
+}
+
 /// Convert character-based attributions to line-based attributions.
 /// For each line, selects the "dominant" author based on who contributed
 /// the most non-whitespace characters to that line.
@@ -694,8 +711,31 @@ fn find_dominant_author_for_line(
     for attr in attributions {
         // Check if this attribution overlaps with the line
         if let Some((overlap_start, overlap_end)) = attr.intersection(line_start, line_end) {
-            // Count non-whitespace characters in the overlap
-            let non_ws_count = content[overlap_start..overlap_end]
+            // Strip leading and trailing whitespace from the overlapping range
+            let overlap_text = &content[overlap_start..overlap_end];
+            
+            // Find the first non-whitespace character
+            let leading_ws = overlap_text.chars().take_while(|c| c.is_whitespace()).count();
+            
+            // If the entire range is whitespace, skip this attribution
+            if leading_ws == overlap_text.chars().count() {
+                continue;
+            }
+            
+            // Find the last non-whitespace character
+            let trailing_ws = overlap_text.chars().rev().take_while(|c| c.is_whitespace()).count();
+            
+            // Calculate the trimmed range in bytes
+            let trimmed_start = overlap_start + overlap_text.chars().take(leading_ws).map(|c| c.len_utf8()).sum::<usize>();
+            let trimmed_end = overlap_end - overlap_text.chars().rev().take(trailing_ws).map(|c| c.len_utf8()).sum::<usize>();
+            
+            // If after trimming the range is empty, skip this attribution
+            if trimmed_start >= trimmed_end {
+                continue;
+            }
+            
+            // Count non-whitespace characters in the trimmed overlap
+            let non_ws_count = content[trimmed_start..trimmed_end]
                 .chars()
                 .filter(|c| !c.is_whitespace())
                 .count();
@@ -1237,6 +1277,178 @@ fn foo() {
         assert_eq!(result[0].author_id, "Bob");
     }
 
+    // ========== Line to Character Attribution Conversion Tests ==========
+
+    #[test]
+    fn test_line_to_char_attribution_single_range() {
+        let content = "line 1\nline 2\nline 3\n";
+        let line_attrs = vec![LineAttribution::new(1, 3, "Alice".to_string())];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 1);
+        assert_eq!(char_attrs[0].start, 0);
+        assert_eq!(char_attrs[0].end, 21); // entire content
+        assert_eq!(char_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_multiple_ranges() {
+        let content = "line 1\nline 2\nline 3\nline 4\n";
+        let line_attrs = vec![
+            LineAttribution::new(1, 2, "Alice".to_string()),
+            LineAttribution::new(3, 4, "Bob".to_string()),
+        ];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 2);
+        assert_eq!(char_attrs[0].start, 0);
+        assert_eq!(char_attrs[0].end, 14); // lines 1-2
+        assert_eq!(char_attrs[0].author_id, "Alice");
+        assert_eq!(char_attrs[1].start, 14);
+        assert_eq!(char_attrs[1].end, 28); // lines 3-4
+        assert_eq!(char_attrs[1].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_single_line() {
+        let content = "line 1\nline 2\nline 3\n";
+        let line_attrs = vec![LineAttribution::new(2, 2, "Bob".to_string())];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 1);
+        assert_eq!(char_attrs[0].start, 7);
+        assert_eq!(char_attrs[0].end, 14); // just line 2
+        assert_eq!(char_attrs[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_no_trailing_newline() {
+        let content = "line 1\nline 2";
+        let line_attrs = vec![LineAttribution::new(1, 2, "Alice".to_string())];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 1);
+        assert_eq!(char_attrs[0].start, 0);
+        assert_eq!(char_attrs[0].end, 13); // entire content
+        assert_eq!(char_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_empty_input() {
+        let content = "line 1\nline 2\n";
+        let line_attrs = vec![];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 0);
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_empty_content() {
+        let content = "";
+        let line_attrs = vec![LineAttribution::new(1, 1, "Alice".to_string())];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 0);
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_invalid_line_numbers() {
+        let content = "line 1\nline 2\n";
+        // Line 5 doesn't exist (only 2 lines)
+        let line_attrs = vec![LineAttribution::new(5, 10, "Alice".to_string())];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        // Should skip invalid line ranges
+        assert_eq!(char_attrs.len(), 0);
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_realistic_code() {
+        let content = r#"fn main() {
+    println!("hello");
+}
+
+fn test() {
+    assert!(true);
+}
+"#;
+        let line_attrs = vec![
+            LineAttribution::new(1, 3, "Alice".to_string()),
+            LineAttribution::new(5, 7, "Bob".to_string()),
+        ];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 2);
+        assert_eq!(char_attrs[0].author_id, "Alice");
+        assert_eq!(char_attrs[1].author_id, "Bob");
+
+        // Verify the character ranges map to correct content
+        assert!(content[char_attrs[0].start..char_attrs[0].end].contains("fn main()"));
+        assert!(content[char_attrs[1].start..char_attrs[1].end].contains("fn test()"));
+    }
+
+    #[test]
+    fn test_line_to_char_attribution_preserves_author_order() {
+        let content = "a\nb\nc\nd\ne\n";
+        let line_attrs = vec![
+            LineAttribution::new(1, 1, "Alice".to_string()),
+            LineAttribution::new(2, 2, "Bob".to_string()),
+            LineAttribution::new(3, 3, "Charlie".to_string()),
+            LineAttribution::new(4, 4, "Dave".to_string()),
+            LineAttribution::new(5, 5, "Eve".to_string()),
+        ];
+
+        let char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        assert_eq!(char_attrs.len(), 5);
+        assert_eq!(char_attrs[0].author_id, "Alice");
+        assert_eq!(char_attrs[1].author_id, "Bob");
+        assert_eq!(char_attrs[2].author_id, "Charlie");
+        assert_eq!(char_attrs[3].author_id, "Dave");
+        assert_eq!(char_attrs[4].author_id, "Eve");
+    }
+
+    #[test]
+    fn test_line_to_char_round_trip() {
+        // Test that converting to line attributions and back preserves information
+        let content = "line 1\nline 2\nline 3\n";
+        let original_char_attrs = vec![
+            Attribution::new(0, 7, "Alice".to_string()),
+            Attribution::new(7, 14, "Bob".to_string()),
+            Attribution::new(14, 21, "Charlie".to_string()),
+        ];
+
+        // Convert to line attributions
+        let line_attrs = attributions_to_line_attributions(&original_char_attrs, content);
+
+        // Convert back to character attributions
+        let round_trip_char_attrs = line_attributions_to_attributions(&line_attrs, content);
+
+        // Should have same number of attributions
+        assert_eq!(round_trip_char_attrs.len(), 3);
+
+        // Should have same authors in same order
+        assert_eq!(round_trip_char_attrs[0].author_id, "Alice");
+        assert_eq!(round_trip_char_attrs[1].author_id, "Bob");
+        assert_eq!(round_trip_char_attrs[2].author_id, "Charlie");
+
+        // Character ranges should match original (line boundaries)
+        assert_eq!(round_trip_char_attrs[0].start, 0);
+        assert_eq!(round_trip_char_attrs[0].end, 7);
+        assert_eq!(round_trip_char_attrs[1].start, 7);
+        assert_eq!(round_trip_char_attrs[1].end, 14);
+        assert_eq!(round_trip_char_attrs[2].start, 14);
+        assert_eq!(round_trip_char_attrs[2].end, 21);
+    }
+
     // ========== LineAttribution Tests ==========
 
     #[test]
@@ -1459,11 +1671,15 @@ fn main() {
 
         let line_attrs = attributions_to_line_attributions(&attributions, content);
 
-        // Line 2 has only whitespace from Bob, so Bob still wins (only contributor)
-        assert_eq!(line_attrs.len(), 3);
+        // Line 2 has only whitespace from Bob, which after trimming becomes empty and is ignored
+        // So line 2 should have no attribution, and we only get attributions for lines 1 and 3
+        assert_eq!(line_attrs.len(), 2);
+        assert_eq!(line_attrs[0].start_line, 1);
+        assert_eq!(line_attrs[0].end_line, 1);
         assert_eq!(line_attrs[0].author_id, "Alice");
-        assert_eq!(line_attrs[1].author_id, "Bob"); // Even with 0 non-ws, Bob is only author
-        assert_eq!(line_attrs[2].author_id, "Charlie");
+        assert_eq!(line_attrs[1].start_line, 3);
+        assert_eq!(line_attrs[1].end_line, 3);
+        assert_eq!(line_attrs[1].author_id, "Charlie");
     }
 
     #[test]
@@ -1590,5 +1806,208 @@ fn main() {
                 new_content.chars().nth(pos)
             );
         }
+    }
+
+    #[test]
+    fn test_line_attribution_strips_leading_trailing_whitespace() {
+        // Test that leading and trailing whitespace is stripped from attribution ranges
+        let content = "    code    \n";
+        let attributions = vec![
+            Attribution::new(0, 4, "Alice".to_string()),   // "    " (only whitespace)
+            Attribution::new(4, 8, "Bob".to_string()),     // "code"
+            Attribution::new(8, 12, "Charlie".to_string()), // "    " (only whitespace)
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Only Bob should be attributed (Alice and Charlie have only whitespace)
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_attribution_ignores_whitespace_only_ranges() {
+        // Test that ranges containing only whitespace are completely ignored
+        let content = "a b c\n";
+        let attributions = vec![
+            Attribution::new(0, 1, "Alice".to_string()),   // "a"
+            Attribution::new(1, 2, "Bob".to_string()),     // " " (only whitespace)
+            Attribution::new(2, 3, "Charlie".to_string()), // "b"
+            Attribution::new(3, 4, "Dave".to_string()),    // " " (only whitespace)
+            Attribution::new(4, 5, "Eve".to_string()),     // "c"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Bob and Dave should be ignored (only whitespace)
+        // Alice: 1 char, Charlie: 1 char, Eve: 1 char (tie, Alice wins alphabetically)
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_trims_edges_before_counting() {
+        // Test that we trim whitespace from edges before counting
+        let content = "  code  \n";
+        let attributions = vec![
+            Attribution::new(0, 8, "Alice".to_string()),  // "  code  " -> trimmed to "code"
+            Attribution::new(2, 6, "Bob".to_string()),    // "code"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Both Alice and Bob have "code" (4 chars each) after trimming
+        // Alphabetically, Alice comes first
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_mixed_with_surrounding_whitespace() {
+        // Test with attribution that has whitespace in the middle but not on edges after trim
+        let content = "  a b c  \n";
+        let attributions = vec![
+            Attribution::new(0, 3, "Alice".to_string()),   // "  a" -> trimmed to "a"
+            Attribution::new(3, 5, "Bob".to_string()),     // " b" -> trimmed to "b"
+            Attribution::new(5, 9, "Charlie".to_string()), // " c  " -> trimmed to "c"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // All three have 1 char after trimming, Alice wins alphabetically
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_whitespace_between_words() {
+        // Test that internal whitespace is properly handled but not counted
+        let content = "foo   bar\n";
+        let attributions = vec![
+            Attribution::new(0, 3, "Alice".to_string()),  // "foo"
+            Attribution::new(3, 6, "Bob".to_string()),    // "   " (only whitespace)
+            Attribution::new(6, 9, "Charlie".to_string()), // "bar"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Alice: 3 non-ws chars, Bob: 0 (ignored), Charlie: 3 non-ws chars
+        // Tie between Alice and Charlie, Alice wins alphabetically
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_indentation_only() {
+        // Test a line that starts with attribution of only indentation
+        let content = "    if (true) {\n";
+        let attributions = vec![
+            Attribution::new(0, 4, "Alice".to_string()),   // "    " (only whitespace)
+            Attribution::new(4, 15, "Bob".to_string()),    // "if (true) {"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Alice's whitespace-only range should be ignored, Bob should win
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_line_attribution_trim_tabs_and_spaces() {
+        // Test that both tabs and spaces are trimmed
+        let content = "\t  code  \t\n";
+        let attributions = vec![
+            Attribution::new(0, 10, "Alice".to_string()), // "\t  code  \t" -> trimmed to "code"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_line_attribution_empty_after_trim() {
+        // Test range that becomes empty after trimming (edge case)
+        let content = "a   b\n";
+        let attributions = vec![
+            Attribution::new(0, 1, "Alice".to_string()),   // "a"
+            Attribution::new(1, 4, "Bob".to_string()),     // "   " (only whitespace)
+            Attribution::new(4, 5, "Charlie".to_string()), // "b"
+        ];
+
+        let line_attrs = attributions_to_line_attributions(&attributions, content);
+
+        // Bob's range should be ignored after trimming
+        // Alice: 1 char, Charlie: 1 char, Alice wins alphabetically
+        assert_eq!(line_attrs.len(), 1);
+        assert_eq!(line_attrs[0].author_id, "Alice");
+    }
+
+    #[test]
+    fn test_ai_human_interleaved_line_attribution_with_discard() {
+        let tracker = AttributionTracker::new();
+
+        // Start with base content and no attributions
+        let old_content = "Base line";
+        let old_attributions = Vec::new();
+
+        // Simulate adding interleaved AI and Human lines
+
+        // Step 1: AI adds a newline and "AI Line 1"
+        // "Base line" has no attributions, "\nAI Line 1" is inserted by AI
+        let content_v2 = "Base line\nAI Line 1";
+        let mut attributions_v2 = tracker
+            .update_attributions(old_content, content_v2, &old_attributions, "AI")
+            .unwrap();
+        attributions_v2 = discard_attributions_for_author(&attributions_v2, "Human");
+
+        // After the update: "Base line" (unattributed) + "\nAI Line 1" (AI)
+        // Line 1 is "Base line\n" where only the \n is attributed to AI (but it's whitespace at edge)
+        // Line 2 is "AI Line 1" which is attributed to AI
+        let line_attrs_v2 = attributions_to_line_attributions(&attributions_v2, content_v2);
+        assert_eq!(line_attrs_v2.len(), 1, "Should have 1 attribution after step 1");
+        assert_eq!(line_attrs_v2[0].start_line, 2, "AI attribution should be on line 2");
+        assert_eq!(line_attrs_v2[0].end_line, 2, "AI attribution should be on line 2");
+        assert_eq!(line_attrs_v2[0].author_id, "AI");
+
+        // Step 2: Human adds "Human Line 1"
+        let content_v3 = "Base line\nAI Line 1\nHuman Line 1";
+        let mut attributions_v3 = tracker
+            .update_attributions(content_v2, content_v3, &attributions_v2, "Human")
+            .unwrap();
+        attributions_v3 = discard_attributions_for_author(&attributions_v3, "Human");
+
+        // Step 3: AI adds "AI Line 2"
+        let content_v4 = "Base line\nAI Line 1\nHuman Line 1\nAI Line 2";
+        let mut attributions_v4 = tracker
+            .update_attributions(content_v3, content_v4, &attributions_v3, "AI")
+            .unwrap();
+        attributions_v4 = discard_attributions_for_author(&attributions_v4, "Human");
+
+        // Convert to line attributions
+        let line_attrs = attributions_to_line_attributions(&attributions_v4, content_v4);
+
+        // Expected result after discarding Human:
+        // Line 1 ("Base line") - was Human, now discarded, should have no attribution
+        // Line 2 ("AI Line 1") - AI, should be attributed to AI
+        // Line 3 ("Human Line 1") - was Human, now discarded, should have no attribution  
+        // Line 4 ("AI Line 2") - AI, should be attributed to AI
+
+        // So we should have 2 line attributions, both for AI
+        assert_eq!(
+            line_attrs.len(),
+            2,
+            "Should have 2 line attributions after discarding Human"
+        );
+        
+        assert_eq!(line_attrs[0].start_line, 2, "First AI attribution should start at line 2");
+        assert_eq!(line_attrs[0].end_line, 2, "First AI attribution should end at line 2");
+        assert_eq!(line_attrs[0].author_id, "AI");
+
+        assert_eq!(line_attrs[1].start_line, 4, "Second AI attribution should start at line 4");
+        assert_eq!(line_attrs[1].end_line, 4, "Second AI attribution should end at line 4");
+        assert_eq!(line_attrs[1].author_id, "AI");
     }
 }
