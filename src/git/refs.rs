@@ -4,6 +4,7 @@ use crate::error::GitAiError;
 use crate::git::repository::{Repository, exec_git, exec_git_stdin};
 use crate::utils::debug_log;
 use serde_json;
+use std::collections::{HashMap, HashSet};
 
 // Modern refspecs without force to enable proper merging
 pub const AI_AUTHORSHIP_REFNAME: &str = "ai";
@@ -26,6 +27,111 @@ pub fn notes_add(
     // Use stdin to provide the note content to avoid command line length limits
     exec_git_stdin(&args, note_content.as_bytes())?;
     Ok(())
+}
+
+// Check which commits from the given list have authorship notes.
+// Uses git cat-file --batch-check to efficiently check multiple commits in one invocation.
+// Returns a Vec of CommitAuthorship for each commit.
+#[derive(Debug, Clone)]
+
+pub enum CommitAuthorship {
+    NoLog {
+        sha: String,
+        git_author: String,
+    },
+    Log {
+        sha: String,
+        git_author: String,
+        authorship_log: AuthorshipLog,
+    },
+}
+pub fn get_commits_with_notes_from_list(
+    repo: &Repository,
+    commit_shas: &[String],
+) -> Result<Vec<CommitAuthorship>, GitAiError> {
+    if commit_shas.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // First, get the git authors for all commits (with email)
+    let mut args = repo.global_args_for_exec();
+    args.push("log".to_string());
+    args.push("--format=%H|%an <%ae>".to_string());
+    args.push("--no-walk".to_string());
+    for sha in commit_shas {
+        args.push(sha.clone());
+    }
+
+    let output = exec_git(&args)?;
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| GitAiError::Generic("Failed to parse git log output".to_string()))?;
+
+    let mut commit_authors = HashMap::new();
+    for line in stdout.lines() {
+        if let Some((sha, author)) = line.split_once('|') {
+            commit_authors.insert(sha.to_string(), author.to_string());
+        }
+    }
+
+    // Check which commits have notes
+    let mut args = repo.global_args_for_exec();
+    args.push("cat-file".to_string());
+    args.push("--batch-check=%(objectname)".to_string());
+
+    // Build stdin: check if note exists for each commit
+    // Git notes are stored in a tree at refs/notes/ai with a 2-char fanout structure
+    // e.g., commit "51be7584..." is stored at "refs/notes/ai:51/be7584..."
+    // Keep track of which commits we're checking (filtering out invalid SHAs)
+    let commits_to_check: Vec<&String> = commit_shas.iter().filter(|sha| sha.len() >= 3).collect();
+
+    let stdin_input: String = commits_to_check
+        .iter()
+        .map(|sha| format!("refs/notes/ai:{}/{}", &sha[0..2], &sha[2..]))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let output = exec_git_stdin(&args, stdin_input.as_bytes())?;
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| GitAiError::Generic("Failed to parse git cat-file output".to_string()))?;
+
+    let mut commits_with_notes = HashSet::new();
+
+    // Parse output: each line is either an object SHA (if exists) or "<input> missing"
+    let lines: Vec<&str> = stdout.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        if idx >= commits_to_check.len() {
+            break;
+        }
+
+        // If the line doesn't end with "missing", the note exists
+        if !line.ends_with("missing") && !line.is_empty() {
+            commits_with_notes.insert(commits_to_check[idx].clone());
+        }
+    }
+
+    // Build the result Vec
+    let mut result = Vec::new();
+    for sha in commit_shas {
+        let git_author = commit_authors
+            .get(sha)
+            .cloned()
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        if commits_with_notes.contains(sha) {
+            result.push(CommitAuthorship::Log {
+                sha: sha.clone(),
+                git_author,
+                authorship_log: get_authorship(repo, &sha).unwrap(),
+            });
+        } else {
+            result.push(CommitAuthorship::NoLog {
+                sha: sha.clone(),
+                git_author,
+            });
+        }
+    }
+
+    Ok(result)
 }
 
 // Show an authorship note and return its JSON content if found, or None if it doesn't exist.
