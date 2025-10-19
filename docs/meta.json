@@ -1,0 +1,17 @@
+{
+    "pages": [
+        "index",
+        "how-git-ai-works",
+        "reference",
+        "limitations",
+        "---Agents---",
+        "cursor",
+        "claude-code",
+        "vs-code-github-copilot",
+        "---Enterprise Deployment---",
+        "enterprise-configuration",
+        "enterprise-deployment-wrapper",
+        "enterprise-deployment-hooks",
+        "performance"
+    ]
+}

@@ -1,5 +1,7 @@
 ---
 title: Claude Code
+description: Track the AI Code written by Claude Code
+keywords: claude code integration, claude ai tracking, anthropic claude, claude code hooks, ai authorship claude, git ai claude
 ---
 
 # Using Claude Code with `git-ai`
@@ -17,7 +19,7 @@ title: Claude Code
       {
         "hooks": [
           {
-            "command": "git-ai checkpoint claude --hook-input \"$(cat)\" 2>/dev/null || true",
+            "command": "git-ai checkpoint claude --hook-input stdin",
             "type": "command"
           }
         ],
@@ -28,7 +30,7 @@ title: Claude Code
       {
         "hooks": [
           {
-            "command": "git-ai checkpoint 2>/dev/null || true",
+            "command": "git-ai checkpoint claude --hook-input stdin",
             "type": "command"
           }
         ],

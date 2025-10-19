@@ -1,6 +1,7 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit::post_commit;
 use crate::authorship::working_log::{Checkpoint, Line};
+use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::repository::Repository as GitAiRepository;
@@ -392,6 +393,8 @@ impl TmpRepo {
             transcript: Some(transcript),
             is_human: false,
             repo_working_dir: None,
+            edited_filepaths: None,
+            will_edit_filepaths: None,
         };
 
         checkpoint(
@@ -401,6 +404,22 @@ impl TmpRepo {
             false, // reset
             true,
             Some(agent_run_result),
+        )
+    }
+
+    /// Triggers a checkpoint with a custom agent run result
+    pub fn trigger_checkpoint_with_agent_result(
+        &self,
+        author: &str,
+        agent_run_result: Option<AgentRunResult>,
+    ) -> Result<(usize, usize, usize), GitAiError> {
+        checkpoint(
+            &self.repo_gitai,
+            author,
+            false, // show_working_log
+            false, // reset
+            true,  // quiet
+            agent_run_result,
         )
     }
 

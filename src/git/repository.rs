@@ -8,6 +8,7 @@ use crate::git::sync_authorship::fetch_authorship_notes;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 pub struct Object<'a> {
     repo: &'a Repository,
@@ -717,6 +718,7 @@ pub struct Repository {
     pub storage: RepoStorage,
     pub pre_command_base_commit: Option<String>,
     pub pre_command_refname: Option<String>,
+    workdir_cache: OnceLock<Result<PathBuf, GitAiError>>,
 }
 
 impl Repository {
@@ -817,23 +819,27 @@ impl Repository {
     // Get the path of the working directory for this repository.
     // If this repository is bare, then None is returned.
     pub fn workdir(&self) -> Result<PathBuf, GitAiError> {
-        let mut args = self.global_args_for_exec();
-        args.push("rev-parse".to_string());
-        args.push("--show-toplevel".to_string());
+        self.workdir_cache
+            .get_or_init(|| {
+                let mut args = self.global_args_for_exec();
+                args.push("rev-parse".to_string());
+                args.push("--show-toplevel".to_string());
 
-        let output = exec_git(&args)?;
-        let git_dir_str = String::from_utf8(output.stdout)?;
+                let output = exec_git(&args)?;
+                let git_dir_str = String::from_utf8(output.stdout)?;
 
-        let git_dir_str = git_dir_str.trim();
-        let path = PathBuf::from(git_dir_str);
-        if !path.is_dir() {
-            return Err(GitAiError::Generic(format!(
-                "Git directory does not exist: {}",
-                git_dir_str
-            )));
-        }
+                let git_dir_str = git_dir_str.trim();
+                let path = PathBuf::from(git_dir_str);
+                if !path.is_dir() {
+                    return Err(GitAiError::Generic(format!(
+                        "Git directory does not exist: {}",
+                        git_dir_str
+                    )));
+                }
 
-        Ok(path)
+                Ok(path)
+            })
+            .clone()
     }
 
     // List all remotes for a given repository
@@ -1384,6 +1390,7 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
         git_dir: path,
         pre_command_base_commit: None,
         pre_command_refname: None,
+        workdir_cache: OnceLock::new(),
     })
 }
 

@@ -75,3 +75,25 @@ impl From<std::string::FromUtf8Error> for GitAiError {
         GitAiError::FromUtf8Error(err)
     }
 }
+
+impl Clone for GitAiError {
+    fn clone(&self) -> Self {
+        match self {
+            #[cfg(feature = "test-support")]
+            GitAiError::GitError(e) => GitAiError::Generic(format!("Git error: {}", e)),
+            GitAiError::IoError(e) => {
+                GitAiError::IoError(std::io::Error::new(e.kind(), e.to_string()))
+            }
+            GitAiError::GitCliError { code, stderr, args } => GitAiError::GitCliError {
+                code: *code,
+                stderr: stderr.clone(),
+                args: args.clone(),
+            },
+            GitAiError::JsonError(e) => GitAiError::Generic(format!("JSON error: {}", e)),
+            GitAiError::Utf8Error(e) => GitAiError::Utf8Error(*e),
+            GitAiError::FromUtf8Error(e) => GitAiError::FromUtf8Error(e.clone()),
+            GitAiError::PresetError(s) => GitAiError::PresetError(s.clone()),
+            GitAiError::Generic(s) => GitAiError::Generic(s.clone()),
+        }
+    }
+}
