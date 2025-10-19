@@ -3,9 +3,7 @@ use std::collections::HashSet;
 
 use crate::authorship::stats::CommitStats;
 use crate::error::GitAiError;
-use crate::git::refs::{
-    CommitAuthorship, get_commits_with_notes_from_list, get_reference_as_authorship_log_v3,
-};
+use crate::git::refs::{CommitAuthorship, get_commits_with_notes_from_list};
 use crate::git::repository::{CommitRange, Repository};
 
 #[derive(Debug, Clone)]
@@ -89,16 +87,19 @@ pub fn range_authorship(
     let repository = commit_range.repo();
     let _refname = commit_range.refname.clone();
 
-    // Calculate range stats by diffing commits and analyzing authorship
-    let range_stats = calculate_range_stats(&commit_range)?;
+    // Extract start/end before consuming commit_range
+    let start_sha = commit_range.start_oid.clone();
+    let end_sha = commit_range.end_oid.clone();
 
-    let all_commits: Vec<_> = commit_range.into_iter().collect();
-    let commit_shas: Vec<String> = all_commits
-        .iter()
-        .map(|commit| commit.id().to_string())
+    let commit_shas: Vec<String> = commit_range
+        .into_iter()
+        .map(|c| c.id().to_string())
         .collect();
-
     let commit_authorship = get_commits_with_notes_from_list(repository, &commit_shas)?;
+
+    // Calculate range stats using the extracted start/end and pre-loaded commit_authorship
+    let range_stats =
+        calculate_range_stats_direct(repository, &start_sha, &end_sha, &commit_authorship)?;
 
     Ok(RangeAuthorshipStats {
         authorship_stats: AuthorshipStats {
@@ -212,21 +213,41 @@ pub fn range_authorship(
 
 /// Calculate AI vs human line contributions for a commit range
 /// by diffing start->end and using blame to determine authorship
-fn calculate_range_stats(commit_range: &CommitRange) -> Result<CommitStats, GitAiError> {
-    let repo = commit_range.repo();
-    let start_sha = &commit_range.start_oid;
-    let end_sha = &commit_range.end_oid;
+fn calculate_range_stats_direct(
+    repo: &Repository,
+    start_sha: &str,
+    end_sha: &str,
+    commit_authorship: &[CommitAuthorship],
+) -> Result<CommitStats, GitAiError> {
+    use std::time::Instant;
+
+    let start_time = Instant::now();
+    eprintln!(
+        "[TIMING] Starting calculate_range_stats for {}..{}",
+        start_sha, end_sha
+    );
 
     // Get the diff using git diff to ensure consistency with git's view
+    let diff_start = Instant::now();
     let mut args = repo.global_args_for_exec();
     args.push("diff".to_string());
     args.push(format!("{}..{}", start_sha, end_sha));
 
     let output = crate::git::repository::exec_git(&args)?;
     let diff_output = String::from_utf8(output.stdout)?;
+    eprintln!(
+        "[TIMING] git diff: {:.2}s",
+        diff_start.elapsed().as_secs_f64()
+    );
 
     // Parse diff to extract added lines and their line numbers
+    let parse_start = Instant::now();
     let added_lines_by_file = parse_git_diff_for_added_lines(&diff_output)?;
+    eprintln!(
+        "[TIMING] diff parsing: {:.2}s, {} files with changes",
+        parse_start.elapsed().as_secs_f64(),
+        added_lines_by_file.len()
+    );
 
     let mut git_diff_added_lines = 0u32;
     let mut git_diff_deleted_lines = 0u32;
@@ -239,13 +260,57 @@ fn calculate_range_stats(commit_range: &CommitRange) -> Result<CommitStats, GitA
             git_diff_deleted_lines += 1;
         }
     }
+    eprintln!(
+        "[TIMING] git diff added: {}, deleted: {}",
+        git_diff_added_lines, git_diff_deleted_lines
+    );
+
+    // Build authorship logs HashMap from pre-loaded commit_authorship
+    let blame_start = Instant::now();
+    let mut auth_logs: HashMap<
+        String,
+        Option<crate::authorship::authorship_log_serialization::AuthorshipLog>,
+    > = HashMap::new();
+    for commit in commit_authorship {
+        match commit {
+            CommitAuthorship::Log {
+                sha,
+                authorship_log,
+                ..
+            } => {
+                auth_logs.insert(sha.clone(), Some(authorship_log.clone()));
+            }
+            CommitAuthorship::NoLog { sha, .. } => {
+                auth_logs.insert(sha.clone(), None);
+            }
+        }
+    }
+    eprintln!(
+        "[TIMING] Built authorship lookup with {} commits",
+        auth_logs.len()
+    );
 
     // Build blame cache for each file
     let mut blame_cache: HashMap<String, FileBlame> = HashMap::new();
-    for file_path in added_lines_by_file.keys() {
-        let file_blame = compute_file_blame(repo, file_path, end_sha)?;
+    for (i, file_path) in added_lines_by_file.keys().enumerate() {
+        let file_blame_start = Instant::now();
+        let file_blame = compute_file_blame(repo, file_path, end_sha, &auth_logs)?;
+        let file_blame_time = file_blame_start.elapsed().as_secs_f64();
+        if file_blame_time > 0.5 {
+            eprintln!(
+                "[TIMING]   blame for {} ({}/{}): {:.2}s",
+                file_path,
+                i + 1,
+                added_lines_by_file.len(),
+                file_blame_time
+            );
+        }
         blame_cache.insert(file_path.clone(), file_blame);
     }
+    eprintln!(
+        "[TIMING] total blame computation: {:.2}s",
+        blame_start.elapsed().as_secs_f64()
+    );
 
     // Second pass: for each added line, lookup authorship from cache
     let mut human_additions = 0u32;
@@ -269,6 +334,15 @@ fn calculate_range_stats(commit_range: &CommitRange) -> Result<CommitStats, GitA
             }
         }
     }
+
+    eprintln!(
+        "[TIMING] total time: {:.2}s",
+        start_time.elapsed().as_secs_f64()
+    );
+    eprintln!(
+        "[TIMING] result: human={}, ai={}",
+        human_additions, ai_additions
+    );
 
     Ok(CommitStats {
         human_additions,
@@ -300,6 +374,10 @@ fn compute_file_blame(
     repo: &Repository,
     file_path: &str,
     context_commit_sha: &str,
+    auth_logs: &HashMap<
+        String,
+        Option<crate::authorship::authorship_log_serialization::AuthorshipLog>,
+    >,
 ) -> Result<FileBlame, GitAiError> {
     use crate::commands::blame::GitAiBlameOptions;
 
@@ -316,8 +394,8 @@ fn compute_file_blame(
         let commit_sha = hunk.commit_sha.clone();
 
         // Look up the AI authorship log for this commit
-        let is_ai = match get_reference_as_authorship_log_v3(repo, &commit_sha) {
-            Ok(authorship_log) => {
+        let is_ai = match auth_logs.get(&commit_sha) {
+            Some(Some(authorship_log)) => {
                 // Check if any lines in this hunk are AI-authored
                 let orig_line_start = hunk.orig_range.0;
                 let orig_line_end = hunk.orig_range.1;
@@ -329,7 +407,7 @@ fn compute_file_blame(
                         .is_some_and(|(_, prompt)| prompt.is_some())
                 })
             }
-            Err(_) => false, // No authorship log means human-authored
+            _ => false, // No authorship log means human-authored
         };
 
         // Record authorship for each line in the hunk
