@@ -10,6 +10,7 @@ use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn run(
     repo: &Repository,
@@ -41,6 +42,12 @@ pub fn run(
     // Initialize the new storage system
     let repo_storage = RepoStorage::for_repo_path(repo.path());
     let working_log = repo_storage.working_log_for_base_commit(&base_commit);
+
+    // Get the current timestamp in milliseconds since the Unix epoch
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
 
     // Extract edited filepaths from agent_run_result if available
     // For human checkpoints, use will_edit_filepaths to narrow git status scope
@@ -192,7 +199,7 @@ pub fn run(
     let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-        get_initial_checkpoint_entries(kind, repo, &files, &base_commit, &file_content_hashes, agent_run_result.as_ref())?
+        get_initial_checkpoint_entries(kind, repo, &files, &base_commit, &file_content_hashes, agent_run_result.as_ref(), ts)?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
@@ -202,6 +209,7 @@ pub fn run(
             &file_content_hashes,
             &checkpoints,
             agent_run_result.as_ref(),
+            ts,
         )?
     };
     let entries_duration = end_entries_clock();
@@ -395,6 +403,7 @@ fn get_initial_checkpoint_entries(
     _base_commit: &str,
     file_content_hashes: &HashMap<String, String>,
     agent_run_result: Option<&AgentRunResult>,
+    ts: u128,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
@@ -455,7 +464,7 @@ fn get_initial_checkpoint_entries(
             .cloned()
             .unwrap_or_default();
 
-        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content)?;
+        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content, ts)?;
         entries.push(entry);
     }
 
@@ -469,6 +478,7 @@ fn get_subsequent_checkpoint_entries(
     file_content_hashes: &HashMap<String, String>,
     previous_checkpoints: &Vec<Checkpoint>,
     agent_run_result: Option<&AgentRunResult>,
+    ts: u128,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
@@ -519,7 +529,7 @@ fn get_subsequent_checkpoint_entries(
             .cloned()
             .unwrap_or_default();
 
-        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content)?;
+        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content, ts)?;
         entries.push(entry);
     }
 
@@ -533,6 +543,7 @@ fn make_entry_for_file(
     previous_content: &str,
     previous_attributions: &Vec<Attribution>,
     content: &str,
+    ts: u128,
 ) -> Result<WorkingLogEntry, GitAiError> {
     let tracker = AttributionTracker::new();
     let new_attributions = tracker.update_attributions(
@@ -540,6 +551,7 @@ fn make_entry_for_file(
         content,
         previous_attributions,
         author_id,
+        ts,
     )?;
     let filtered_attributions = crate::authorship::attribution_tracker::discard_attributions_for_author(&new_attributions, &CheckpointKind::Human.to_str());
     let line_attributions = crate::authorship::attribution_tracker::attributions_to_line_attributions(&filtered_attributions, content);

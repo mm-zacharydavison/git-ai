@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::{BufRead, Write};
 use crate::authorship::working_log::CheckpointKind;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Authorship log format version identifier
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/3.0.0";
@@ -624,9 +625,16 @@ impl AuthorshipLog {
         file_contents: &HashMap<String, String>,
     ) -> Result<Vec<crate::authorship::working_log::Checkpoint>, Box<dyn std::error::Error>> {
         use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
+        use crate::authorship::attribution_tracker::line_attributions_to_attributions;
         use std::collections::{HashMap, HashSet};
 
         let mut checkpoints = Vec::new();
+
+        // Get the current timestamp in milliseconds since the Unix epoch
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
 
         // Track all files that have attestations
         let mut all_files: HashSet<String> = HashSet::new();
@@ -675,7 +683,7 @@ impl AuthorshipLog {
                 // This ensures line attributions match the prompts in metadata after apply_checkpoint
                 let regenerated_session_hash = generate_short_hash(&prompt_record.agent_id.id, &prompt_record.agent_id.tool);
                 let line_attributions = compress_lines_to_working_log_format(&all_lines, &regenerated_session_hash);
-                let attributions = crate::authorship::attribution_tracker::line_attributions_to_attributions(&line_attributions, file_content.as_str());
+                let attributions = line_attributions_to_attributions(&line_attributions, file_content.as_str(), ts);
 
                 let entry = WorkingLogEntry::new(
                     file_path.clone(),
