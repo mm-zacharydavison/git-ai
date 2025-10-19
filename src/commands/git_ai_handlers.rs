@@ -359,8 +359,6 @@ fn handle_stats(args: &[String]) {
                                 None,
                             ) {
                                 Ok(range) => {
-                                    println!("CommitRange created: {:?}", range);
-                                    println!("Is valid range {:?}", range.is_valid().is_ok());
                                     commit_range = Some(range);
                                 }
                                 Err(e) => {
@@ -388,7 +386,7 @@ fn handle_stats(args: &[String]) {
     if let Some(range) = commit_range {
         match range_authorship::range_authorship(range, true) {
             Ok(stats) => {
-                println!("Range authorship stats: {:?}", stats);
+                range_authorship::print_range_authorship_stats(&stats);
             }
             Err(e) => {
                 eprintln!("Range authorship failed: {}", e);

@@ -5,6 +5,7 @@ use crate::authorship::stats::CommitStats;
 use crate::error::GitAiError;
 use crate::git::refs::{CommitAuthorship, get_commits_with_notes_from_list};
 use crate::git::repository::{CommitRange, Repository};
+use crate::utils::debug_log;
 
 #[derive(Debug, Clone)]
 pub struct RangeAuthorshipStats {
@@ -18,6 +19,7 @@ pub struct AuthorshipStats {
     authors_commiting_authorship: HashSet<String>,
     authors_not_commiting_authorship: HashSet<String>,
     commits_without_authorship: Vec<String>,
+    commits_without_authorship_with_authors: Vec<(String, String)>, // (sha, git_author)
 }
 
 pub fn range_authorship(
@@ -80,7 +82,7 @@ pub fn range_authorship(
             )));
         }
 
-        println!("✓ Fetched {} from {}", fetch_refspec, remote);
+        debug_log(&format!("✓ Fetched {} from {}", fetch_refspec, remote));
     }
 
     // First, collect all commit SHAs from the range
@@ -126,6 +128,15 @@ pub fn range_authorship(
                 .iter()
                 .filter_map(|ca| match ca {
                     CommitAuthorship::NoLog { sha, .. } => Some(sha.clone()),
+                    _ => None,
+                })
+                .collect(),
+            commits_without_authorship_with_authors: commit_authorship
+                .iter()
+                .filter_map(|ca| match ca {
+                    CommitAuthorship::NoLog { sha, git_author } => {
+                        Some((sha.clone(), git_author.clone()))
+                    }
                     _ => None,
                 })
                 .collect(),
@@ -219,35 +230,16 @@ fn calculate_range_stats_direct(
     end_sha: &str,
     commit_authorship: &[CommitAuthorship],
 ) -> Result<CommitStats, GitAiError> {
-    use std::time::Instant;
-
-    let start_time = Instant::now();
-    eprintln!(
-        "[TIMING] Starting calculate_range_stats for {}..{}",
-        start_sha, end_sha
-    );
-
     // Get the diff using git diff to ensure consistency with git's view
-    let diff_start = Instant::now();
     let mut args = repo.global_args_for_exec();
     args.push("diff".to_string());
     args.push(format!("{}..{}", start_sha, end_sha));
 
     let output = crate::git::repository::exec_git(&args)?;
     let diff_output = String::from_utf8(output.stdout)?;
-    eprintln!(
-        "[TIMING] git diff: {:.2}s",
-        diff_start.elapsed().as_secs_f64()
-    );
 
     // Parse diff to extract added lines and their line numbers
-    let parse_start = Instant::now();
     let added_lines_by_file = parse_git_diff_for_added_lines(&diff_output)?;
-    eprintln!(
-        "[TIMING] diff parsing: {:.2}s, {} files with changes",
-        parse_start.elapsed().as_secs_f64(),
-        added_lines_by_file.len()
-    );
 
     let mut git_diff_added_lines = 0u32;
     let mut git_diff_deleted_lines = 0u32;
@@ -260,13 +252,8 @@ fn calculate_range_stats_direct(
             git_diff_deleted_lines += 1;
         }
     }
-    eprintln!(
-        "[TIMING] git diff added: {}, deleted: {}",
-        git_diff_added_lines, git_diff_deleted_lines
-    );
 
     // Build authorship logs HashMap from pre-loaded commit_authorship
-    let blame_start = Instant::now();
     let mut auth_logs: HashMap<
         String,
         Option<crate::authorship::authorship_log_serialization::AuthorshipLog>,
@@ -285,32 +272,14 @@ fn calculate_range_stats_direct(
             }
         }
     }
-    eprintln!(
-        "[TIMING] Built authorship lookup with {} commits",
-        auth_logs.len()
-    );
 
     // Build blame cache for each file
     let mut blame_cache: HashMap<String, FileBlame> = HashMap::new();
     for (i, file_path) in added_lines_by_file.keys().enumerate() {
-        let file_blame_start = Instant::now();
         let file_blame = compute_file_blame(repo, file_path, end_sha, &auth_logs)?;
-        let file_blame_time = file_blame_start.elapsed().as_secs_f64();
-        if file_blame_time > 0.5 {
-            eprintln!(
-                "[TIMING]   blame for {} ({}/{}): {:.2}s",
-                file_path,
-                i + 1,
-                added_lines_by_file.len(),
-                file_blame_time
-            );
-        }
+
         blame_cache.insert(file_path.clone(), file_blame);
     }
-    eprintln!(
-        "[TIMING] total blame computation: {:.2}s",
-        blame_start.elapsed().as_secs_f64()
-    );
 
     // Second pass: for each added line, lookup authorship from cache
     let mut human_additions = 0u32;
@@ -334,16 +303,6 @@ fn calculate_range_stats_direct(
             }
         }
     }
-
-    eprintln!(
-        "[TIMING] total time: {:.2}s",
-        start_time.elapsed().as_secs_f64()
-    );
-    eprintln!(
-        "[TIMING] result: human={}, ai={}",
-        human_additions, ai_additions
-    );
-
     Ok(CommitStats {
         human_additions,
         mixed_additions: 0,
@@ -485,4 +444,45 @@ fn parse_git_diff_for_added_lines(
     }
 
     Ok(result)
+}
+
+pub fn print_range_authorship_stats(stats: &RangeAuthorshipStats) {
+    println!("\n");
+    // Check if any commits have authorship logs
+    let has_any_authorship = stats.authorship_stats.commits_with_authorship > 0;
+    let all_have_authorship =
+        stats.authorship_stats.commits_with_authorship == stats.authorship_stats.total_commits;
+
+    // If none of the commits have authorship logs, show the special message
+    if !has_any_authorship {
+        println!("Committers are not using git-ai");
+        return;
+    }
+
+    // Use existing stats terminal output
+    use crate::authorship::stats::write_stats_to_terminal;
+    write_stats_to_terminal(&stats.range_stats);
+
+    // If not all commits have authorship logs, show the breakdown
+    if !all_have_authorship {
+        let commits_without =
+            stats.authorship_stats.total_commits - stats.authorship_stats.commits_with_authorship;
+        let commit_word = if commits_without == 1 {
+            "commit"
+        } else {
+            "commits"
+        };
+        println!(
+            "  {} {} without Authorship Logs",
+            commits_without, commit_word
+        );
+
+        // Show each commit without authorship
+        for (sha, author) in &stats
+            .authorship_stats
+            .commits_without_authorship_with_authors
+        {
+            println!("    {} {}", &sha[0..7], author);
+        }
+    }
 }
