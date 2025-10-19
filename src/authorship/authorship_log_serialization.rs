@@ -326,6 +326,9 @@ impl AuthorshipLog {
 
             // Add new entries for each author (session)
             for (author_id, line_ranges) in line_attributions_by_author {
+                if author_id == CheckpointKind::Human.to_str() {
+                    continue;
+                }
                 file_attestation.add_entry(AttestationEntry::new(author_id, line_ranges));
             }
         }
@@ -582,7 +585,7 @@ impl AuthorshipLog {
         &self,
         file: &str,
         line: u32,
-    ) -> Option<(Author, Option<&PromptRecord>)> {
+    ) -> Option<(Author, Option<String>, Option<&PromptRecord>)> {
         // Find the file attestation
         let file_attestation = self.attestations.iter().find(|f| f.file_path == file)?;
 
@@ -600,7 +603,7 @@ impl AuthorshipLog {
                     };
 
                     // Return author and prompt info
-                    return Some((author, Some(prompt_record)));
+                    return Some((author, Some(entry.hash.clone()), Some(prompt_record)));
                 }
             }
         }

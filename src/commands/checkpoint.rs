@@ -6,6 +6,7 @@ use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
 use crate::authorship::working_log::CheckpointKind;
+use crate::commands::blame::GitAiBlameOptions;
 use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
@@ -455,8 +456,28 @@ fn get_initial_checkpoint_entries(
         // Current content from filesystem
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
-        // TODO Get previous attributions from authorship log
-        let prev_attributions = Vec::new();
+        // Get the previous line attributions from ai blame
+        let mut ai_blame_opts = GitAiBlameOptions::default();
+        ai_blame_opts.no_output = true;
+        ai_blame_opts.return_human_authors_as_human = true;
+        ai_blame_opts.use_prompt_hashes_as_names = true;
+        let ai_blame = repo.blame(file_path, &ai_blame_opts);
+        let mut prev_line_attributions = Vec::new();
+        if let Ok(ai_blame) = ai_blame {
+            for (line, author) in ai_blame {
+                if author == CheckpointKind::Human.to_str() {
+                    continue;
+                }
+                prev_line_attributions.push(crate::authorship::attribution_tracker::LineAttribution {
+                    start_line: line,
+                    end_line: line,
+                    author_id: author.clone(),
+                });
+            }
+        }
+        // Convert any line attributions to character attributions
+        let prev_attributions = crate::authorship::attribution_tracker::line_attributions_to_attributions(&prev_line_attributions, &previous_content, ts);
+        // let prev_attributions = Vec::new();
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
@@ -546,10 +567,11 @@ fn make_entry_for_file(
     ts: u128,
 ) -> Result<WorkingLogEntry, GitAiError> {
     let tracker = AttributionTracker::new();
+    let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(previous_content, previous_attributions, author_id, ts-1);
     let new_attributions = tracker.update_attributions(
         previous_content,
         content,
-        previous_attributions,
+        &filled_in_prev_attributions,
         author_id,
         ts,
     )?;

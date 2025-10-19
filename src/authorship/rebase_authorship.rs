@@ -1210,7 +1210,7 @@ fn run_blame_in_context(
         // Use the ORIGINAL line number from the blamed commit, not the current line number
         let orig_line_to_lookup = hunk.orig_range.0;
 
-        if let Some((author, prompt)) =
+        if let Some((author, _, prompt)) =
             authorship_log.get_line_attribution(file_path, orig_line_to_lookup)
         {
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))

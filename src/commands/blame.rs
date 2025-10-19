@@ -1,4 +1,5 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
@@ -94,6 +95,15 @@ pub struct GitAiBlameOptions {
 
     // Encoding
     pub encoding: Option<String>,
+
+    // Use prompt hashes as name instead of author names
+    pub use_prompt_hashes_as_names: bool,
+
+    // Return all human authors as CheckpointKind::Human
+    pub return_human_authors_as_human: bool,
+
+    // No output
+    pub no_output: bool,
 }
 
 impl Default for GitAiBlameOptions {
@@ -127,6 +137,9 @@ impl Default for GitAiBlameOptions {
             reverse: None,
             first_parent: false,
             encoding: None,
+            use_prompt_hashes_as_names: false,
+            return_human_authors_as_human: false,
+            no_output: false,
         }
     }
 }
@@ -220,7 +233,11 @@ impl Repository {
         }
 
         // Step 2: Overlay AI authorship information
-        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path)?;
+        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path, options)?;
+
+        if options.no_output {
+            return Ok(line_authors);
+        }
 
         // Output based on format
         if options.porcelain || options.line_porcelain {
@@ -515,6 +532,7 @@ fn overlay_ai_authorship(
     repo: &Repository,
     blame_hunks: &[BlameHunk],
     file_path: &str,
+    options: &GitAiBlameOptions,
 ) -> Result<HashMap<u32, String>, GitAiError> {
     let mut line_authors: HashMap<u32, String> = HashMap::new();
 
@@ -544,24 +562,40 @@ fn overlay_ai_authorship(
                 let current_line_num = hunk.range.0 + i;
                 let orig_line_num = hunk.orig_range.0 + i;
 
-                if let Some((author, prompt)) =
+                if let Some((author, prompt_hash, prompt)) =
                     authorship_log.get_line_attribution(file_path, orig_line_num)
                 {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
                     if let Some(prompt_record) = prompt {
-                        line_authors.insert(current_line_num, prompt_record.agent_id.tool.clone());
+                        if options.use_prompt_hashes_as_names {
+                            line_authors.insert(current_line_num, prompt_hash.unwrap());
+                        } else {
+                            line_authors.insert(current_line_num, prompt_record.agent_id.tool.clone());
+                        }
                     } else {
-                        line_authors.insert(current_line_num, author.username.clone());
+                        if options.return_human_authors_as_human {
+                            line_authors.insert(current_line_num, CheckpointKind::Human.to_str().to_string());
+                        } else {
+                            line_authors.insert(current_line_num, author.username.clone());
+                        }
                     }
                 } else {
                     // Fall back to original author if no AI authorship
-                    line_authors.insert(current_line_num, hunk.original_author.clone());
+                    if options.return_human_authors_as_human {
+                        line_authors.insert(current_line_num, CheckpointKind::Human.to_str().to_string());
+                    } else {
+                        line_authors.insert(current_line_num, hunk.original_author.clone());
+                    }
                 }
             }
         } else {
             // No authorship log, use original author for all lines in hunk
             for line_num in hunk.range.0..=hunk.range.1 {
-                line_authors.insert(line_num, hunk.original_author.clone());
+                if options.return_human_authors_as_human {
+                    line_authors.insert(line_num, CheckpointKind::Human.to_str().to_string());
+                } else {
+                    line_authors.insert(line_num, hunk.original_author.clone());
+                }
             }
         }
     }

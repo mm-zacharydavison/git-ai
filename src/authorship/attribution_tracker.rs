@@ -7,6 +7,7 @@ use diff_match_patch_rs::dmp::Diff;
 use crate::error::GitAiError;
 use diff_match_patch_rs::{Compat, DiffMatchPatch, Ops};
 use std::collections::HashMap;
+use crate::authorship::working_log::CheckpointKind;
 
 /// Represents a single attribution range in the file.
 /// Ranges can overlap (multiple authors can be attributed to the same text).
@@ -186,6 +187,51 @@ impl AttributionTracker {
             config,
             dmp: DiffMatchPatch::new(),
         }
+    }
+
+    /// Attribute all unattributed ranges to the given author
+    pub fn attribute_unattributed_ranges(&self, content: &str, prev_attributions: &[Attribution], author: &str, ts: u128) -> Vec<Attribution> {
+        let mut attributions = prev_attributions.to_vec();
+        let mut unattributed_char_idxs = Vec::new();
+        
+        // Find all unattributed character positions
+        for i in 0..content.len() {
+            if !attributions.iter().any(|a| a.overlaps(i, i + 1)) {
+                unattributed_char_idxs.push(i);
+            }
+        }
+        
+        // Sort the unattributed character indices by position
+        unattributed_char_idxs.sort();
+        
+        // Group contiguous unattributed ranges
+        let mut contiguous_ranges = Vec::new();
+        if !unattributed_char_idxs.is_empty() {
+            let mut start = unattributed_char_idxs[0];
+            let mut end = start + 1;
+            
+            for i in 1..unattributed_char_idxs.len() {
+                let current = unattributed_char_idxs[i];
+                if current == end {
+                    // Contiguous with previous range
+                    end = current + 1;
+                } else {
+                    // Gap found, save current range and start new one
+                    contiguous_ranges.push((start, end));
+                    start = current;
+                    end = current + 1;
+                }
+            }
+            // Don't forget the last range
+            contiguous_ranges.push((start, end));
+        }
+        
+        // Create attributions for each contiguous unattributed range
+        for (start, end) in contiguous_ranges {
+            attributions.push(Attribution::new(start, end, author.to_string(), ts));
+        }
+        
+        attributions
     }
 
     /// Update attributions from old content to new content
@@ -488,7 +534,8 @@ impl AttributionTracker {
                     // Start with the full text and work backwards
                     let mut match_info: Option<(usize, usize)> = None;  // (old_pos, match_len)
 
-                    for search_len in (1..=insertion_text.len()).rev() {
+                    // TODO Figure out (a) if we need this here and (b) if we do, then what the threshold should be
+                    for search_len in (20..=insertion_text.len()).rev() {
                         let search_text = &insertion_text[..search_len];
                         if let Some(old_match_pos) = old_content[old_pos..].find(search_text) {
                             match_info = Some((old_pos + old_match_pos, search_len));
@@ -622,11 +669,13 @@ pub fn discard_attributions_for_author(
     attributions: &Vec<Attribution>,
     author_id: &str,
 ) -> Vec<Attribution> {
-    attributions
-        .iter()
-        .filter(|attr| attr.author_id != author_id)
-        .cloned()
-        .collect()
+    // TODO make sure that we only discard attributions
+    // attributions
+    //     .iter()
+    //     .filter(|attr| attr.author_id != author_id)
+    //     .cloned()
+    //     .collect()
+    attributions.clone()
 }
 
 /// Convert line-based attributions to character-based attributions.
@@ -702,11 +751,15 @@ pub fn attributions_to_line_attributions(
             attributions,
             content,
         );
-        line_authors.push(author);
+        line_authors.push(Some(author));
     }
 
     // Merge consecutive lines with the same author
-    merge_consecutive_line_attributions(line_authors)
+    let mut merged_line_authors = merge_consecutive_line_attributions(line_authors);
+
+    // Strip away all human lines (only AI lines need to be retained)
+    merged_line_authors.retain(|line_attr| line_attr.author_id != CheckpointKind::Human.to_str());
+    merged_line_authors
 }
 
 /// Find the dominant author for a specific line based on non-whitespace character count
@@ -714,60 +767,35 @@ fn find_dominant_author_for_line(
     line_num: u32,
     boundaries: &LineBoundaries,
     attributions: &Vec<Attribution>,
-    content: &str,
-) -> Option<String> {
-    let (line_start, line_end) = boundaries.get_line_range(line_num)?;
+    full_content: &str,
+) -> String {
+    let (line_start, line_end) = boundaries.get_line_range(line_num).unwrap();
 
-    // Count non-whitespace chars per author
-    let mut author_counts: HashMap<String, usize> = HashMap::new();
+    let mut candidate_attrs = Vec::new();
+    for attribution in attributions {
+        if !attribution.overlaps(line_start, line_end) {
+            continue;
+        }
 
-    for attr in attributions {
-        // Check if this attribution overlaps with the line
-        if let Some((overlap_start, overlap_end)) = attr.intersection(line_start, line_end) {
-            // Strip leading and trailing whitespace from the overlapping range
-            let overlap_text = &content[overlap_start..overlap_end];
-
-            // Find the first non-whitespace character
-            let leading_ws = overlap_text.chars().take_while(|c| c.is_whitespace()).count();
-
-            // If the entire range is whitespace, skip this attribution
-            if leading_ws == overlap_text.chars().count() {
-                continue;
-            }
-
-            // Find the last non-whitespace character
-            let trailing_ws = overlap_text.chars().rev().take_while(|c| c.is_whitespace()).count();
-
-            // Calculate the trimmed range in bytes
-            let trimmed_start = overlap_start + overlap_text.chars().take(leading_ws).map(|c| c.len_utf8()).sum::<usize>();
-            let trimmed_end = overlap_end - overlap_text.chars().rev().take(trailing_ws).map(|c| c.len_utf8()).sum::<usize>();
-
-            // If after trimming the range is empty, skip this attribution
-            if trimmed_start >= trimmed_end {
-                continue;
-            }
-            
-            // Count non-whitespace characters in the trimmed overlap
-            let non_ws_count = content[trimmed_start..trimmed_end]
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .count();
-
-            *author_counts.entry(attr.author_id.clone()).or_insert(0) += non_ws_count;
+        // Get the substring of the content on this line that is covered by the attribution
+        let content_slice = &full_content[std::cmp::max(line_start, attribution.start)..std::cmp::min(line_end, attribution.end)];
+        let non_whitespace_count = content_slice.chars().filter(|c| !c.is_whitespace()).count();
+        if non_whitespace_count > 0 {
+            candidate_attrs.push(attribution.clone());
+        } else {
+            // If the attribution is only whitespace, discard it
+            continue;
         }
     }
 
-    // Find author with most non-whitespace chars
-    // In case of tie, use alphabetically first author for determinism
-    author_counts
-        .into_iter()
-        .max_by(|(author_a, count_a), (author_b, count_b)| {
-            match count_a.cmp(count_b) {
-                std::cmp::Ordering::Equal => author_b.cmp(author_a), // Reverse for alphabetically first
-                other => other,
-            }
-        })
-        .map(|(author, _)| author)
+    if candidate_attrs.is_empty() {
+        return CheckpointKind::Human.to_str();
+    }
+    
+    // Choose the author with the latest timestamp
+    let latest_timestamp = candidate_attrs.iter().max_by_key(|a| a.ts).unwrap().ts;
+    let latest_author = candidate_attrs.iter().filter(|a| a.ts == latest_timestamp).map(|a| a.author_id.clone()).collect::<Vec<String>>();
+    return latest_author[0].clone();
 }
 
 /// Merge consecutive lines with the same author into LineAttribution ranges
@@ -2045,8 +2073,8 @@ fn main() {
         let mut v2_attributions = tracker
             .update_attributions(v1_content, v2_content, &v1_attributions, "AI", TEST_TS)
             .unwrap();
-        
-        v2_attributions = discard_attributions_for_author(&v2_attributions, "Human");
+
+        v2_attributions = discard_attributions_for_author(&v2_attributions, &CheckpointKind::Human.to_str());
 
         let v2_line_attrs = attributions_to_line_attributions(&v2_attributions, v2_content);
 
@@ -2058,20 +2086,282 @@ fn main() {
 
         // Step 3: Human replaces line 2 with different content
         let v3_content = "Line 1\nHuman modification of line 2\n";
-        let mut v3_attributions = tracker
-            .update_attributions(v2_content, v3_content, &v2_attributions, "Human", TEST_TS)
+        let v3_attributions = tracker
+            .update_attributions(v2_content, v3_content, &v2_attributions, &CheckpointKind::Human.to_str(), TEST_TS)
             .unwrap();
-        v3_attributions = discard_attributions_for_author(&v3_attributions, "Human");
 
         let v3_line_attrs = attributions_to_line_attributions(&v3_attributions, v3_content);
 
-        // After discarding Human attributions, there should be NO attributions
-        // (Line 1 was always Human, Line 2 is now Human - both discarded)
-        assert_eq!(
-            v3_line_attrs.len(),
-            0,
-            "Should have 0 attributions after Human replaces AI line. Got: {:?}",
-            v3_line_attrs
-        );
+        // Assert that line 2 is attributed to Human
+        assert_eq!(v3_line_attrs.len(), 1, "Should have 1 line attribution (only line 2). Got: {:?}", v3_line_attrs);
+        assert_eq!(v3_line_attrs[0].start_line, 2);
+        assert_eq!(v3_line_attrs[0].end_line, 2);
+        assert_eq!(v3_line_attrs[0].author_id, CheckpointKind::Human.to_str());
+    }
+
+    #[test]
+    fn test_add_multiple_lines() {
+        // Simulates: Human writes 3 lines, then AI adds 2 lines
+        let tracker = AttributionTracker::new();
+
+        // Step 1: Human creates file
+        let v1_content = "Line 1 from human\nLine 2 from human\nLine 3 from human\n||__AI LINE__ PENDING__||\n||__AI LINE__ PENDING__||";
+        let mut v1_attributions = tracker
+            .update_attributions("", v1_content, &Vec::new(), &CheckpointKind::Human.to_str(), TEST_TS)
+            .unwrap();
+
+        v1_attributions = discard_attributions_for_author(&v1_attributions, &CheckpointKind::Human.to_str());
+
+        // Step 2: Replaces the two lines at the end
+        let v2_content = "Line 1 from human\nLine 2 from human\nLine 3 from human\nLine 4 from AI\nLine 5 from AI";
+        let mut v2_attributions = tracker
+            .update_attributions(v1_content, v2_content, &v1_attributions, &CheckpointKind::AiAgent.to_str(), TEST_TS+1)
+            .unwrap();
+
+        v2_attributions = discard_attributions_for_author(&v2_attributions, &CheckpointKind::Human.to_str());
+
+        let v2_line_attrs = attributions_to_line_attributions(&v2_attributions, v2_content);
+
+        // Lines 4-5 should be attributed to AI
+        assert!(v2_line_attrs.len() >= 1, "Should have at least 1 line attribution. Got: {:?}", v2_line_attrs);
+
+        // Find the AI attribution
+        let ai_attr = v2_line_attrs.iter().find(|attr| attr.author_id == CheckpointKind::AiAgent.to_str());
+        assert!(ai_attr.is_some(), "Should have AI attribution. Got: {:?}", v2_line_attrs);
+
+        let ai_attr = ai_attr.unwrap();
+        assert_eq!(ai_attr.start_line, 4, "AI attribution should start at line 4");
+        assert_eq!(ai_attr.end_line, 5, "AI attribution should end at line 5");
+    }
+
+    #[test]
+    fn test_replace_one_human_line_with_ai_line() {
+        // Simulates: Human writes 4 lines, then AI replaces one of them with an AI line
+        let tracker = AttributionTracker::new();
+
+        // Step 1: Human creates file
+        let v1_content = "Line 1\nLine 2\n||__AI LINE__ PENDING__||\nLine 4";
+        let mut v1_attributions = tracker
+            .update_attributions("", v1_content, &Vec::new(), &CheckpointKind::Human.to_str(), TEST_TS)
+            .unwrap();
+
+        v1_attributions = discard_attributions_for_author(&v1_attributions, &CheckpointKind::Human.to_str());
+
+        // Step 2: Replaces the two lines at the end
+        let v2_content = "Line 1\nLine 2\nLine 3\nLine 4";
+        let mut v2_attributions = tracker
+            .update_attributions(v1_content, v2_content, &v1_attributions, &CheckpointKind::AiAgent.to_str(), TEST_TS+1)
+            .unwrap();
+
+        v2_attributions = discard_attributions_for_author(&v2_attributions, &CheckpointKind::Human.to_str());
+
+        let v2_line_attrs = attributions_to_line_attributions(&v2_attributions, v2_content);
+
+        // Lines 4-5 should be attributed to AI
+        assert!(v2_line_attrs.len() >= 1, "Should have at least 1 line attribution. Got: {:?}", v2_line_attrs);
+
+        // Check that line 3 is attributed to AI
+        for attr in v2_line_attrs {
+            match attr.start_line {
+                3 => {
+                    assert_eq!(attr.author_id, CheckpointKind::AiAgent.to_str());
+                    assert_eq!(attr.end_line, 3);
+                    break;
+                }
+                _ => {
+                    assert_eq!(attr.author_id, CheckpointKind::Human.to_str());
+                }
+            }
+        }
+    }
+
+    // ========== Unattributed Attribution Tests ==========
+
+    #[test]
+    fn test_attribute_unattributed_lines_empty_content() {
+        let tracker = AttributionTracker::new();
+        let content = "";
+        let prev_attributions = vec![];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS);
+        
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_no_previous_attributions() {
+        let tracker = AttributionTracker::new();
+        let content = "Hello world";
+        let prev_attributions = vec![];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS);
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start, 0);
+        assert_eq!(result[0].end, 11);
+        assert_eq!(result[0].author_id, "Alice");
+        assert_eq!(result[0].ts, TEST_TS);
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_partially_attributed() {
+        let tracker = AttributionTracker::new();
+        let content = "Hello beautiful world";
+        let prev_attributions = vec![
+            Attribution::new(0, 6, "Bob".to_string(), TEST_TS),     // "Hello "
+            Attribution::new(15, 21, "Charlie".to_string(), TEST_TS), // " world"
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS + 1);
+        
+        // Should have original attributions plus one new attribution for "beautiful"
+        assert_eq!(result.len(), 3);
+        
+        // Check that "beautiful" (chars 6-15) is attributed to Alice
+        let alice_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Alice").collect();
+        assert_eq!(alice_attrs.len(), 1);
+        assert_eq!(alice_attrs[0].start, 6);
+        assert_eq!(alice_attrs[0].end, 15);
+        assert_eq!(alice_attrs[0].ts, TEST_TS + 1);
+        
+        // Check that original attributions are preserved
+        let bob_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Bob").collect();
+        let charlie_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Charlie").collect();
+        assert_eq!(bob_attrs.len(), 1);
+        assert_eq!(charlie_attrs.len(), 1);
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_multiple_gaps() {
+        let tracker = AttributionTracker::new();
+        let content = "A B C D E F";
+        let prev_attributions = vec![
+            Attribution::new(0, 1, "Bob".to_string(), TEST_TS),     // "A"
+            Attribution::new(4, 5, "Charlie".to_string(), TEST_TS), // "C"
+            Attribution::new(8, 9, "Dave".to_string(), TEST_TS),    // "E"
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS + 1);
+        
+        // Should have 3 original attributions + 3 new Alice attributions for gaps
+        assert_eq!(result.len(), 6);
+        
+        // Check Alice attributions for the gaps
+        let alice_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Alice").collect();
+        assert_eq!(alice_attrs.len(), 3);
+        
+        // Gap 1: " B " (chars 1-4)
+        // Gap 2: " D " (chars 5-8) 
+        // Gap 3: " F" (chars 9-11)
+        let gap_ranges: Vec<_> = alice_attrs.iter().map(|a| (a.start, a.end)).collect();
+        assert!(gap_ranges.contains(&(1, 4)), "Should have gap 1-4");
+        assert!(gap_ranges.contains(&(5, 8)), "Should have gap 5-8");
+        assert!(gap_ranges.contains(&(9, 11)), "Should have gap 9-11");
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_contiguous_gaps() {
+        let tracker = AttributionTracker::new();
+        let content = "ABC";
+        let prev_attributions = vec![
+            Attribution::new(0, 1, "Bob".to_string(), TEST_TS),     // "A"
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS + 1);
+        
+        // Should have 1 original attribution + 1 new attribution for "BC"
+        assert_eq!(result.len(), 2);
+        
+        let alice_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Alice").collect();
+        assert_eq!(alice_attrs.len(), 1);
+        assert_eq!(alice_attrs[0].start, 1);
+        assert_eq!(alice_attrs[0].end, 3);
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_fully_attributed() {
+        let tracker = AttributionTracker::new();
+        let content = "Hello";
+        let prev_attributions = vec![
+            Attribution::new(0, 5, "Bob".to_string(), TEST_TS),
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS + 1);
+        
+        // Should have only the original attribution, no new ones
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].author_id, "Bob");
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_multiline_content() {
+        let tracker = AttributionTracker::new();
+        let content = "Line 1\nLine 2\nLine 3\n";
+        let prev_attributions = vec![
+            Attribution::new(0, 7, "Bob".to_string(), TEST_TS),     // "Line 1\n"
+            // Line 2 is unattributed
+            Attribution::new(14, 21, "Charlie".to_string(), TEST_TS), // "Line 3\n"
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS + 1);
+        
+        // Should have 2 original attributions + 1 new attribution for "Line 2\n"
+        assert_eq!(result.len(), 3);
+        
+        let alice_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Alice").collect();
+        assert_eq!(alice_attrs.len(), 1);
+        assert_eq!(alice_attrs[0].start, 7);
+        assert_eq!(alice_attrs[0].end, 14);
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_preserves_timestamps() {
+        let tracker = AttributionTracker::new();
+        let content = "Hello world";
+        let prev_attributions = vec![
+            Attribution::new(0, 6, "Bob".to_string(), 1000),
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", 2000);
+        
+        assert_eq!(result.len(), 2);
+        
+        // Check that original timestamp is preserved
+        let bob_attr = result.iter().find(|a| a.author_id == "Bob").unwrap();
+        assert_eq!(bob_attr.ts, 1000);
+        
+        // Check that new attribution has correct timestamp
+        let alice_attr = result.iter().find(|a| a.author_id == "Alice").unwrap();
+        assert_eq!(alice_attr.ts, 2000);
+    }
+
+    #[test]
+    fn test_attribute_unattributed_lines_complex_overlapping() {
+        let tracker = AttributionTracker::new();
+        let content = "ABCDEFGHIJ";
+        let prev_attributions = vec![
+            Attribution::new(1, 3, "Bob".to_string(), TEST_TS),     // "BC"
+            Attribution::new(4, 6, "Charlie".to_string(), TEST_TS), // "EF"
+            Attribution::new(7, 9, "Dave".to_string(), TEST_TS),    // "HI"
+        ];
+        
+        let result = tracker.attribute_unattributed_ranges(content, &prev_attributions, "Alice", TEST_TS + 1);
+        
+        // Should have 3 original attributions + 4 new Alice attributions for gaps
+        assert_eq!(result.len(), 7);
+        
+        let alice_attrs: Vec<_> = result.iter().filter(|a| a.author_id == "Alice").collect();
+        assert_eq!(alice_attrs.len(), 4);
+        
+        // Gap 1: "A" (char 0)
+        // Gap 2: "D" (char 3) 
+        // Gap 3: "G" (char 6)
+        // Gap 4: "J" (char 9)
+        let gap_ranges: Vec<_> = alice_attrs.iter().map(|a| (a.start, a.end)).collect();
+        assert!(gap_ranges.contains(&(0, 1)), "Should have gap 0-1");
+        assert!(gap_ranges.contains(&(3, 4)), "Should have gap 3-4");
+        assert!(gap_ranges.contains(&(6, 7)), "Should have gap 6-7");
+        assert!(gap_ranges.contains(&(9, 10)), "Should have gap 9-10");
     }
 }
+
