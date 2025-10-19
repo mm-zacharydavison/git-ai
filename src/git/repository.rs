@@ -43,13 +43,83 @@ pub struct CommitRange<'a> {
 }
 
 impl<'a> CommitRange<'a> {
-    pub fn new(repo: &'a Repository, start_oid: String, end_oid: String, refname: String) -> Self {
-        Self {
+    pub fn new(
+        repo: &'a Repository,
+        start_oid: String,
+        end_oid: String,
+        refname: String,
+    ) -> Result<Self, GitAiError> {
+        // Resolve start_oid and end_oid to actual commit SHAs
+        let resolved_start = repo.revparse_single(&start_oid)?.oid;
+        let resolved_end = repo.revparse_single(&end_oid)?.oid;
+
+        Ok(Self {
             repo,
-            start_oid,
-            end_oid,
+            start_oid: resolved_start,
+            end_oid: resolved_end,
             refname,
-        }
+        })
+    }
+
+    /// Create a new CommitRange with automatic refname inference.
+    /// If refname is None, tries to find a single ref pointing to end_oid.
+    /// If exactly one ref is found, uses that. Otherwise falls back to current HEAD.
+    pub fn new_infer_refname(
+        repo: &'a Repository,
+        start_oid: String,
+        end_oid: String,
+        refname: Option<String>,
+    ) -> Result<Self, GitAiError> {
+        // Resolve start_oid and end_oid to actual commit SHAs
+        let resolved_start = repo.revparse_single(&start_oid)?.oid;
+        let resolved_end = repo.revparse_single(&end_oid)?.oid;
+
+        let inferred_refname = match refname {
+            Some(name) => name,
+            None => {
+                // Try to find refs pointing to resolved end_oid
+                let mut args = repo.global_args_for_exec();
+                args.push("for-each-ref".to_string());
+                args.push("--points-at".to_string());
+                args.push(resolved_end.clone());
+                args.push("--format=%(refname)".to_string());
+
+                let refs = match exec_git(&args) {
+                    Ok(output) => {
+                        let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+                        let refs: Vec<String> = stdout
+                            .lines()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        refs
+                    }
+                    Err(_) => Vec::new(),
+                };
+
+                // If exactly one ref found, use it
+                if refs.len() == 1 {
+                    refs[0].clone()
+                } else {
+                    // Fall back to current HEAD
+                    match repo.head() {
+                        Ok(head_ref) => head_ref.name().unwrap_or("HEAD").to_string(),
+                        Err(_) => "HEAD".to_string(),
+                    }
+                }
+            }
+        };
+
+        Ok(Self {
+            repo,
+            start_oid: resolved_start,
+            end_oid: resolved_end,
+            refname: inferred_refname,
+        })
+    }
+
+    pub fn repo(&self) -> &'a Repository {
+        self.repo
     }
 
     pub fn is_valid(&self) -> Result<(), GitAiError> {

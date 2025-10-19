@@ -8,6 +8,7 @@ use crate::commands::checkpoint_agent::agent_preset::{
 use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
+use crate::git::repository::CommitRange;
 use std::io::IsTerminal;
 
 pub fn handle_git_ai(args: &[String]) {
@@ -45,13 +46,6 @@ pub fn handle_git_ai(args: &[String]) {
                 eprintln!("Install hooks failed: {}", e);
                 std::process::exit(1);
             }
-        }
-        "restore-authorship" => {
-            commands::restore_authorship::restore_authorship(&args[1..]);
-        }
-        "log-pr-closed" => {
-            _ = commands::log_pr_closed::log_pr_closed(&args[1..]);
-            std::process::exit(0);
         }
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
@@ -328,9 +322,18 @@ fn handle_ai_blame(args: &[String]) {
 }
 
 fn handle_stats(args: &[String]) {
+    // Find the git repository
+    let repo = match find_repository(&Vec::<String>::new()) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
     // Parse stats-specific arguments
     let mut json_output = false;
     let mut commit_sha = None;
+    let mut commit_range: Option<CommitRange> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -340,9 +343,37 @@ fn handle_stats(args: &[String]) {
                 i += 1;
             }
             _ => {
-                // First non-flag argument is treated as commit SHA
+                // First non-flag argument is treated as commit SHA or range
                 if commit_sha.is_none() {
-                    commit_sha = Some(args[i].clone());
+                    let arg = &args[i];
+                    // Check if this is a commit range (contains "..")
+                    if arg.contains("..") {
+                        let parts: Vec<&str> = arg.split("..").collect();
+                        if parts.len() == 2 {
+                            match CommitRange::new_infer_refname(
+                                &repo,
+                                parts[0].to_string(),
+                                parts[1].to_string(),
+                                // @todo this is probably fine, but we might want to give users an option to override from this command.
+                                None,
+                            ) {
+                                Ok(range) => {
+                                    println!("CommitRange created: {:?}", range);
+                                    println!("Is valid range {:?}", range.is_valid().is_ok());
+                                    commit_range = Some(range);
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to create commit range: {}", e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        } else {
+                            eprintln!("Invalid commit range format. Expected: <commit>..<commit>");
+                            std::process::exit(1);
+                        }
+                    } else {
+                        commit_sha = Some(arg.clone());
+                    }
                     i += 1;
                 } else {
                     eprintln!("Unknown stats argument: {}", args[i]);
@@ -352,14 +383,17 @@ fn handle_stats(args: &[String]) {
         }
     }
 
-    // Find the git repository
-    let repo = match find_repository(&Vec::<String>::new()) {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
+    // Handle commit range if detected
+    if let Some(range) = commit_range {
+        // Print the commit range for now
+        println!("CommitRange detected:");
+        println!("  Start: {}", range.start_oid);
+        println!("  End: {}", range.end_oid);
+        println!("  Refname: {}", range.refname);
+
+        // TODO: Call range authorship codepath here
+        return;
+    }
 
     if let Err(e) = stats_command(&repo, commit_sha.as_deref(), json_output) {
         match e {

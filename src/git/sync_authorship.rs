@@ -129,12 +129,10 @@ pub fn fetch_authorship_notes<'a>(
 
     // Only create a CommitRange if we have both start and end commits
     match (default_head_sha, after_fetch_default_head_sha) {
-        (Some(start), Some(end)) => Ok(Some(CommitRange::new(
-            repository,
-            start,
-            end,
-            tracking_ref.to_string(),
-        ))),
+        (Some(start), Some(end)) => {
+            let range = CommitRange::new(repository, start, end, tracking_ref.to_string())?;
+            Ok(Some(range))
+        }
         _ => Ok(None),
     }
 }
