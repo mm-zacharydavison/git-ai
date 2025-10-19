@@ -1,3 +1,4 @@
+use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::AgentId;
 use crate::commands;
@@ -385,13 +386,15 @@ fn handle_stats(args: &[String]) {
 
     // Handle commit range if detected
     if let Some(range) = commit_range {
-        // Print the commit range for now
-        println!("CommitRange detected:");
-        println!("  Start: {}", range.start_oid);
-        println!("  End: {}", range.end_oid);
-        println!("  Refname: {}", range.refname);
-
-        // TODO: Call range authorship codepath here
+        match range_authorship::range_authorship(range, true) {
+            Ok(stats) => {
+                println!("Range authorship stats: {:?}", stats);
+            }
+            Err(e) => {
+                eprintln!("Range authorship failed: {}", e);
+                std::process::exit(1);
+            }
+        }
         return;
     }
 

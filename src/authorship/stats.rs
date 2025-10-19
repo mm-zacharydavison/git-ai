@@ -347,7 +347,7 @@ fn get_git_diff_stats(repo: &Repository, commit_sha: &str) -> Result<(u32, u32),
 }
 
 /// Analyze authorship log to extract statistics
-fn analyze_authorship_log(
+pub fn analyze_authorship_log(
     authorship_log: &AuthorshipLog,
 ) -> Result<(u32, u32, u32, u32, u64), GitAiError> {
     let mut human_additions = 0u32;

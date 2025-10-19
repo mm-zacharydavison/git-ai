@@ -1,213 +1,410 @@
-use crate::authorship::authorship_log_serialization::AuthorshipLog;
-use crate::authorship::rebase_authorship::rewrite_authorship_after_squash_or_rebase;
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use crate::authorship::stats::CommitStats;
 use crate::error::GitAiError;
-use crate::git::refs::get_commits_with_notes_from_list;
-use crate::git::repository::{CommitRange, OwnedCommit};
+use crate::git::refs::{
+    CommitAuthorship, get_commits_with_notes_from_list, get_reference_as_authorship_log_v3,
+};
+use crate::git::repository::{CommitRange, Repository};
 
-pub fn range_authorship(commit_range: CommitRange) -> Result<(), GitAiError> {
-    eprintln!("Restoring authorship for refname: {}", commit_range.refname);
-    eprintln!(
-        "  Commit range: {}..{}",
-        commit_range.start_oid, commit_range.end_oid
-    );
+#[derive(Debug, Clone)]
+pub struct RangeAuthorshipStats {
+    authorship_stats: AuthorshipStats,
+    range_stats: CommitStats,
+}
+#[derive(Debug, Clone)]
+pub struct AuthorshipStats {
+    total_commits: usize,
+    commits_with_authorship: usize,
+    authors_commiting_authorship: HashSet<String>,
+    authors_not_commiting_authorship: HashSet<String>,
+    commits_without_authorship: Vec<String>,
+}
 
-    commit_range.is_valid()?;
+pub fn range_authorship(
+    commit_range: CommitRange,
+    pre_fetch_contents: bool,
+) -> Result<RangeAuthorshipStats, GitAiError> {
+    if let Err(e) = commit_range.is_valid() {
+        return Err(e);
+    }
+
+    // Fetch the branch if pre_fetch_contents is true
+    if pre_fetch_contents {
+        let repository = commit_range.repo();
+        let refname = &commit_range.refname;
+
+        // Get default remote, fallback to "origin" if not found
+        let default_remote = repository
+            .get_default_remote()?
+            .unwrap_or_else(|| "origin".to_string());
+
+        // Extract remote and branch from refname
+        let (remote, fetch_refspec) = if refname.starts_with("refs/remotes/") {
+            // Remote branch: refs/remotes/origin/branch-name -> origin, refs/heads/branch-name
+            let without_prefix = refname.strip_prefix("refs/remotes/").unwrap();
+            let parts: Vec<&str> = without_prefix.splitn(2, '/').collect();
+            if parts.len() == 2 {
+                (parts[0].to_string(), format!("refs/heads/{}", parts[1]))
+            } else {
+                (default_remote.clone(), refname.to_string())
+            }
+        } else if refname.starts_with("refs/heads/") {
+            // Local branch: refs/heads/branch-name -> default_remote, refs/heads/branch-name
+            (default_remote.clone(), refname.to_string())
+        } else if refname.contains('/') && !refname.starts_with("refs/") {
+            // Simple remote format: origin/branch-name -> origin, refs/heads/branch-name
+            let parts: Vec<&str> = refname.splitn(2, '/').collect();
+            if parts.len() == 2 {
+                (parts[0].to_string(), format!("refs/heads/{}", parts[1]))
+            } else {
+                (default_remote.clone(), format!("refs/heads/{}", refname))
+            }
+        } else {
+            // Plain branch name: branch-name -> default_remote, refs/heads/branch-name
+            (default_remote.clone(), format!("refs/heads/{}", refname))
+        };
+
+        let mut args = repository.global_args_for_exec();
+        args.push("fetch".to_string());
+        args.push(remote.clone());
+        args.push(fetch_refspec.clone());
+
+        let output = crate::git::repository::exec_git(&args)?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "Failed to fetch {} from {}: {}",
+                fetch_refspec,
+                remote,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        println!("✓ Fetched {} from {}", fetch_refspec, remote);
+    }
 
     // First, collect all commit SHAs from the range
     let repository = commit_range.repo();
-    let refname = commit_range.refname.clone();
+    let _refname = commit_range.refname.clone();
+
+    // Calculate range stats by diffing commits and analyzing authorship
+    let range_stats = calculate_range_stats(&commit_range)?;
+
     let all_commits: Vec<_> = commit_range.into_iter().collect();
     let commit_shas: Vec<String> = all_commits
         .iter()
         .map(|commit| commit.id().to_string())
         .collect();
 
-    eprintln!("Checking {} commits in range", commit_shas.len());
+    let commit_authorship = get_commits_with_notes_from_list(repository, &commit_shas)?;
 
-    // Batch-check which commits have notes using a single git invocation
-    let commits_with_notes = get_commits_with_notes_from_list(repository, &commit_shas)?;
+    Ok(RangeAuthorshipStats {
+        authorship_stats: AuthorshipStats {
+            total_commits: commit_authorship.len(),
+            commits_with_authorship: commit_authorship
+                .iter()
+                .filter(|ca| matches!(ca, CommitAuthorship::Log { .. }))
+                .count(),
+            authors_commiting_authorship: commit_authorship
+                .iter()
+                .filter_map(|ca| match ca {
+                    CommitAuthorship::Log { git_author, .. } => Some(git_author.clone()),
+                    _ => None,
+                })
+                .collect(),
+            authors_not_commiting_authorship: commit_authorship
+                .iter()
+                .filter_map(|ca| match ca {
+                    CommitAuthorship::NoLog { git_author, .. } => Some(git_author.clone()),
+                    _ => None,
+                })
+                .collect(),
+            commits_without_authorship: commit_authorship
+                .iter()
+                .filter_map(|ca| match ca {
+                    CommitAuthorship::NoLog { sha, .. } => Some(sha.clone()),
+                    _ => None,
+                })
+                .collect(),
+        },
+        range_stats,
+    })
+}
 
-    // Filter to only commits without notes
-    let commits_without_notes: Vec<_> = all_commits
-        .into_iter()
-        .filter(|commit| !commits_with_notes.contains(&commit.id().to_string()))
-        .collect();
+// async fn reconstruct_authorship_for_commit(
+//     default_branch: &str,
+//     commit: OwnedCommit,
+// ) -> Result<AuthorshipLog, GitAiError> {
+//     let repository = commit.repo();
+//     let commit_id = commit.id();
+//     let repo_path = repository.path();
 
-    eprintln!(
-        "Found {} commits without authorship notes (out of {} total)",
-        commits_without_notes.len(),
-        commit_shas.len()
-    );
+//     // Step 2: Fetch the branch HEAD directly (server-side, no temp ref needed)
+//     let remote = extract_remote(default_branch).unwrap_or("origin");
+//     let fetch_result = std::process::Command::new(crate::config::Config::get().git_cmd())
+//         .arg("fetch")
+//         .arg(remote)
+//         .arg(&branch_head)
+//         .current_dir(&repo_path)
+//         .output();
 
-    // Process commits in parallel with concurrency limit
-    let concurrency_limit = 10;
+//     match fetch_result {
+//         Ok(output) if output.status.success() => {
+//             eprintln!("  Fetched branch HEAD {}", branch_head);
+//         }
+//         Ok(output) => {
+//             return Err(GitAiError::Generic(format!(
+//                 "Failed to fetch commit {}: {}",
+//                 branch_head,
+//                 String::from_utf8_lossy(&output.stderr)
+//             )));
+//         }
+//         Err(e) => {
+//             return Err(GitAiError::Generic(format!(
+//                 "Failed to fetch commit {}: {}",
+//                 branch_head, e
+//             )));
+//         }
+//     }
 
-    // Convert to owned commits for async processing
-    let owned_commits: Vec<OwnedCommit> = commits_without_notes
-        .iter()
-        .map(|c| c.to_owned_commit())
-        .collect();
+//     // Step 3: Verify the fetched commit is connected to default branch
+//     let merge_base_result = std::process::Command::new(crate::config::Config::get().git_cmd())
+//         .arg("merge-base")
+//         .arg(default_branch)
+//         .arg(&branch_head)
+//         .current_dir(&repo_path)
+//         .output();
 
-    smol::block_on(async {
-        let semaphore = std::sync::Arc::new(smol::lock::Semaphore::new(concurrency_limit));
-        let mut tasks = Vec::new();
+//     match merge_base_result {
+//         Ok(output) if output.status.success() => {
+//             eprintln!("  Verified branch history is connected to default branch");
+//         }
+//         _ => {
+//             return Err(GitAiError::Generic(
+//                 "Branch history is not connected to default branch. Not enough history to reconstruct."
+//                     .to_string(),
+//             ));
+//         }
+//     }
 
-        for commit in owned_commits {
-            let sem = semaphore.clone();
-            let refname_clone = refname.clone();
+//     eprintln!(
+//         "  Reconstructing authorship from {} to {}",
+//         branch_head, commit_id
+//     );
 
-            let task = smol::spawn(async move {
-                let _permit = sem.acquire().await;
+//     // Step 4: Call rewrite_authorship_after_squash_or_rebase
+//     let log = rewrite_authorship_after_squash_or_rebase(
+//         repository,
+//         "", // destination_branch not used
+//         &branch_head,
+//         &commit_id,
+//         false, // not a dry run
+//     )?;
 
-                match reconstruct_authorship_for_commit(&refname_clone, commit).await {
-                    Ok(_) => {
-                        eprintln!("✓ Successfully reconstructed authorship");
+//     eprintln!(
+//         "  ✓ Successfully reconstructed authorship for {}",
+//         commit_id
+//     );
+//     Ok(log)
+// }
+
+/// Calculate AI vs human line contributions for a commit range
+/// by diffing start->end and using blame to determine authorship
+fn calculate_range_stats(commit_range: &CommitRange) -> Result<CommitStats, GitAiError> {
+    let repo = commit_range.repo();
+    let start_sha = &commit_range.start_oid;
+    let end_sha = &commit_range.end_oid;
+
+    // Get the diff using git diff to ensure consistency with git's view
+    let mut args = repo.global_args_for_exec();
+    args.push("diff".to_string());
+    args.push(format!("{}..{}", start_sha, end_sha));
+
+    let output = crate::git::repository::exec_git(&args)?;
+    let diff_output = String::from_utf8(output.stdout)?;
+
+    // Parse diff to extract added lines and their line numbers
+    let added_lines_by_file = parse_git_diff_for_added_lines(&diff_output)?;
+
+    let mut git_diff_added_lines = 0u32;
+    let mut git_diff_deleted_lines = 0u32;
+
+    // First pass: count total additions/deletions from the diff
+    for line in diff_output.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            git_diff_added_lines += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            git_diff_deleted_lines += 1;
+        }
+    }
+
+    // Build blame cache for each file
+    let mut blame_cache: HashMap<String, FileBlame> = HashMap::new();
+    for file_path in added_lines_by_file.keys() {
+        let file_blame = compute_file_blame(repo, file_path, end_sha)?;
+        blame_cache.insert(file_path.clone(), file_blame);
+    }
+
+    // Second pass: for each added line, lookup authorship from cache
+    let mut human_additions = 0u32;
+    let mut ai_additions = 0u32;
+    let mut ai_accepted = 0u32;
+
+    for (file_path, line_numbers) in added_lines_by_file {
+        if let Some(file_blame) = blame_cache.get(&file_path) {
+            for line_no in line_numbers {
+                if let Some((_, is_ai)) = file_blame.get_line_authorship(line_no) {
+                    if is_ai {
+                        ai_additions += 1;
+                        ai_accepted += 1;
+                    } else {
+                        human_additions += 1;
                     }
-                    Err(e) => {
-                        eprintln!("✗ Failed to reconstruct authorship: {}", e);
+                } else {
+                    // Could not determine, count as human
+                    human_additions += 1;
+                }
+            }
+        }
+    }
+
+    Ok(CommitStats {
+        human_additions,
+        mixed_additions: 0,
+        ai_additions,
+        ai_accepted,
+        time_waiting_for_ai: 0,
+        git_diff_deleted_lines,
+        git_diff_added_lines,
+    })
+}
+
+/// Cache of blame information for a single file
+struct FileBlame {
+    // Map from line_number to (commit_sha, is_ai_authored)
+    line_blame: HashMap<u32, (String, bool)>,
+}
+
+impl FileBlame {
+    /// Get authorship info for a specific line
+    /// Returns Some((commit_sha, is_ai_authored)) or None if line not found
+    fn get_line_authorship(&self, line_no: u32) -> Option<(String, bool)> {
+        self.line_blame.get(&line_no).cloned()
+    }
+}
+
+/// Compute blame for an entire file and extract authorship info
+fn compute_file_blame(
+    repo: &Repository,
+    file_path: &str,
+    context_commit_sha: &str,
+) -> Result<FileBlame, GitAiError> {
+    use crate::commands::blame::GitAiBlameOptions;
+
+    let mut blame_opts = GitAiBlameOptions::default();
+    blame_opts.newest_commit = Some(context_commit_sha.to_string());
+
+    // Get blame hunks for the entire file
+    let blame_hunks = repo.blame_hunks(file_path, 1, u32::MAX, &blame_opts)?;
+
+    let mut line_blame: HashMap<u32, (String, bool)> = HashMap::new();
+
+    // Process each blame hunk
+    for hunk in blame_hunks {
+        let commit_sha = hunk.commit_sha.clone();
+
+        // Look up the AI authorship log for this commit
+        let is_ai = match get_reference_as_authorship_log_v3(repo, &commit_sha) {
+            Ok(authorship_log) => {
+                // Check if any lines in this hunk are AI-authored
+                let orig_line_start = hunk.orig_range.0;
+                let orig_line_end = hunk.orig_range.1;
+
+                // Check if at least one line in the hunk is AI-authored
+                (orig_line_start..=orig_line_end).any(|line_no| {
+                    authorship_log
+                        .get_line_attribution(file_path, line_no)
+                        .is_some_and(|(_, prompt)| prompt.is_some())
+                })
+            }
+            Err(_) => false, // No authorship log means human-authored
+        };
+
+        // Record authorship for each line in the hunk
+        let new_line_start = hunk.range.0;
+        let new_line_end = hunk.range.1;
+        for new_line_no in new_line_start..=new_line_end {
+            line_blame.insert(new_line_no, (commit_sha.clone(), is_ai));
+        }
+    }
+
+    Ok(FileBlame { line_blame })
+}
+
+/// Parse git diff output to extract which lines were added in each file
+/// Returns a map of file_path -> Vec<line_numbers> where line numbers are 1-indexed
+fn parse_git_diff_for_added_lines(
+    diff_output: &str,
+) -> Result<HashMap<String, Vec<u32>>, GitAiError> {
+    let mut result: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut current_file: Option<String> = None;
+    let mut new_line_num: u32 = 0;
+
+    for line in diff_output.lines() {
+        // Parse file headers: +++ b/path/to/file
+        if line.starts_with("+++") {
+            let file_path = line
+                .strip_prefix("+++")
+                .unwrap_or("")
+                .trim()
+                .strip_prefix("b/")
+                .unwrap_or("")
+                .to_string();
+            current_file = Some(file_path);
+            new_line_num = 0;
+            continue;
+        }
+
+        // Parse hunk headers: @@ -old_start,old_count +new_start,new_count @@
+        if line.starts_with("@@") {
+            if let Some(end_idx) = line.rfind("@@") {
+                let hunk_header = &line[2..end_idx];
+                // Parse the +new_start,new_count part
+                if let Some(plus_idx) = hunk_header.find('+') {
+                    let new_part = &hunk_header[plus_idx + 1..];
+                    let parts: Vec<&str> = new_part.split(',').collect();
+                    if let Ok(start) = parts[0].parse::<u32>() {
+                        new_line_num = start;
                     }
                 }
-            });
-
-            tasks.push(task);
+            }
+            continue;
         }
 
-        // Wait for all tasks to complete
-        for task in tasks {
-            task.await;
+        // Skip diff metadata lines
+        if line.starts_with("diff --git") || line.starts_with("index ") || line.starts_with("---") {
+            continue;
         }
-    });
 
-    eprintln!("All commits processed!");
-    Ok(())
-}
-
-async fn reconstruct_authorship_for_commit(
-    default_branch: &str,
-    commit: OwnedCommit,
-) -> Result<AuthorshipLog, GitAiError> {
-    let repository = commit.repo();
-    let commit_id = commit.id();
-    let repo_path = repository.path();
-
-    // Step 1: Check ai-reflog for this merge commit
-    let reflog_note = get_ai_reflog_note(&repository, &commit_id).ok_or_else(|| {
-        GitAiError::Generic(format!(
-            "No ai-reflog entry found for merge commit: {}. Skipping reconstruction.",
-            commit_id
-        ))
-    })?;
-
-    let (branch_name, branch_head) = parse_reflog_note(&reflog_note).ok_or_else(|| {
-        GitAiError::Generic(format!("Invalid ai-reflog note format: {}", reflog_note))
-    })?;
-
-    eprintln!(
-        "  Found ai-reflog entry: branch={}, head={}",
-        branch_name, branch_head
-    );
-
-    // Step 2: Fetch the branch HEAD directly (server-side, no temp ref needed)
-    let remote = extract_remote(default_branch).unwrap_or("origin");
-    let fetch_result = std::process::Command::new(crate::config::Config::get().git_cmd())
-        .arg("fetch")
-        .arg(remote)
-        .arg(&branch_head)
-        .current_dir(&repo_path)
-        .output();
-
-    match fetch_result {
-        Ok(output) if output.status.success() => {
-            eprintln!("  Fetched branch HEAD {}", branch_head);
-        }
-        Ok(output) => {
-            return Err(GitAiError::Generic(format!(
-                "Failed to fetch commit {}: {}",
-                branch_head,
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        Err(e) => {
-            return Err(GitAiError::Generic(format!(
-                "Failed to fetch commit {}: {}",
-                branch_head, e
-            )));
+        // Process content lines
+        if let Some(ref file) = current_file {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                // Added line - record its line number
+                result
+                    .entry(file.clone())
+                    .or_insert_with(Vec::new)
+                    .push(new_line_num);
+                new_line_num += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                // Deleted line - don't advance new_line_num
+            } else if !line.starts_with('\\') {
+                // Regular context line or empty line
+                new_line_num += 1;
+            }
         }
     }
 
-    // Step 3: Verify the fetched commit is connected to default branch
-    let merge_base_result = std::process::Command::new(crate::config::Config::get().git_cmd())
-        .arg("merge-base")
-        .arg(default_branch)
-        .arg(&branch_head)
-        .current_dir(&repo_path)
-        .output();
-
-    match merge_base_result {
-        Ok(output) if output.status.success() => {
-            eprintln!("  Verified branch history is connected to default branch");
-        }
-        _ => {
-            return Err(GitAiError::Generic(
-                "Branch history is not connected to default branch. Not enough history to reconstruct."
-                    .to_string(),
-            ));
-        }
-    }
-
-    eprintln!(
-        "  Reconstructing authorship from {} to {}",
-        branch_head, commit_id
-    );
-
-    // Step 4: Call rewrite_authorship_after_squash_or_rebase
-    let log = rewrite_authorship_after_squash_or_rebase(
-        repository,
-        "", // destination_branch not used
-        &branch_head,
-        &commit_id,
-        false, // not a dry run
-    )?;
-
-    eprintln!(
-        "  ✓ Successfully reconstructed authorship for {}",
-        commit_id
-    );
-    Ok(log)
-}
-
-/// Get ai-reflog note for a commit if it exists
-fn get_ai_reflog_note(
-    repo: &crate::git::repository::Repository,
-    commit_sha: &str,
-) -> Option<String> {
-    let mut args = repo.global_args_for_exec();
-    args.push("notes".to_string());
-    args.push("--ref=ai-reflog".to_string());
-    args.push("show".to_string());
-    args.push(commit_sha.to_string());
-
-    match crate::git::repository::exec_git(&args) {
-        Ok(output) => String::from_utf8(output.stdout)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        Err(_) => None,
-    }
-}
-
-/// Parse ai-reflog note format: "{branch_refname} {branch_head_commit}"
-/// Example: "origin/main 8c1a000878cd22bc04a04822da423d87143f728a"
-fn parse_reflog_note(note: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = note.split_whitespace().collect();
-    if parts.len() >= 2 {
-        Some((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        None
-    }
-}
-
-/// Extract remote name from refname (e.g., "origin" from "origin/main")
-fn extract_remote(refname: &str) -> Option<&str> {
-    refname.split('/').next()
+    Ok(result)
 }
