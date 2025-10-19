@@ -4,9 +4,9 @@ use crate::authorship::transcript::Message;
 use crate::error::GitAiError;
 use crate::git::refs::get_authorship;
 use crate::git::repository::Repository;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitStats {
     pub human_additions: u32, // Lines written only by humans
     pub mixed_additions: u32, // AI-generated lines that were edited by humans

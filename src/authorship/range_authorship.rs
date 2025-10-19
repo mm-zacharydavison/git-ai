@@ -1,18 +1,21 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use crate::authorship::stats::CommitStats;
 use crate::error::GitAiError;
 use crate::git::refs::{CommitAuthorship, get_commits_with_notes_from_list};
 use crate::git::repository::{CommitRange, Repository};
 use crate::utils::debug_log;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RangeAuthorshipStats {
     authorship_stats: AuthorshipStats,
     range_stats: CommitStats,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorshipStats {
     total_commits: usize,
     commits_with_authorship: usize,
