@@ -261,10 +261,8 @@ impl AttributionTracker {
         // Phase 2: Build deletion and insertion catalogs
         let (deletions, insertions) = self.build_diff_catalog(&diffs);
 
-        // TODO: Debug and re-enable move detection
         // Phase 3: Detect move operations
-        // let move_mappings = self.detect_moves(&deletions, &insertions);
-        let move_mappings = Vec::new();
+        let move_mappings = self.detect_moves(&deletions, &insertions);
 
         // Phase 4: Transform attributions through the diff
         let new_attributions = self.transform_attributions(
