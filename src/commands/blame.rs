@@ -1,4 +1,5 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::authorship_log::PromptRecord;
 use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
@@ -149,7 +150,7 @@ impl Repository {
         &self,
         file_path: &str,
         options: &GitAiBlameOptions,
-    ) -> Result<HashMap<u32, String>, GitAiError> {
+    ) -> Result<(HashMap<u32, String>, HashMap<String, PromptRecord>), GitAiError> {
         // Use repo root for file system operations
         let repo_root = self.workdir().or_else(|e| {
             Err(GitAiError::Generic(format!(
@@ -233,10 +234,10 @@ impl Repository {
         }
 
         // Step 2: Overlay AI authorship information
-        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path, options)?;
+        let (line_authors, prompt_records) = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path, options)?;
 
         if options.no_output {
-            return Ok(line_authors);
+            return Ok((line_authors, prompt_records));
         }
 
         // Output based on format
@@ -269,7 +270,7 @@ impl Repository {
             )?;
         }
 
-        Ok(line_authors)
+        Ok((line_authors, prompt_records))
     }
 
     pub fn blame_hunks(
@@ -533,8 +534,9 @@ fn overlay_ai_authorship(
     blame_hunks: &[BlameHunk],
     file_path: &str,
     options: &GitAiBlameOptions,
-) -> Result<HashMap<u32, String>, GitAiError> {
+) -> Result<(HashMap<u32, String>, HashMap<String, PromptRecord>), GitAiError> {
     let mut line_authors: HashMap<u32, String> = HashMap::new();
+    let mut prompt_records: HashMap<String, PromptRecord> = HashMap::new();
 
     // Group hunks by commit SHA to avoid repeated lookups
     let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLog>> = HashMap::new();
@@ -567,11 +569,13 @@ fn overlay_ai_authorship(
                 {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
                     if let Some(prompt_record) = prompt {
+                        let prompt_hash = prompt_hash.unwrap();
                         if options.use_prompt_hashes_as_names {
-                            line_authors.insert(current_line_num, prompt_hash.unwrap());
+                            line_authors.insert(current_line_num, prompt_hash.clone());
                         } else {
                             line_authors.insert(current_line_num, prompt_record.agent_id.tool.clone());
                         }
+                        prompt_records.insert(prompt_hash, prompt_record.clone());
                     } else {
                         if options.return_human_authors_as_human {
                             line_authors.insert(current_line_num, CheckpointKind::Human.to_str().to_string());
@@ -600,7 +604,7 @@ fn overlay_ai_authorship(
         }
     }
 
-    Ok(line_authors)
+    Ok((line_authors, prompt_records))
 }
 
 #[allow(unused_variables)]

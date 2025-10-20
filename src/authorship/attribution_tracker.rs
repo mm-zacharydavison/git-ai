@@ -533,7 +533,7 @@ impl AttributionTracker {
                     let mut match_info: Option<(usize, usize)> = None;  // (old_pos, match_len)
 
                     // TODO Figure out (a) if we need this here and (b) if we do, then what the threshold should be
-                    for search_len in (20..=insertion_text.len()).rev() {
+                    for search_len in (100..=insertion_text.len()).rev() {
                         let search_text = &insertion_text[..search_len];
                         if let Some(old_match_pos) = old_content[old_pos..].find(search_text) {
                             match_info = Some((old_pos + old_match_pos, search_len));

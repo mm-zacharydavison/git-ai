@@ -471,8 +471,8 @@ fn get_initial_checkpoint_entries(
         ai_blame_opts.newest_commit = head_commit_sha.clone();
         let ai_blame = repo.blame(file_path, &ai_blame_opts);
         let mut prev_line_attributions = Vec::new();
-        if let Ok(ai_blame) = ai_blame {
-            for (line, author) in ai_blame {
+        if let Ok((blames, _)) = ai_blame {
+            for (line, author) in blames {
                 if author == CheckpointKind::Human.to_str() {
                     continue;
                 }
