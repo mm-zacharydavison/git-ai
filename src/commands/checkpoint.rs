@@ -567,7 +567,7 @@ fn make_entry_for_file(
     ts: u128,
 ) -> Result<WorkingLogEntry, GitAiError> {
     let tracker = AttributionTracker::new();
-    let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(previous_content, previous_attributions, author_id, ts-1);
+    let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(previous_content, previous_attributions, &CheckpointKind::Human.to_str(), ts-1);
     let new_attributions = tracker.update_attributions(
         previous_content,
         content,
