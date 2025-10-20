@@ -1,7 +1,6 @@
 use crate::git::refs::{
     AI_AUTHORSHIP_PUSH_REFSPEC, copy_ref, merge_notes_from_ref, ref_exists, tracking_ref_for_remote,
 };
-use crate::git::repository::CommitRange;
 use crate::{
     error::GitAiError,
     git::{cli_parser::ParsedGitInvocation, repository::exec_git},
@@ -43,18 +42,63 @@ pub fn fetch_remote_from_args(
 }
 
 // for use with post-fetch and post-pull and post-clone hooks
-pub fn fetch_authorship_notes<'a>(
-    repository: &'a Repository,
-    parsed_args: &ParsedGitInvocation,
+pub fn fetch_authorship_notes(
+    repository: &Repository,
     remote_name: &str,
-) -> Result<Option<CommitRange<'a>>, GitAiError> {
+) -> Result<(), GitAiError> {
     // Generate tracking ref for this remote
     let tracking_ref = tracking_ref_for_remote(&remote_name);
+
+    debug_log(&format!(
+        "fetching authorship notes for remote '{}' to tracking ref '{}'",
+        remote_name, tracking_ref
+    ));
+
+    // First, check if the remote has refs/notes/ai using ls-remote
+    // This is important for bare repos where the refmap might not be configured
+    let mut ls_remote_args = repository.global_args_for_exec();
+    ls_remote_args.push("ls-remote".to_string());
+    ls_remote_args.push(remote_name.to_string());
+    ls_remote_args.push("refs/notes/ai".to_string());
+
+    debug_log(&format!("ls-remote command: {:?}", ls_remote_args));
+
+    match exec_git(&ls_remote_args) {
+        Ok(output) => {
+            let result = String::from_utf8_lossy(&output.stdout).to_string();
+            debug_log(&format!("ls-remote stdout: '{}'", result));
+            debug_log(&format!(
+                "ls-remote stderr: '{}'",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+
+            if result.trim().is_empty() {
+                debug_log(&format!(
+                    "no authorship notes found on remote '{}', nothing to sync",
+                    remote_name
+                ));
+                return Ok(());
+            }
+            debug_log(&format!(
+                "found authorship notes on remote '{}'",
+                remote_name
+            ));
+        }
+        Err(e) => {
+            debug_log(&format!(
+                "failed to check for authorship notes on remote '{}': {}",
+                remote_name, e
+            ));
+            return Ok(()); // Best-effort: if we can't check, silently continue
+        }
+    }
+
+    // Now fetch the notes to the tracking ref with explicit refspec
     let fetch_refspec = format!("+refs/notes/ai:{}", tracking_ref);
 
     // Build the internal authorship fetch with explicit flags and disabled hooks
-    // IMPORTANT: run in the same repo context by prefixing original global args (e.g., -C <path>)
-    let mut fetch_authorship: Vec<String> = parsed_args.global_args.clone();
+    // IMPORTANT: use repository.global_args_for_exec() to ensure -C flag is present for bare repos
+    let mut fetch_authorship: Vec<String> = repository.global_args_for_exec();
     fetch_authorship.push("-c".to_string());
     fetch_authorship.push("core.hooksPath=/dev/null".to_string());
     fetch_authorship.push("fetch".to_string());
@@ -66,88 +110,67 @@ pub fn fetch_authorship_notes<'a>(
     fetch_authorship.push(remote_name.to_string());
     fetch_authorship.push(fetch_refspec.clone());
 
-    debug_log(&format!(
-        "fetching authorship refs: {:?}",
-        &fetch_authorship
-    ));
+    debug_log(&format!("fetch command: {:?}", fetch_authorship));
 
-    let default_head_sha = repository
-        .remote_head(remote_name)
-        .ok()
-        .map_or(None, |head_refname| {
-            if let Ok(commit_obj) = repository.revparse_single(&head_refname) {
-                let commit_sha = commit_obj.id();
-                return Some(commit_sha);
-            }
-            return None;
-        });
-
-    if let Err(e) = exec_git(&fetch_authorship) {
-        // Treat as best-effort; do not fail the user command if authorship sync fails
-        debug_log(&format!("authorship fetch skipped due to error: {}", e));
-        return Err(e);
+    match exec_git(&fetch_authorship) {
+        Ok(output) => {
+            debug_log(&format!(
+                "fetch stdout: '{}'",
+                String::from_utf8_lossy(&output.stdout)
+            ));
+            debug_log(&format!(
+                "fetch stderr: '{}'",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Err(e) => {
+            debug_log(&format!("authorship fetch failed: {}", e));
+            return Ok(());
+        }
     }
 
     // After successful fetch, merge the tracking ref into refs/notes/ai
     let local_notes_ref = "refs/notes/ai";
 
-    if ref_exists(&repository, &tracking_ref) {
-        if ref_exists(&repository, local_notes_ref) {
+    if crate::git::refs::ref_exists(&repository, &tracking_ref) {
+        if crate::git::refs::ref_exists(&repository, local_notes_ref) {
             // Both exist - merge them
             debug_log(&format!(
-                "merging {} into {}",
+                "merging authorship notes from {} into {}",
                 tracking_ref, local_notes_ref
             ));
             if let Err(e) = merge_notes_from_ref(&repository, &tracking_ref) {
                 debug_log(&format!("notes merge failed: {}", e));
-                return Err(e);
+                // Don't fail on merge errors, just log and continue
             }
         } else {
             // Only tracking ref exists - copy it to local
             debug_log(&format!(
-                "initializing {} from {}",
+                "initializing {} from tracking ref {}",
                 local_notes_ref, tracking_ref
             ));
             if let Err(e) = copy_ref(&repository, &tracking_ref, local_notes_ref) {
                 debug_log(&format!("notes copy failed: {}", e));
-                return Err(e);
+                // Don't fail on copy errors, just log and continue
             }
         }
+    } else {
+        debug_log(&format!(
+            "tracking ref {} was not created after fetch",
+            tracking_ref
+        ));
     }
 
-    let after_fetch_default_head_sha =
-        repository
-            .remote_head(remote_name)
-            .ok()
-            .map_or(None, |head_refname| {
-                if let Ok(commit_obj) = repository.revparse_single(&head_refname) {
-                    let commit_sha = commit_obj.id();
-                    return Some(commit_sha);
-                }
-                return None;
-            });
-
-    // Only create a CommitRange if we have both start and end commits
-    match (default_head_sha, after_fetch_default_head_sha) {
-        (Some(start), Some(end)) => {
-            let range = CommitRange::new(repository, start, end, tracking_ref.to_string())?;
-            Ok(Some(range))
-        }
-        _ => Ok(None),
-    }
+    Ok(())
 }
 // for use with post-push hook
-pub fn push_authorship_notes(
-    repository: &Repository,
-    parsed_args: &ParsedGitInvocation,
-    remote_name: &str,
-) -> Result<(), GitAiError> {
+pub fn push_authorship_notes(repository: &Repository, remote_name: &str) -> Result<(), GitAiError> {
     // STEP 1: Fetch remote notes into tracking ref and merge before pushing
     // This ensures we don't lose notes from other branches/clones
     let tracking_ref = tracking_ref_for_remote(&remote_name);
     let fetch_refspec = format!("+refs/notes/ai:{}", tracking_ref);
 
-    let mut fetch_before_push: Vec<String> = parsed_args.global_args.clone();
+    let mut fetch_before_push: Vec<String> = repository.global_args_for_exec();
     fetch_before_push.push("-c".to_string());
     fetch_before_push.push("core.hooksPath=/dev/null".to_string());
     fetch_before_push.push("fetch".to_string());
@@ -193,7 +216,7 @@ pub fn push_authorship_notes(
     }
 
     // STEP 2: Push notes without force (requires fast-forward)
-    let mut push_authorship: Vec<String> = parsed_args.global_args.clone();
+    let mut push_authorship: Vec<String> = repository.global_args_for_exec();
     push_authorship.push("-c".to_string());
     push_authorship.push("core.hooksPath=/dev/null".to_string());
     push_authorship.push("push".to_string());
