@@ -54,13 +54,13 @@ pub fn stats_command(
         let json_str = serde_json::to_string(&stats)?;
         println!("{}", json_str);
     } else {
-        write_stats_to_terminal(&stats);
+        write_stats_to_terminal(&stats, true);
     }
 
     Ok(())
 }
 
-pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
+pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
     let mut output = String::new();
 
     // Set maximum bar width to 40 characters
@@ -78,14 +78,17 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
 
         output.push_str(&progress_bar);
         output.push('\n');
-        println!("{}", progress_bar);
+        if print {
+            println!("{}", progress_bar);
+        }
 
         // Show "(no additions)" message below the bar
         let no_additions_msg = format!("     \x1b[90m{:^40}\x1b[0m", "(no additions)");
         output.push_str(&no_additions_msg);
         output.push('\n');
-        println!("{}", no_additions_msg);
-
+        if print {
+            println!("{}", no_additions_msg);
+        }
         // No percentage line or AI stats for deletion-only commits
         return output;
     }
@@ -196,8 +199,9 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
     // Print the stats
     output.push_str(&progress_bar);
     output.push('\n');
-    println!("{}", progress_bar);
-
+    if print {
+        println!("{}", progress_bar);
+    }
     // Print percentage line with proper spacing (40 columns total)
     // "you  " (5) + 40 chars + " ai" (3) = 48 total
     // Human% left-aligned at left edge of bar, AI% right-aligned at right edge of bar
@@ -214,7 +218,9 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
         );
         output.push_str(&percentage_line);
         output.push('\n');
-        println!("{}", percentage_line);
+        if print {
+            println!("{}", percentage_line);
+        }
     } else {
         // No mixed, just show human and ai at bar edges
         let percentage_line = format!(
@@ -225,7 +231,9 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
         );
         output.push_str(&percentage_line);
         output.push('\n');
-        println!("{}", percentage_line);
+        if print {
+            println!("{}", percentage_line);
+        }
     }
 
     // Only show AI stats if there was actually AI code
@@ -248,7 +256,9 @@ pub fn write_stats_to_terminal(stats: &CommitStats) -> String {
         );
         output.push_str(&ai_acceptance_str);
         output.push('\n');
-        println!("{}", ai_acceptance_str);
+        if print {
+            println!("{}", ai_acceptance_str);
+        }
     }
     return output;
 }
@@ -480,7 +490,7 @@ mod tests {
             git_diff_added_lines: 80,
         };
 
-        let mixed_output = write_stats_to_terminal(&stats);
+        let mixed_output = write_stats_to_terminal(&stats, true);
         assert_debug_snapshot!(mixed_output);
 
         // Test with AI-only stats
@@ -494,7 +504,7 @@ mod tests {
             git_diff_added_lines: 100,
         };
 
-        let ai_only_output = write_stats_to_terminal(&ai_stats);
+        let ai_only_output = write_stats_to_terminal(&ai_stats, true);
         assert_debug_snapshot!(ai_only_output);
 
         // Test with human-only stats
@@ -508,7 +518,7 @@ mod tests {
             git_diff_added_lines: 75,
         };
 
-        let human_only_output = write_stats_to_terminal(&human_stats);
+        let human_only_output = write_stats_to_terminal(&human_stats, true);
         assert_debug_snapshot!(human_only_output);
 
         // Test with minimal human contribution (should get at least 2 blocks)
@@ -522,7 +532,7 @@ mod tests {
             git_diff_added_lines: 102,
         };
 
-        let minimal_human_output = write_stats_to_terminal(&minimal_human_stats);
+        let minimal_human_output = write_stats_to_terminal(&minimal_human_stats, true);
         assert_debug_snapshot!(minimal_human_output);
 
         // Test with deletion-only commit (no additions)
@@ -536,7 +546,7 @@ mod tests {
             git_diff_added_lines: 0,
         };
 
-        let deletion_only_output = write_stats_to_terminal(&deletion_only_stats);
+        let deletion_only_output = write_stats_to_terminal(&deletion_only_stats, true);
         assert_debug_snapshot!(deletion_only_output);
     }
 

@@ -464,7 +464,7 @@ pub fn print_range_authorship_stats(stats: &RangeAuthorshipStats) {
 
     // Use existing stats terminal output
     use crate::authorship::stats::write_stats_to_terminal;
-    write_stats_to_terminal(&stats.range_stats);
+    write_stats_to_terminal(&stats.range_stats, true);
 
     // If not all commits have authorship logs, show the breakdown
     if !all_have_authorship {
