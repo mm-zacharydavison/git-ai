@@ -118,7 +118,6 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                 let authorship_log =
                     AuthorshipLog::from_working_log_with_base_commit_and_human_author(
                         &checkpoints,
-                        &working_log,
                         commit_hash,
                         None,
                     );

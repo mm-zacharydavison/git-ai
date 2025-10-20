@@ -42,7 +42,6 @@ pub fn post_commit(
     // --- NEW: Serialize authorship log and store it in notes/ai/{commit_sha} ---
     let mut authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
         &filtered_working_log,
-        &working_log,
         &parent_sha,
         Some(&human_author),
     );

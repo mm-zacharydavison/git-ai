@@ -11,17 +11,27 @@ AuthorshipLogV3 {
                 AttestationEntry {
                     hash: "5de9ea1",
                     line_ranges: [
+                        Single(
+                            1,
+                        ),
+                    ],
+                },
+                AttestationEntry {
+                    hash: "9d9ddf6",
+                    line_ranges: [
+                        Single(
+                            2,
+                        ),
                         Range(
-                            1,
-                            1,
+                            4,
+                            5,
                         ),
                     ],
                 },
                 AttestationEntry {
                     hash: "b8613a4",
                     line_ranges: [
-                        Range(
-                            7,
+                        Single(
                             7,
                         ),
                     ],
@@ -29,8 +39,7 @@ AuthorshipLogV3 {
                 AttestationEntry {
                     hash: "e5efa95",
                     line_ranges: [
-                        Range(
-                            3,
+                        Single(
                             3,
                         ),
                     ],
@@ -69,7 +78,7 @@ AuthorshipLogV3 {
                 messages: [],
                 total_additions: 0,
                 total_deletions: 0,
-                accepted_lines: 0,
+                accepted_lines: 3,
                 overriden_lines: 0,
             },
             "b8613a4": PromptRecord {

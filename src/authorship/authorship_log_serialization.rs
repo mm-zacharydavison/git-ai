@@ -321,7 +321,11 @@ impl AuthorshipLog {
             // Group line_attributions by author_id
             let mut line_attributions_by_author: HashMap<String, Vec<LineRange>> = HashMap::new();
             for line_attr in &entry.line_attributions {
-                line_attributions_by_author.entry(line_attr.author_id.clone()).or_insert_with(Vec::new).push(LineRange::Range(line_attr.start_line, line_attr.end_line));
+                if line_attr.start_line == line_attr.end_line {
+                    line_attributions_by_author.entry(line_attr.author_id.clone()).or_insert_with(Vec::new).push(LineRange::Single(line_attr.start_line));
+                } else {
+                    line_attributions_by_author.entry(line_attr.author_id.clone()).or_insert_with(Vec::new).push(LineRange::Range(line_attr.start_line, line_attr.end_line));
+                }
             }
 
             // Add new entries for each author (session)
@@ -417,7 +421,6 @@ impl AuthorshipLog {
     /// Convert from working log checkpoints to authorship log
     pub fn from_working_log_with_base_commit_and_human_author(
         checkpoints: &[crate::authorship::working_log::Checkpoint],
-        working_log: &crate::git::repo_storage::PersistedWorkingLog,
         base_commit_sha: &str,
         human_author: Option<&str>,
     ) -> Self {

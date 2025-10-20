@@ -170,6 +170,7 @@ pub fn run(
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
                     debug_log(&format!("    Blob SHA: {}", entry.blob_sha));
+                    debug_log(&format!("    Line Attributions: {:?}", entry.line_attributions));
                     debug_log(&format!("    Attributions: {:?}", entry.attributions));
                 }
                 debug_log("");
@@ -430,6 +431,7 @@ fn get_initial_checkpoint_entries(
         .ok()
         .and_then(|h| h.target().ok())
         .and_then(|oid| repo.find_commit(oid).ok());
+    let head_commit_sha = head_commit.as_ref().map(|c| c.id().to_string());
     let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
 
     for file_path in files {
@@ -461,6 +463,7 @@ fn get_initial_checkpoint_entries(
         ai_blame_opts.no_output = true;
         ai_blame_opts.return_human_authors_as_human = true;
         ai_blame_opts.use_prompt_hashes_as_names = true;
+        ai_blame_opts.newest_commit = head_commit_sha.clone();
         let ai_blame = repo.blame(file_path, &ai_blame_opts);
         let mut prev_line_attributions = Vec::new();
         if let Ok(ai_blame) = ai_blame {
@@ -477,7 +480,6 @@ fn get_initial_checkpoint_entries(
         }
         // Convert any line attributions to character attributions
         let prev_attributions = crate::authorship::attribution_tracker::line_attributions_to_attributions(&prev_line_attributions, &previous_content, ts);
-        // let prev_attributions = Vec::new();
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
