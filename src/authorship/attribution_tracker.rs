@@ -145,8 +145,10 @@ struct MoveMapping {
     insertion_idx: usize,
     /// Similarity score (0.0 to 1.0)
     similarity: f64,
-    /// Where the deleted text appears in the insertion (offset, length)
-    alignment: (usize, usize),
+    /// Range within the deletion text that maps to the insertion (start, end) exclusive bounds
+    source_range: (usize, usize),
+    /// Range within the insertion text where the deletion text lands (start, end) exclusive bounds
+    target_range: (usize, usize),
 }
 
 /// Configuration for the attribution tracker
@@ -267,10 +269,8 @@ impl AttributionTracker {
         // Phase 4: Transform attributions through the diff
         let new_attributions = self.transform_attributions(
             &diffs,
-            old_content,
             old_attributions,
             current_author,
-            &deletions,
             &insertions,
             &move_mappings,
             ts,
@@ -338,39 +338,56 @@ impl AttributionTracker {
                 continue;
             }
 
-            let mut best_match: Option<(usize, f64, (usize, usize))> = None;
+            let mut best_match: Option<(usize, usize, f64, f64, (usize, usize), (usize, usize))> =
+                None;
 
             for (ins_idx, insertion) in insertions.iter().enumerate() {
                 if used_insertions.contains(&ins_idx) {
                     continue;
                 }
 
-                // Compute similarity
-                let similarity = self.compute_similarity(&deletion.text, &insertion.text);
-
-                if similarity >= self.config.move_threshold {
-                    // Find alignment
-                    let alignment = self.find_alignment(&deletion.text, &insertion.text);
-
-                    match best_match {
-                        Some((_, best_sim, _)) => {
-                            if similarity > best_sim {
-                                best_match = Some((ins_idx, similarity, alignment));
+                if let Some((source_range, target_range, match_len, score, similarity)) =
+                    self.evaluate_move_candidate(&deletion.text, &insertion.text)
+                {
+                    match &best_match {
+                        Some((_, best_len, best_score, _, _, _)) => {
+                            if match_len > *best_len
+                                || (match_len == *best_len && score > *best_score)
+                            {
+                                best_match =
+                                    Some((
+                                        ins_idx,
+                                        match_len,
+                                        score,
+                                        similarity,
+                                        source_range,
+                                        target_range,
+                                    ));
                             }
                         }
                         None => {
-                            best_match = Some((ins_idx, similarity, alignment));
+                            best_match = Some((
+                                ins_idx,
+                                match_len,
+                                score,
+                                similarity,
+                                source_range,
+                                target_range,
+                            ));
                         }
                     }
                 }
             }
 
-            if let Some((ins_idx, similarity, alignment)) = best_match {
+            if let Some((ins_idx, _match_len, _score, similarity, source_range, target_range)) =
+                best_match
+            {
                 move_mappings.push(MoveMapping {
                     deletion_idx: del_idx,
                     insertion_idx: ins_idx,
                     similarity,
-                    alignment,
+                    source_range,
+                    target_range,
                 });
                 used_insertions.insert(ins_idx);
             }
@@ -393,32 +410,100 @@ impl AttributionTracker {
         strsim::jaro_winkler(text1, text2)
     }
 
-    /// Find where text1 best aligns within text2
-    /// Returns (offset in text2, length of match)
-    fn find_alignment(&self, text1: &str, text2: &str) -> (usize, usize) {
-        // If exact match, check if text1 is a substring of text2
-        if let Some(pos) = text2.find(text1) {
-            return (pos, text1.len());
+    /// Evaluate whether a deletion/insertion pair represents a move and return the best overlap.
+    /// Returns (source_range, target_range, matched_length, ranking_score, similarity)
+    fn evaluate_move_candidate(
+        &self,
+        deletion_text: &str,
+        insertion_text: &str,
+    ) -> Option<((usize, usize), (usize, usize), usize, f64, f64)> {
+        if deletion_text.is_empty() || insertion_text.is_empty() {
+            return None;
         }
 
-        // If text2 contains text1, return that
-        if text2.contains(text1) {
-            return (text2.find(text1).unwrap(), text1.len());
+        let similarity = self.compute_similarity(deletion_text, insertion_text);
+        let overlap = self.find_best_overlap(deletion_text, insertion_text)?;
+        let match_len = overlap.2;
+
+        // Determine if this overlap is meaningful enough to consider as a move
+        let has_strong_overlap = match_len >= self.config.min_move_length;
+        let meets_similarity = similarity >= self.config.move_threshold;
+
+        if !has_strong_overlap && !meets_similarity {
+            return None;
         }
 
-        // For approximate matches, assume the entire insertion corresponds
-        // This is a simplification - could be improved with fuzzy matching
-        (0, text2.len())
+        let source_range = (overlap.0, overlap.0 + match_len);
+        let target_range = (overlap.1, overlap.1 + match_len);
+
+        // Ranking score prioritizes longer overlaps, with similarity as a tie-breaker
+        let score = if has_strong_overlap {
+            match_len as f64
+        } else {
+            similarity
+        };
+
+        Some((source_range, target_range, match_len, score, similarity))
+    }
+
+    /// Finds the longest overlapping region between the deletion and insertion text.
+    /// Returns (deletion_offset, insertion_offset, length) in characters.
+    fn find_best_overlap(
+        &self,
+        deletion_text: &str,
+        insertion_text: &str,
+    ) -> Option<(usize, usize, usize)> {
+        if deletion_text.is_empty() || insertion_text.is_empty() {
+            return None;
+        }
+
+        if let Some(pos) = insertion_text.find(deletion_text) {
+            return Some((0, pos, deletion_text.len()));
+        }
+
+        if let Some(pos) = deletion_text.find(insertion_text) {
+            return Some((pos, 0, insertion_text.len()));
+        }
+
+        let dmp = DiffMatchPatch::new();
+        let diffs = dmp.diff_main::<Compat>(deletion_text, insertion_text).ok()?;
+
+        let mut best = (0usize, 0usize, 0usize);
+        let mut del_cursor = 0usize;
+        let mut ins_cursor = 0usize;
+
+        for diff in diffs {
+            let len = diff.data().len();
+            match diff.op() {
+                Ops::Equal => {
+                    if len > best.2 {
+                        best = (del_cursor, ins_cursor, len);
+                    }
+                    del_cursor += len;
+                    ins_cursor += len;
+                }
+                Ops::Delete => {
+                    del_cursor += len;
+                }
+                Ops::Insert => {
+                    ins_cursor += len;
+                }
+            }
+        }
+
+        if best.2 > 0 {
+            Some(best)
+        } else {
+            None
+        }
     }
 
     /// Transform attributions through the diff
     fn transform_attributions(
         &self,
         diffs: &[Diff<char>],
-        old_content: &str,
         old_attributions: &[Attribution],
         current_author: &str,
-        deletions: &[Deletion],
         insertions: &[Insertion],
         move_mappings: &[MoveMapping],
         ts: u128,
@@ -427,12 +512,14 @@ impl AttributionTracker {
 
         // Build lookup maps for moves
         let mut deletion_to_move: HashMap<usize, &MoveMapping> = HashMap::new();
-        let mut insertion_from_move: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
+        let mut insertion_move_ranges: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
 
         for mapping in move_mappings {
             deletion_to_move.insert(mapping.deletion_idx, mapping);
-            insertion_from_move.insert(mapping.insertion_idx);
+            insertion_move_ranges
+                .entry(mapping.insertion_idx)
+                .or_default()
+                .push(mapping.target_range);
         }
 
 
@@ -479,32 +566,29 @@ impl AttributionTracker {
                     if let Some(mapping) = deletion_to_move.get(&deletion_idx) {
                         // This text was moved - transform attributions to new location
                         let insertion = &insertions[mapping.insertion_idx];
-                        let (align_offset, align_len) = mapping.alignment;
+                        let source_start = deletion_range.0 + mapping.source_range.0;
+                        let source_end = deletion_range.0 + mapping.source_range.1;
 
-                        for attr in old_attributions {
-                            if let Some((overlap_start, overlap_end)) =
-                                attr.intersection(deletion_range.0, deletion_range.1)
-                            {
-                                // Map to new location
-                                let offset_in_deletion = overlap_start - deletion_range.0;
-                                let overlap_len = overlap_end - overlap_start;
+                        if source_start < source_end {
+                            let target_start = insertion.start + mapping.target_range.0;
 
-                                // Simple mapping: assumes linear correspondence
-                                let scale = if deletions[deletion_idx].text.len() > 0 {
-                                    align_len as f64 / deletions[deletion_idx].text.len() as f64
-                                } else {
-                                    1.0
-                                };
+                            for attr in old_attributions {
+                                if let Some((overlap_start, overlap_end)) =
+                                    attr.intersection(source_start, source_end)
+                                {
+                                    let offset_in_source = overlap_start - source_start;
+                                    let new_start = target_start + offset_in_source;
+                                    let new_end = new_start + (overlap_end - overlap_start);
 
-                                let new_start = insertion.start + align_offset + (offset_in_deletion as f64 * scale) as usize;
-                                let new_len = (overlap_len as f64 * scale) as usize;
-
-                                new_attributions.push(Attribution::new(
-                                    new_start,
-                                    new_start + new_len,
-                                    attr.author_id.clone(),
-                                    attr.ts.clone(),
-                                ));
+                                    if new_start < new_end {
+                                        new_attributions.push(Attribution::new(
+                                            new_start,
+                                            new_end,
+                                            attr.author_id.clone(),
+                                            attr.ts,
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
@@ -515,8 +599,53 @@ impl AttributionTracker {
                 }
                 Ops::Insert => {
                     // Check if this insertion is from a detected move
-                    if insertion_from_move.contains(&insertion_idx) {
-                        // Already handled in Delete phase
+                    if let Some(ranges) = insertion_move_ranges.remove(&insertion_idx) {
+                        let mut covered = ranges;
+                        covered.sort_by_key(|r| r.0);
+
+                        let mut merged: Vec<(usize, usize)> = Vec::new();
+                        for (start, end) in covered {
+                            if start >= end {
+                                continue;
+                            }
+
+                            if let Some(last) = merged.last_mut() {
+                                if start <= last.1 {
+                                    last.1 = last.1.max(end);
+                                } else {
+                                    merged.push((start, end));
+                                }
+                            } else {
+                                merged.push((start, end));
+                            }
+                        }
+
+                        let mut cursor = 0usize;
+                        for (start, end) in merged {
+                            let clamped_start = start.min(len);
+                            let clamped_end = end.min(len);
+
+                            if cursor < clamped_start {
+                                new_attributions.push(Attribution::new(
+                                    new_pos + cursor,
+                                    new_pos + clamped_start,
+                                    current_author.to_string(),
+                                    ts,
+                                ));
+                            }
+
+                            cursor = cursor.max(clamped_end);
+                        }
+
+                        if cursor < len {
+                            new_attributions.push(Attribution::new(
+                                new_pos + cursor,
+                                new_pos + len,
+                                current_author.to_string(),
+                                ts,
+                            ));
+                        }
+
                         new_pos += len;
                         insertion_idx += 1;
                         continue;
@@ -1531,7 +1660,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore]
     fn test_move_with_unchanged_content_between() {
         let tracker = AttributionTracker::new();
 
@@ -2152,4 +2280,3 @@ fn main() {
         assert!(gap_ranges.contains(&(9, 10)), "Should have gap 9-10");
     }
 }
-
