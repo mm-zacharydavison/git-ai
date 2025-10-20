@@ -1,6 +1,6 @@
 ---
 source: src/authorship/rebase_authorship.rs
-assertion_line: 1803
+assertion_line: 1818
 expression: authorship_log
 ---
 AuthorshipLogV3 {

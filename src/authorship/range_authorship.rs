@@ -366,7 +366,7 @@ fn compute_file_blame(
                 (orig_line_start..=orig_line_end).any(|line_no| {
                     authorship_log
                         .get_line_attribution(file_path, line_no)
-                        .is_some_and(|(_, prompt)| prompt.is_some())
+                        .is_some_and(|(_, _, prompt)| prompt.is_some())
                 })
             }
             _ => false, // No authorship log means human-authored
