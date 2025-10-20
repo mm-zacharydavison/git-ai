@@ -1,0 +1,54 @@
+---
+title: Enterprise Deployment - Git Hooks
+description: Deploy Git AI using core.hooksPath configuration without wrapping git. Advanced enterprise deployment for organizations that prefer hook-based integration.
+keywords: git ai hooks, core.hooksPath, git hooks, enterprise deployment, git configuration, centralized hooks
+---
+
+An alternative to the git wrapper approach is to deploy Git AI using Git's `core.hooksPath` configuration. This method doesn't require wrapping the git binary but is more complex to set up correctly.
+
+## Overview
+
+Git version 2.35 (released in 2022) introduced support for configuring git hooks in a central location across all repositories on a machine. This allows you to deploy Git AI hooks globally without modifying individual repositories.
+
+**Important:** `core.hooksPath` overrides rather than extends repo-specific hooks. Each Git AI hook must be configured to invoke both:
+1. The Git AI-specific logic
+2. Any hooks in the repository's `.git/hooks` folder
+
+This ensures that repository-specific hooks (like linters, formatters, or CI triggers) continue to work alongside Git AI.
+
+## Required Hooks
+
+The following hooks must be implemented for Git AI to function correctly:
+
+- `pre-commit`
+- `post-commit`
+- `pre-push`
+- `post-checkout`
+- `post-rewrite`
+- `pre-rebase`
+- `post-rebase`
+- `post-reset`
+
+## Get Help with This Deployment Method
+
+This approach is more complex than the git wrapper method. We're still working on public documentation for hook implementation, best practices for hook chaining, and example scripts.
+
+**If you're interested in rolling out Git AI without proxying git on developer machines, [schedule a call with one of the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors) and we'll help you get started.**
+
+## Advantages and Disadvantages
+
+### Advantages
+- No git wrapper required
+- Direct git binary execution
+- Potentially simpler for some MDM deployments
+
+### Disadvantages
+- More complex setup and maintenance
+- Must handle hook chaining correctly
+- Requires careful coordination with repository hooks
+- More difficult to troubleshoot
+
+## Recommended Approach
+
+For most organizations, we recommend the [git wrapper deployment method](/enterprise-deployment-wrapper) as it's simpler, more reliable, and easier to maintain.
+

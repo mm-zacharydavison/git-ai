@@ -1,8 +1,10 @@
 use crate::authorship::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
 use crate::error::GitAiError;
+use crate::git::cli_parser::ParsedGitInvocation;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
+use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -29,6 +31,215 @@ impl<'a> Object<'a> {
         Ok(Commit {
             repo: self.repo,
             oid: String::from_utf8(output.stdout)?.trim().to_string(),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct CommitRange<'a> {
+    repo: &'a Repository,
+    pub start_oid: String,
+    pub end_oid: String,
+    pub refname: String,
+}
+
+impl<'a> CommitRange<'a> {
+    pub fn new(
+        repo: &'a Repository,
+        start_oid: String,
+        end_oid: String,
+        refname: String,
+    ) -> Result<Self, GitAiError> {
+        // Resolve start_oid and end_oid to actual commit SHAs
+        let resolved_start = repo.revparse_single(&start_oid)?.oid;
+        let resolved_end = repo.revparse_single(&end_oid)?.oid;
+
+        Ok(Self {
+            repo,
+            start_oid: resolved_start,
+            end_oid: resolved_end,
+            refname,
+        })
+    }
+
+    /// Create a new CommitRange with automatic refname inference.
+    /// If refname is None, tries to find a single ref pointing to end_oid.
+    /// If exactly one ref is found, uses that. Otherwise falls back to current HEAD.
+    pub fn new_infer_refname(
+        repo: &'a Repository,
+        start_oid: String,
+        end_oid: String,
+        refname: Option<String>,
+    ) -> Result<Self, GitAiError> {
+        // Resolve start_oid and end_oid to actual commit SHAs
+        let resolved_start = repo.revparse_single(&start_oid)?.oid;
+        let resolved_end = repo.revparse_single(&end_oid)?.oid;
+
+        let inferred_refname = match refname {
+            Some(name) => name,
+            None => {
+                // Try to find refs pointing to resolved end_oid
+                let mut args = repo.global_args_for_exec();
+                args.push("for-each-ref".to_string());
+                args.push("--points-at".to_string());
+                args.push(resolved_end.clone());
+                args.push("--format=%(refname)".to_string());
+
+                let refs = match exec_git(&args) {
+                    Ok(output) => {
+                        let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+                        let refs: Vec<String> = stdout
+                            .lines()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        refs
+                    }
+                    Err(_) => Vec::new(),
+                };
+
+                // If exactly one ref found, use it
+                if refs.len() == 1 {
+                    refs[0].clone()
+                } else {
+                    // Fall back to current HEAD
+                    match repo.head() {
+                        Ok(head_ref) => head_ref.name().unwrap_or("HEAD").to_string(),
+                        Err(_) => "HEAD".to_string(),
+                    }
+                }
+            }
+        };
+
+        Ok(Self {
+            repo,
+            start_oid: resolved_start,
+            end_oid: resolved_end,
+            refname: inferred_refname,
+        })
+    }
+
+    pub fn repo(&self) -> &'a Repository {
+        self.repo
+    }
+
+    pub fn is_valid(&self) -> Result<(), GitAiError> {
+        // Check that both commits exist
+        self.repo.find_commit(self.start_oid.clone())?;
+        self.repo.find_commit(self.end_oid.clone())?;
+
+        // Check that both commits exist on the refname
+        // Use git merge-base --is-ancestor <commit> <refname>
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.start_oid.clone());
+        args.push(self.refname.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not reachable from refname {}",
+                self.start_oid, self.refname
+            ))
+        })?;
+
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.end_oid.clone());
+        args.push(self.refname.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not reachable from refname {}",
+                self.end_oid, self.refname
+            ))
+        })?;
+
+        // Check that start is an ancestor of end (direct path between them)
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.start_oid.clone());
+        args.push(self.end_oid.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not an ancestor of {}",
+                self.start_oid, self.end_oid
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    pub fn length(&self) -> usize {
+        // Use git rev-list --count to get the number of commits between start and end
+        // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-list".to_string());
+        args.push("--count".to_string());
+        args.push(format!("{}..{}", self.start_oid, self.end_oid));
+
+        match exec_git(&args) {
+            Ok(output) => {
+                let count_str = String::from_utf8(output.stdout).unwrap_or_default();
+                count_str.trim().parse().unwrap_or(0)
+            }
+            Err(_) => 0, // If they don't share lineage or error occurs, return 0
+        }
+    }
+}
+
+impl<'a> IntoIterator for CommitRange<'a> {
+    type Item = Commit<'a>;
+    type IntoIter = CommitRangeIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // Use git rev-list to get all commits between start and end
+        // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-list".to_string());
+        args.push(format!("{}..{}", self.start_oid, self.end_oid));
+
+        let commit_oids: Vec<String> = match exec_git(&args) {
+            Ok(output) => {
+                let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+                stdout
+                    .lines()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+            Err(_) => Vec::new(), // If they don't share lineage or error occurs, return empty
+        };
+
+        CommitRangeIterator {
+            repo: self.repo,
+            commit_oids,
+            index: 0,
+        }
+    }
+}
+
+pub struct CommitRangeIterator<'a> {
+    repo: &'a Repository,
+    commit_oids: Vec<String>,
+    index: usize,
+}
+
+impl<'a> Iterator for CommitRangeIterator<'a> {
+    type Item = Commit<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.commit_oids.len() {
+            return None;
+        }
+        let oid = self.commit_oids[self.index].clone();
+        self.index += 1;
+        Some(Commit {
+            repo: self.repo,
+            oid,
         })
     }
 }
@@ -97,9 +308,46 @@ pub struct Commit<'a> {
     oid: String,
 }
 
+/// Owned version of Commit that can be sent across async boundaries
+#[derive(Clone)]
+pub struct OwnedCommit {
+    repo: Repository,
+    oid: String,
+}
+
+impl OwnedCommit {
+    pub fn id(&self) -> String {
+        self.oid.clone()
+    }
+
+    pub fn repo(&self) -> &Repository {
+        &self.repo
+    }
+
+    pub fn summary(&self) -> Result<String, GitAiError> {
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--format=%s".to_string());
+        args.push(self.oid.clone());
+
+        let output = exec_git(&args)?;
+        let summary = String::from_utf8(output.stdout)?;
+        Ok(summary.trim().to_string())
+    }
+}
+
 impl<'a> Commit<'a> {
     pub fn id(&self) -> String {
         self.oid.clone()
+    }
+
+    /// Create an owned commit with a cloned repository for async processing
+    pub fn to_owned_commit(&self) -> OwnedCommit {
+        OwnedCommit {
+            repo: self.repo.clone(),
+            oid: self.oid.clone(),
+        }
     }
 
     pub fn tree(&self) -> Result<Tree<'a>, GitAiError> {
@@ -463,6 +711,7 @@ impl<'a> Iterator for References<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Repository {
     global_args: Vec<String>,
     git_dir: PathBuf,
@@ -691,6 +940,16 @@ impl Repository {
         })
     }
 
+    pub fn remote_head(&self, remote_name: &str) -> Result<String, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("symbolic-ref".to_string());
+        args.push(format!("refs/remotes/{}/HEAD", remote_name));
+        args.push("--short".to_string());
+
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
     // Lookup a reference to one of the objects in a repository. Requires full ref name.
     #[allow(dead_code)]
     pub fn find_reference(&self, name: &str) -> Result<Reference<'_>, GitAiError> {
@@ -883,6 +1142,14 @@ impl Repository {
         }
         // Otherwise, just use the first remote
         Ok(remotes.get(0).map(|s| s.to_string()))
+    }
+
+    pub fn fetch_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
+        fetch_authorship_notes(self, remote_name)
+    }
+
+    pub fn push_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
+        push_authorship_notes(self, remote_name)
     }
 
     pub fn upstream_remote(&self) -> Result<Option<String>, GitAiError> {

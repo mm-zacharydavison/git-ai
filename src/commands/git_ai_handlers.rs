@@ -1,3 +1,4 @@
+use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::{AgentId, CheckpointKind};
 use crate::commands;
@@ -8,6 +9,7 @@ use crate::commands::checkpoint_agent::agent_preset::{
 use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
+use crate::git::repository::CommitRange;
 use crate::utils::Timer;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -52,7 +54,6 @@ pub fn handle_git_ai(args: &[String]) {
                 std::process::exit(1);
             }
         }
-
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
@@ -333,9 +334,18 @@ fn handle_ai_blame(args: &[String]) {
 }
 
 fn handle_stats(args: &[String]) {
+    // Find the git repository
+    let repo = match find_repository(&Vec::<String>::new()) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            std::process::exit(1);
+        }
+    };
     // Parse stats-specific arguments
     let mut json_output = false;
     let mut commit_sha = None;
+    let mut commit_range: Option<CommitRange> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -345,9 +355,35 @@ fn handle_stats(args: &[String]) {
                 i += 1;
             }
             _ => {
-                // First non-flag argument is treated as commit SHA
+                // First non-flag argument is treated as commit SHA or range
                 if commit_sha.is_none() {
-                    commit_sha = Some(args[i].clone());
+                    let arg = &args[i];
+                    // Check if this is a commit range (contains "..")
+                    if arg.contains("..") {
+                        let parts: Vec<&str> = arg.split("..").collect();
+                        if parts.len() == 2 {
+                            match CommitRange::new_infer_refname(
+                                &repo,
+                                parts[0].to_string(),
+                                parts[1].to_string(),
+                                // @todo this is probably fine, but we might want to give users an option to override from this command.
+                                None,
+                            ) {
+                                Ok(range) => {
+                                    commit_range = Some(range);
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to create commit range: {}", e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        } else {
+                            eprintln!("Invalid commit range format. Expected: <commit>..<commit>");
+                            std::process::exit(1);
+                        }
+                    } else {
+                        commit_sha = Some(arg.clone());
+                    }
                     i += 1;
                 } else {
                     eprintln!("Unknown stats argument: {}", args[i]);
@@ -357,14 +393,24 @@ fn handle_stats(args: &[String]) {
         }
     }
 
-    // Find the git repository
-    let repo = match find_repository(&Vec::<String>::new()) {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
+    // Handle commit range if detected
+    if let Some(range) = commit_range {
+        match range_authorship::range_authorship(range, true) {
+            Ok(stats) => {
+                if json_output {
+                    let json_str = serde_json::to_string(&stats).unwrap();
+                    println!("{}", json_str);
+                } else {
+                    range_authorship::print_range_authorship_stats(&stats);
+                }
+            }
+            Err(e) => {
+                eprintln!("Range authorship failed: {}", e);
+                std::process::exit(1);
+            }
         }
-    };
+        return;
+    }
 
     if let Err(e) = stats_command(&repo, commit_sha.as_deref(), json_output) {
         match e {

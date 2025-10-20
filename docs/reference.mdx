@@ -1,0 +1,124 @@
+---
+title: CLI Reference
+description: Complete reference for all Git AI commands including blame, stats, checkpoint, and install-hooks. Learn the full command-line interface for tracking AI code authorship.
+keywords: git ai commands, git ai cli, git-ai blame, git-ai stats, git-ai checkpoint, command reference, git wrapper
+---
+
+When you invoke the Git AI binary as `git` it will proxy the arguments to git and pipe the output and exist code back to you. 
+
+To run Git AI specific commands you invoke the same binary as `git-ai`. The symlinks and $PATH export the install scripts setup sets all this up on your machine. 
+
+```bash
+git-ai <command> [options]
+```
+
+## User Commands
+
+##### `blame`
+
+Enhanced version of `git blame` that shows AI authorship attribution alongside traditional git blame.
+
+```bash
+git-ai blame <file>
+```
+
+**Arguments:**
+- `<file>` - Path to the file to blame (required)
+
+**Options:**
+Mostly API Compatible, supports same options as [`git blame`](https://git-scm.com/docs/git-blame). 
+
+
+##### `stats`
+
+Show AI authorship statistics for a commit. Displays how much code was written by humans vs AI.
+
+```bash
+# Show stats for current HEAD
+git-ai stats
+
+# Show stats for specific commit
+git-ai stats <commit-sha>
+
+# Output in JSON format
+git-ai stats --json
+git-ai stats <commit-sha> --json
+```
+
+**Options:**
+- `<commit-sha>` - Optional commit SHA (defaults to HEAD)
+- `--json` - Output statistics in JSON format
+
+
+##### `install-hooks`
+
+Automatically configure Claude Code, Cursor and GitHub Copilot to send authorship information to the `git-ai` binary 
+
+```bash
+git-ai install-hooks
+```
+
+
+## Plumbing Commands (for AI Agents)
+
+These commands are primarily used by AI agents (Claude Code, Cursor, GitHub Copilot) for authorship tracking. End users typically don't need to use these directly.
+
+##### `checkpoint`
+
+Checkpoint working changes and attribute them to an AI agent or human author.
+
+```bash
+# Basic checkpoint with preset
+git-ai checkpoint <preset>
+
+# Show the current working log
+git-ai checkpoint --show-working-log
+
+# Reset the working log
+git-ai checkpoint --reset
+```
+
+**Presets:**
+- `claude` - Claude AI integration
+- `cursor` - Cursor editor integration
+- `github-copilot` - GitHub Copilot integration
+- `mock_ai` - Mock AI for testing
+
+**Options:**
+- `--show-working-log` - Display current working log without making changes
+- `--reset` - Clear the working log
+
+##### `squash-authorship`
+
+Generate authorship information from squashed commits. Used when commits are squashed to reconstruct authorship metadata.
+
+```bash
+git-ai squash-authorship <branch> <new-sha> <old-sha>
+git-ai squash-authorship <branch> <new-sha> <old-sha> --dry-run
+```
+
+**Arguments:**
+- `<branch>` - Branch name (required)
+- `<new-sha>` - New commit SHA after squash (required)
+- `<old-sha>` - Old commit SHA before squash (required)
+
+**Options:**
+- `--dry-run` - Show what would be done without making changes
+
+##### `git-path`
+
+Print the path to the underlying git executable. Used by integrations to locate the git binary.
+
+```bash
+git-ai git-path
+```
+
+## Version
+
+Show the version of git-ai:
+
+```bash
+git-ai version
+git-ai --version
+git-ai -v
+```

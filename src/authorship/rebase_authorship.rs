@@ -3,6 +3,7 @@ use crate::authorship::post_commit;
 use crate::authorship::working_log::CheckpointKind;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
+use crate::git::authorship_log_cache::AuthorshipLogCache;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::{Commit, Repository};
 use crate::git::rewrite_log::RewriteLogEvent;
@@ -157,6 +158,9 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         head_sha, // HEAD of old shas history
     )?;
 
+    // Create a cache for authorship logs to avoid repeated lookups in the reconstruction process
+    let mut authorship_log_cache = AuthorshipLogCache::new();
+
     // Step 5: Now get the diff between between new_commit and new_commit_parent.
     // We want just the changes between the two commits.
     // We will iterate each file / hunk and then, we will run @blame logic in the context of
@@ -168,6 +172,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         &new_commit,
         &new_commit_parent,
         &hanging_commit_sha,
+        &mut authorship_log_cache,
     )?;
 
     // Set the base_commit_sha to the new commit
@@ -264,6 +269,7 @@ pub fn prepare_working_log_after_squash(
         &temp_commit_obj,
         &origin_base_commit,
         &hanging_commit_sha,
+        &mut AuthorshipLogCache::new(),
     )?;
 
     // Step 8: Clean up temporary commits
@@ -681,8 +687,13 @@ fn reconstruct_authorship_for_commit(
     )?;
 
     // Reconstruct authorship by running blame in hanging commit context
-    let mut reconstructed_log =
-        reconstruct_authorship_from_diff(repo, &new_commit, &new_parent, &hanging_commit_sha)?;
+    let mut reconstructed_log = reconstruct_authorship_from_diff(
+        repo,
+        &new_commit,
+        &new_parent,
+        &hanging_commit_sha,
+        &mut AuthorshipLogCache::new(),
+    )?;
 
     // Set the base_commit_sha to the new commit
     reconstructed_log.metadata.base_commit_sha = new_sha.to_string();
@@ -857,6 +868,7 @@ fn reconstruct_authorship_from_diff(
     new_commit: &Commit,
     new_commit_parent: &Commit,
     hanging_commit_sha: &str,
+    authorship_log_cache: &mut AuthorshipLogCache,
 ) -> Result<AuthorshipLog, GitAiError> {
     use std::collections::{HashMap, HashSet};
 
@@ -982,6 +994,7 @@ fn reconstruct_authorship_from_diff(
                                 &file_path_str,
                                 h_line_no,
                                 hanging_commit_sha,
+                                authorship_log_cache,
                             );
 
                             // Handle blame errors gracefully (e.g., file doesn't exist in hanging commit)
@@ -1156,6 +1169,7 @@ fn run_blame_in_context(
     file_path: &str,
     line_number: u32,
     hanging_commit_sha: &str,
+    authorship_log_cache: &mut AuthorshipLogCache,
 ) -> Result<
     Option<(
         crate::authorship::authorship_log::Author,
@@ -1187,8 +1201,8 @@ fn run_blame_in_context(
 
         let commit_sha = &hunk.commit_sha;
 
-        // Look up the AI authorship log for this commit
-        let authorship_log = match get_reference_as_authorship_log_v3(repo, commit_sha) {
+        // Look up the AI authorship log for this commit using the cache
+        let authorship_log = match authorship_log_cache.get_or_fetch(repo, commit_sha) {
             Ok(log) => log,
             Err(_) => {
                 // No AI authorship data for this commit, fall back to git author
@@ -1262,7 +1276,7 @@ fn find_common_origin_base_from_head(
 /// # Returns
 /// A vector of commit SHAs in chronological order (oldest first) representing
 /// the path from just after origin_base to head_sha
-fn build_commit_path_to_base(
+pub fn build_commit_path_to_base(
     repo: &Repository,
     head_sha: &str,
     origin_base: &str,
@@ -1403,6 +1417,7 @@ pub fn reconstruct_working_log_after_reset(
         &temp_commit_obj,
         &target_commit_obj,
         &hanging_commit_sha.to_string(),
+        &mut AuthorshipLogCache::new(),
     )?;
 
     debug_log(&format!(
