@@ -993,6 +993,45 @@ impl Repository {
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
+    pub fn commit_range_on_branch(&self, branch_refname: &str) -> Result<CommitRange, GitAiError> {
+        let mut log_args = self.global_args_for_exec();
+        log_args.push("log".to_string());
+        log_args.push("--format=%H".to_string()); // Just the commit hash
+        log_args.push("--reverse".to_string()); // Oldest first
+        log_args.push(branch_refname.to_string());
+
+        let log_output = exec_git(&log_args).map_err(|e| {
+            GitAiError::Generic(format!(
+                "Failed to get commit log for {}: {:?}",
+                branch_refname, e
+            ))
+        })?;
+
+        let log_str = String::from_utf8(log_output.stdout)
+            .map_err(|e| GitAiError::Generic(format!("Failed to parse log output: {:?}", e)))?;
+
+        let commits: Vec<&str> = log_str.lines().collect();
+
+        if commits.is_empty() {
+            return Err(GitAiError::Generic(format!(
+                "No commits found on branch {}",
+                branch_refname
+            )));
+        }
+
+        // First commit is the oldest (beginning of branch)
+        let first_commit = commits.first().unwrap().to_string();
+        // Last commit is the newest (tip of branch)
+        let last_commit = commits.last().unwrap().to_string();
+
+        Ok(CommitRange::new(
+            self,
+            first_commit,
+            last_commit,
+            branch_refname.to_string(),
+        )?)
+    }
+
     // Create new commit in the repository If the update_ref is not None, name of the reference that will be updated to point to this commit. If the reference is not direct, it will be resolved to a direct reference. Use “HEAD” to update the HEAD of the current branch and make it point to this commit. If the reference doesn’t exist yet, it will be created. If it does exist, the first parent must be the tip of this branch.
     pub fn commit(
         &self,
