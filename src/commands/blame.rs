@@ -540,6 +540,8 @@ fn overlay_ai_authorship(
 
     // Group hunks by commit SHA to avoid repeated lookups
     let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLog>> = HashMap::new();
+    // Cache for foreign prompts to avoid repeated grepping
+    let mut foreign_prompts_cache: HashMap<String, Option<PromptRecord>> = HashMap::new();
 
     for hunk in blame_hunks {
         // Check if we've already looked up this commit's authorship
@@ -565,7 +567,7 @@ fn overlay_ai_authorship(
                 let orig_line_num = hunk.orig_range.0 + i;
 
                 if let Some((author, prompt_hash, prompt)) =
-                    authorship_log.get_line_attribution(file_path, orig_line_num)
+                    authorship_log.get_line_attribution(repo, file_path, orig_line_num, &mut foreign_prompts_cache)
                 {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
                     if let Some(prompt_record) = prompt {

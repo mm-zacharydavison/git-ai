@@ -233,6 +233,8 @@ fn calculate_range_stats_direct(
     end_sha: &str,
     commit_authorship: &[CommitAuthorship],
 ) -> Result<CommitStats, GitAiError> {
+    // Cache for foreign prompts to avoid repeated grepping
+    let mut foreign_prompts_cache: HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>> = HashMap::new();
     // Get the diff using git diff to ensure consistency with git's view
     let mut args = repo.global_args_for_exec();
     args.push("diff".to_string());
@@ -278,8 +280,8 @@ fn calculate_range_stats_direct(
 
     // Build blame cache for each file
     let mut blame_cache: HashMap<String, FileBlame> = HashMap::new();
-    for (i, file_path) in added_lines_by_file.keys().enumerate() {
-        let file_blame = compute_file_blame(repo, file_path, end_sha, &auth_logs)?;
+    for file_path in added_lines_by_file.keys() {
+        let file_blame = compute_file_blame(repo, file_path, end_sha, &auth_logs, &mut foreign_prompts_cache)?;
 
         blame_cache.insert(file_path.clone(), file_blame);
     }
@@ -340,6 +342,7 @@ fn compute_file_blame(
         String,
         Option<crate::authorship::authorship_log_serialization::AuthorshipLog>,
     >,
+    foreign_prompts_cache: &mut HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>>,
 ) -> Result<FileBlame, GitAiError> {
     use crate::commands::blame::GitAiBlameOptions;
 
@@ -365,7 +368,7 @@ fn compute_file_blame(
                 // Check if at least one line in the hunk is AI-authored
                 (orig_line_start..=orig_line_end).any(|line_no| {
                     authorship_log
-                        .get_line_attribution(file_path, line_no)
+                        .get_line_attribution(repo, file_path, line_no, foreign_prompts_cache)
                         .is_some_and(|(_, _, prompt)| prompt.is_some())
                 })
             }

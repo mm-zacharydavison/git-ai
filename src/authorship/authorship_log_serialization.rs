@@ -1,4 +1,5 @@
 use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
+use crate::git::repository::Repository;
 use crate::config;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -586,9 +587,11 @@ impl AuthorshipLog {
     /// Lookup the author and optional prompt for a given file and line
     pub fn get_line_attribution(
         &self,
+        repo: &Repository,
         file: &str,
         line: u32,
-    ) -> Option<(Author, Option<String>, Option<&PromptRecord>)> {
+        foreign_prompts_cache: &mut HashMap<String, Option<PromptRecord>>,
+    ) -> Option<(Author, Option<String>, Option<PromptRecord>)> {
         // Find the file attestation
         let file_attestation = self.attestations.iter().find(|f| f.file_path == file)?;
 
@@ -606,7 +609,35 @@ impl AuthorshipLog {
                     };
 
                     // Return author and prompt info
-                    return Some((author, Some(entry.hash.clone()), Some(prompt_record)));
+                    return Some((author, Some(entry.hash.clone()), Some(prompt_record.clone())));
+                } else {
+                    // Check cache first before grepping
+                    let prompt_record = if let Some(cached_result) = foreign_prompts_cache.get(&entry.hash) {
+                        cached_result.clone()
+                    } else {
+                        // Try to find prompt record using git grep
+                        let shas = crate::git::refs::grep_ai_notes(repo, &format!("\"{}\"", &entry.hash)).unwrap_or_default();
+                        let result = if let Some(latest_sha) = shas.first() {
+                            if let Some(authorship_log) = crate::git::refs::get_authorship(repo, latest_sha) {
+                                authorship_log.metadata.prompts.get(&entry.hash).cloned()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        // Cache the result (even if None) to avoid repeated grepping
+                        foreign_prompts_cache.insert(entry.hash.clone(), result.clone());
+                        result
+                    };
+                    
+                    if let Some(prompt_record) = prompt_record {
+                        let author = Author {
+                            username: prompt_record.agent_id.tool.clone(),
+                            email: String::new(), // AI agents don't have email
+                        };
+                        return Some((author, Some(entry.hash.clone()), Some(prompt_record)));
+                    }
                 }
             }
         }
