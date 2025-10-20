@@ -1258,7 +1258,7 @@ fn find_common_origin_base_from_head(
 /// # Returns
 /// A vector of commit SHAs in chronological order (oldest first) representing
 /// the path from just after origin_base to head_sha
-fn build_commit_path_to_base(
+pub fn build_commit_path_to_base(
     repo: &Repository,
     head_sha: &str,
     origin_base: &str,

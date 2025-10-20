@@ -4,7 +4,7 @@ use crate::error::GitAiError;
 use crate::git::cli_parser::ParsedGitInvocation;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
-use crate::git::sync_authorship::fetch_authorship_notes;
+use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -1144,12 +1144,12 @@ impl Repository {
         Ok(remotes.get(0).map(|s| s.to_string()))
     }
 
-    pub fn fetch_authorship<'a>(
-        &'a self,
-        parsed_args: &ParsedGitInvocation,
-        remote_name: &str,
-    ) -> Result<Option<CommitRange<'a>>, GitAiError> {
-        fetch_authorship_notes(self, parsed_args, remote_name)
+    pub fn fetch_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
+        fetch_authorship_notes(self, remote_name)
+    }
+
+    pub fn push_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
+        push_authorship_notes(self, remote_name)
     }
 
     pub fn upstream_remote(&self) -> Result<Option<String>, GitAiError> {

@@ -1,9 +1,6 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
-use crate::git::find_repository;
-use crate::git::refs::{copy_ref, merge_notes_from_ref, ref_exists, tracking_ref_for_remote};
-use crate::git::repository::{Repository, exec_git};
-use crate::git::sync_authorship::{fetch_authorship_notes, fetch_remote_from_args};
-use crate::utils::debug_log;
+use crate::git::repository::Repository;
+use crate::git::sync_authorship::fetch_remote_from_args;
 
 pub fn fetch_pull_post_command_hook(
     repository: &Repository,
@@ -15,5 +12,5 @@ pub fn fetch_pull_post_command_hook(
     }
 
     let remote = fetch_remote_from_args(repository, parsed_args).ok();
-    let _ = repository.fetch_authorship(parsed_args, remote.unwrap().as_str());
+    let _ = repository.fetch_authorship(remote.unwrap().as_str());
 }

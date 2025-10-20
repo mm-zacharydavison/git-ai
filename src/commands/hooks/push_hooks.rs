@@ -1,8 +1,5 @@
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
-use crate::git::refs::{
-    AI_AUTHORSHIP_PUSH_REFSPEC, copy_ref, merge_notes_from_ref, ref_exists, tracking_ref_for_remote,
-};
-use crate::git::repository::{Repository, exec_git};
+use crate::git::repository::Repository;
 use crate::git::sync_authorship::push_authorship_notes;
 use crate::utils::debug_log;
 
@@ -48,7 +45,7 @@ pub fn push_post_command_hook(
         .or_else(|| repository.get_default_remote().ok().flatten());
 
     if let Some(remote) = remote {
-        _ = push_authorship_notes(repository, parsed_args, remote.as_str());
+        _ = push_authorship_notes(repository, remote.as_str());
     } else {
         // No remotes configured; skip silently
         debug_log("no remotes found for authorship push; skipping");
