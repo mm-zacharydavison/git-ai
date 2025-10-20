@@ -577,9 +577,10 @@ fn make_entry_for_file(
         author_id,
         ts,
     )?;
-    let filtered_attributions = crate::authorship::attribution_tracker::discard_attributions_for_author(&new_attributions, &CheckpointKind::Human.to_str());
-    let line_attributions = crate::authorship::attribution_tracker::attributions_to_line_attributions(&filtered_attributions, content);
-    Ok(WorkingLogEntry::new(file_path.to_string(), blob_sha.to_string(), filtered_attributions, line_attributions))
+    // TODO Consider discarding any "uncontentious" attributions for the human author. Any human attributions that do not share a line with any other author's attributions can be discarded.
+    // let filtered_attributions = crate::authorship::attribution_tracker::discard_uncontentious_attributions_for_author(&new_attributions, &CheckpointKind::Human.to_str());
+    let line_attributions = crate::authorship::attribution_tracker::attributions_to_line_attributions(&new_attributions, content);
+    Ok(WorkingLogEntry::new(file_path.to_string(), blob_sha.to_string(), new_attributions, line_attributions))
 }
 
 /// Compute line statistics by diffing files against their previous versions

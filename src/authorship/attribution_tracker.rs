@@ -657,27 +657,6 @@ impl LineBoundaries {
     }
 }
 
-/// Remove all attributions for a given author ID from a vector of attributions.
-///
-/// # Arguments
-/// * `attributions` - The attributions to filter
-/// * `author_id` - The author ID to remove
-///
-/// # Returns
-/// A new vector with all attributions for the given author removed
-pub fn discard_attributions_for_author(
-    attributions: &Vec<Attribution>,
-    author_id: &str,
-) -> Vec<Attribution> {
-    // TODO make sure that we only discard attributions
-    // attributions
-    //     .iter()
-    //     .filter(|attr| attr.author_id != author_id)
-    //     .cloned()
-    //     .collect()
-    attributions.clone()
-}
-
 /// Convert line-based attributions to character-based attributions.
 ///
 /// # Arguments
@@ -1220,105 +1199,6 @@ fn foo() {
             assert!(attr.start >= 51 || attr.end <= 47,
                 "C should not have attribution in the newline range 47-51, but has {:?}", attr);
         }
-    }
-
-    // ========== Discard Attributions Tests ==========
-
-    #[test]
-    fn test_discard_attributions_removes_all_for_author() {
-        let attributions = vec![
-            Attribution::new(0, 10, "Alice".to_string(), TEST_TS),
-            Attribution::new(10, 20, "Bob".to_string(), TEST_TS),
-            Attribution::new(20, 30, "Alice".to_string(), TEST_TS),
-            Attribution::new(30, 40, "Charlie".to_string(), TEST_TS),
-        ];
-
-        let result = discard_attributions_for_author(&attributions, "Alice");
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].author_id, "Bob");
-        assert_eq!(result[1].author_id, "Charlie");
-    }
-
-    #[test]
-    fn test_discard_attributions_author_not_present() {
-        let attributions = vec![
-            Attribution::new(0, 10, "Alice".to_string(), TEST_TS),
-            Attribution::new(10, 20, "Bob".to_string(), TEST_TS),
-        ];
-
-        let result = discard_attributions_for_author(&attributions, "Charlie");
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].author_id, "Alice");
-        assert_eq!(result[1].author_id, "Bob");
-    }
-
-    #[test]
-    fn test_discard_attributions_empty_input() {
-        let attributions = vec![];
-        let result = discard_attributions_for_author(&attributions, "Alice");
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
-    fn test_discard_attributions_all_same_author() {
-        let attributions = vec![
-            Attribution::new(0, 10, "Alice".to_string(), TEST_TS),
-            Attribution::new(10, 20, "Alice".to_string(), TEST_TS),
-            Attribution::new(20, 30, "Alice".to_string(), TEST_TS),
-        ];
-
-        let result = discard_attributions_for_author(&attributions, "Alice");
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
-    fn test_discard_attributions_preserves_ranges() {
-        let attributions = vec![
-            Attribution::new(0, 15, "Alice".to_string(), TEST_TS),
-            Attribution::new(15, 42, "Bob".to_string(), TEST_TS),
-            Attribution::new(42, 100, "Alice".to_string(), TEST_TS),
-        ];
-
-        let result = discard_attributions_for_author(&attributions, "Alice");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].start, 15);
-        assert_eq!(result[0].end, 42);
-        assert_eq!(result[0].author_id, "Bob");
-    }
-
-    #[test]
-    fn test_discard_attributions_case_sensitive() {
-        let attributions = vec![
-            Attribution::new(0, 10, "Alice".to_string(), TEST_TS),
-            Attribution::new(10, 20, "alice".to_string(), TEST_TS),
-            Attribution::new(20, 30, "ALICE".to_string(), TEST_TS),
-        ];
-
-        let result = discard_attributions_for_author(&attributions, "Alice");
-
-        // Should only remove exact match "Alice", not "alice" or "ALICE"
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].author_id, "alice");
-        assert_eq!(result[1].author_id, "ALICE");
-    }
-
-    #[test]
-    fn test_discard_attributions_overlapping_preserved() {
-        let attributions = vec![
-            Attribution::new(0, 20, "Alice".to_string(), TEST_TS),
-            Attribution::new(5, 15, "Bob".to_string(), TEST_TS),
-            Attribution::new(10, 30, "Alice".to_string(), TEST_TS),
-        ];
-
-        let result = discard_attributions_for_author(&attributions, "Alice");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].start, 5);
-        assert_eq!(result[0].end, 15);
-        assert_eq!(result[0].author_id, "Bob");
     }
 
     // ========== Line to Character Attribution Conversion Tests ==========
@@ -1970,21 +1850,18 @@ fn main() {
         let mut attributions_v2 = tracker
             .update_attributions(old_content, content_v2, &Vec::new(), &CheckpointKind::AiAgent.to_str(), TEST_TS)
             .unwrap();
-        attributions_v2 = discard_attributions_for_author(&attributions_v2, &CheckpointKind::Human.to_str());
 
         // Step 2: Human adds "Human Line 1"
         let content_v3 = "Base line\nAI Line 1\nHuman Line 1";
         let mut attributions_v3 = tracker
             .update_attributions(content_v2, content_v3, &attributions_v2, &CheckpointKind::Human.to_str(), TEST_TS)
             .unwrap();
-        attributions_v3 = discard_attributions_for_author(&attributions_v3, &CheckpointKind::Human.to_str());
 
         // Step 3: AI adds "AI Line 2"
         let content_v4 = "Base line\nAI Line 1\nHuman Line 1\nAI Line 2";
         let mut attributions_v4 = tracker
             .update_attributions(content_v3, content_v4, &attributions_v3, &CheckpointKind::AiAgent.to_str(), TEST_TS)
             .unwrap();
-        attributions_v4 = discard_attributions_for_author(&attributions_v4, &CheckpointKind::Human.to_str());
 
         // Convert to line attributions
         let line_attrs = attributions_to_line_attributions(&attributions_v4, content_v4);
@@ -2028,7 +1905,6 @@ fn main() {
             .update_attributions(v1_content, v2_content, &v1_attributions, &CheckpointKind::AiAgent.to_str(), TEST_TS)
             .unwrap();
 
-        v2_attributions = discard_attributions_for_author(&v2_attributions, &CheckpointKind::Human.to_str());
 
         let v2_line_attrs = attributions_to_line_attributions(&v2_attributions, v2_content);
 
@@ -2076,7 +1952,6 @@ fn main() {
             .update_attributions("", v1_content, &Vec::new(), &CheckpointKind::Human.to_str(), TEST_TS)
             .unwrap();
 
-        v1_attributions = discard_attributions_for_author(&v1_attributions, &CheckpointKind::Human.to_str());
 
         // Step 2: Replaces the two lines at the end
         let v2_content = "Line 1 from human\nLine 2 from human\nLine 3 from human\nLine 4 from AI\nLine 5 from AI";
@@ -2084,7 +1959,6 @@ fn main() {
             .update_attributions(v1_content, v2_content, &v1_attributions, &CheckpointKind::AiAgent.to_str(), TEST_TS+1)
             .unwrap();
 
-        v2_attributions = discard_attributions_for_author(&v2_attributions, &CheckpointKind::Human.to_str());
 
         let v2_line_attrs = attributions_to_line_attributions(&v2_attributions, v2_content);
 
@@ -2111,15 +1985,12 @@ fn main() {
             .update_attributions("", v1_content, &Vec::new(), &CheckpointKind::Human.to_str(), TEST_TS)
             .unwrap();
 
-        v1_attributions = discard_attributions_for_author(&v1_attributions, &CheckpointKind::Human.to_str());
 
         // Step 2: Replaces the two lines at the end
         let v2_content = "Line 1\nLine 2\nLine 3\nLine 4";
         let mut v2_attributions = tracker
             .update_attributions(v1_content, v2_content, &v1_attributions, &CheckpointKind::AiAgent.to_str(), TEST_TS+1)
             .unwrap();
-
-        v2_attributions = discard_attributions_for_author(&v2_attributions, &CheckpointKind::Human.to_str());
 
         let v2_line_attrs = attributions_to_line_attributions(&v2_attributions, v2_content);
 
