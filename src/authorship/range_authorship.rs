@@ -12,17 +12,17 @@ use crate::utils::debug_log;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RangeAuthorshipStats {
-    authorship_stats: AuthorshipStats,
-    range_stats: CommitStats,
+    pub authorship_stats: AuthorshipStats,
+    pub range_stats: CommitStats,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorshipStats {
-    total_commits: usize,
-    commits_with_authorship: usize,
-    authors_commiting_authorship: HashSet<String>,
-    authors_not_commiting_authorship: HashSet<String>,
-    commits_without_authorship: Vec<String>,
-    commits_without_authorship_with_authors: Vec<(String, String)>, // (sha, git_author)
+    pub total_commits: usize,
+    pub commits_with_authorship: usize,
+    pub authors_commiting_authorship: HashSet<String>,
+    pub authors_not_commiting_authorship: HashSet<String>,
+    pub commits_without_authorship: Vec<String>,
+    pub commits_without_authorship_with_authors: Vec<(String, String)>, // (sha, git_author)
 }
 
 pub fn range_authorship(
