@@ -269,7 +269,7 @@ pub fn run(
         if files_with_entries == total_uncommitted_files {
             // All files with changes got entries
             eprintln!(
-                "{}{} changed {} file(s) that have changed since the last {}",
+                "{} {} changed {} file(s) that have changed since the last {}",
                 kind.to_str(),
                 log_author,
                 files_with_entries,
@@ -278,7 +278,7 @@ pub fn run(
         } else {
             // Some files were already checkpointed
             eprintln!(
-                "{}{} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
+                "{} {} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
                 kind.to_str(),
                 log_author,
                 files_with_entries,
@@ -458,6 +458,11 @@ fn get_initial_checkpoint_entries(
         // Current content from filesystem
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
+        if current_content == previous_content {
+            // No changes, no need to add entries
+            continue;
+        }
+
         // Get the previous line attributions from ai blame
         let mut ai_blame_opts = GitAiBlameOptions::default();
         ai_blame_opts.no_output = true;
@@ -545,6 +550,11 @@ fn get_subsequent_checkpoint_entries(
         } else {
             (String::new(), Vec::new()) // No previous version, treat as empty
         };
+
+        if current_content == previous_content {
+            // No changes, no need to add entries
+            continue;
+        }
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
