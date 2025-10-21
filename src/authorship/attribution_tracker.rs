@@ -918,6 +918,91 @@ mod tests {
     // Test timestamp constant for consistent testing
     const TEST_TS: u128 = 1234567890000;
 
+    fn module_move_old_content() -> &'static str {
+        r#"module.exports =
+  ({ enabled = true, logLevel, openAnalyzer, analyzerMode } = {}) =>
+  (nextConfig = {}) => {
+    if (!enabled) {
+      return nextConfig
+    }
+    if (process.env.TURBOPACK) {
+      console.warn(
+        'The Next Bundle Analyzer is not compatible with Turbopack builds yet, no report will be generated.\n\n' +
+          'To run this analysis pass the `--webpack` flag to `next build`'
+      )
+      return nextConfig
+    }
+
+    const extension = analyzerMode === 'json' ? '.json' : '.html'
+
+    return Object.assign({}, nextConfig, {
+      webpack(config, options) {
+        const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer')
+        config.plugins.push(
+          new BundleAnalyzerPlugin({
+            analyzerMode: analyzerMode || 'static',
+            logLevel,
+            openAnalyzer,
+            reportFilename: !options.nextRuntime
+              ? `./analyze/client${extension}`
+              : `../${options.nextRuntime === 'nodejs' ? '../' : ''}analyze/${
+                  options.nextRuntime
+                }${extension}`,
+          })
+        )
+
+        if (typeof nextConfig.webpack === 'function') {
+          return nextConfig.webpack(config, options)
+        }
+        return config
+      },
+    })
+  }"#
+    }
+
+    fn module_move_new_content() -> &'static str {
+        r#"module.exports =
+  ({ enabled = true, logLevel, openAnalyzer, analyzerMode } = {}) =>
+  (nextConfig = {}) => {
+    if (!enabled) {
+      return nextConfig
+    }
+    if (process.env.TURBOPACK) {
+      console.warn(
+        'The Next Bundle Analyzer is not compatible with Turbopack builds yet, no report will be generated.\n\n' +
+          'To run this analysis pass the `--webpack` flag to `next build`'
+      )
+      return nextConfig
+    }
+
+    const extension = analyzerMode === 'json' ? '.json' : '.html'
+
+    return Object.assign({}, nextConfig, {
+      webpack(config, options) {
+        const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer')
+        config.plugins.push(
+          new BundleAnalyzerPlugin({
+            analyzerMode: analyzerMode || 'static',
+            logLevel,
+            openAnalyzer,
+            reportFilename: !options.nextRuntime
+              ? `./analyze/client${extension}`
+              : `../${options.nextRuntime === 'nodejs' ? '../' : ''}analyze/${
+                  options.nextRuntime
+                }${extension}`,
+          })
+        )
+
+
+        return config
+      },
+    })
+  }
+  if (typeof nextConfig.webpack === 'function') {
+    return nextConfig.webpack(config, options)
+  }"#
+    }
+
     #[test]
     fn test_simple_insertion() {
         let tracker = AttributionTracker::new();
@@ -1664,89 +1749,12 @@ fn main() {
         let tracker = AttributionTracker::new();
 
         // Exact example from the bug report
-        let old_content = r#"module.exports =
-  ({ enabled = true, logLevel, openAnalyzer, analyzerMode } = {}) =>
-  (nextConfig = {}) => {
-    if (!enabled) {
-      return nextConfig
-    }
-    if (process.env.TURBOPACK) {
-      console.warn(
-        'The Next Bundle Analyzer is not compatible with Turbopack builds yet, no report will be generated.\n\n' +
-          'To run this analysis pass the `--webpack` flag to `next build`'
-      )
-      return nextConfig
-    }
-
-    const extension = analyzerMode === 'json' ? '.json' : '.html'
-
-    return Object.assign({}, nextConfig, {
-      webpack(config, options) {
-        const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer')
-        config.plugins.push(
-          new BundleAnalyzerPlugin({
-            analyzerMode: analyzerMode || 'static',
-            logLevel,
-            openAnalyzer,
-            reportFilename: !options.nextRuntime
-              ? `./analyze/client${extension}`
-              : `../${options.nextRuntime === 'nodejs' ? '../' : ''}analyze/${
-                  options.nextRuntime
-                }${extension}`,
-          })
-        )
-
-        if (typeof nextConfig.webpack === 'function') {
-          return nextConfig.webpack(config, options)
-        }
-        return config
-      },
-    })
-  }"#;
+        let old_content = module_move_old_content();
 
         let old_attributions = vec![Attribution::new(0, old_content.len(), "A".to_string(), TEST_TS)];
 
         // Move the if block to the end
-        let new_content = r#"module.exports =
-  ({ enabled = true, logLevel, openAnalyzer, analyzerMode } = {}) =>
-  (nextConfig = {}) => {
-    if (!enabled) {
-      return nextConfig
-    }
-    if (process.env.TURBOPACK) {
-      console.warn(
-        'The Next Bundle Analyzer is not compatible with Turbopack builds yet, no report will be generated.\n\n' +
-          'To run this analysis pass the `--webpack` flag to `next build`'
-      )
-      return nextConfig
-    }
-
-    const extension = analyzerMode === 'json' ? '.json' : '.html'
-
-    return Object.assign({}, nextConfig, {
-      webpack(config, options) {
-        const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer')
-        config.plugins.push(
-          new BundleAnalyzerPlugin({
-            analyzerMode: analyzerMode || 'static',
-            logLevel,
-            openAnalyzer,
-            reportFilename: !options.nextRuntime
-              ? `./analyze/client${extension}`
-              : `../${options.nextRuntime === 'nodejs' ? '../' : ''}analyze/${
-                  options.nextRuntime
-                }${extension}`,
-          })
-        )
-
-
-        return config
-      },
-    })
-  }
-  if (typeof nextConfig.webpack === 'function') {
-    return nextConfig.webpack(config, options)
-  }"#;
+        let new_content = module_move_new_content();
 
         let new_attributions = tracker
             .update_attributions(old_content, new_content, &old_attributions, "B", TEST_TS)
@@ -1773,6 +1781,114 @@ fn main() {
                 Character: {:?}",
                 pos,
                 new_content.chars().nth(pos)
+            );
+        }
+    }
+
+    #[test]
+    fn test_move_with_indentation_change_preserves_attribution() {
+        let tracker = AttributionTracker::new();
+
+        let old_content = r#"fn main() {
+    let value = compute();
+    log(value);
+}
+
+fn compute() -> i32 {
+    42
+}
+"#;
+
+        let old_attributions = vec![Attribution::new(0, old_content.len(), "A".to_string(), TEST_TS)];
+
+        // Move `compute` inside `main` and adjust indentation to match the new scope
+        let new_content = r#"fn main() {
+    let value = compute();
+    fn compute() -> i32 {
+        42
+    }
+    log(value);
+}
+"#;
+
+        let new_attributions = tracker
+            .update_attributions(old_content, new_content, &old_attributions, "B", TEST_TS)
+            .unwrap();
+
+        let moved_block = "    fn compute() -> i32 {\n        42\n    }";
+        let block_start = new_content
+            .find(moved_block)
+            .expect("Moved block should exist in new content");
+        let block_end = block_start + moved_block.len();
+
+        for idx in block_start..block_end {
+            let ch = new_content.as_bytes()[idx] as char;
+            if ch.is_whitespace() || ch == '{' || ch == '}' {
+                continue;
+            }
+
+            let attributed_to_b = new_attributions
+                .iter()
+                .filter(|a| a.author_id == "B")
+                .any(|a| a.start <= idx && a.end > idx);
+
+            assert!(
+                !attributed_to_b,
+                "Character at position {} ('{}') should remain attributed to A despite indentation change",
+                idx,
+                ch
+            );
+        }
+    }
+
+    #[test]
+    fn test_move_with_whitespace_gaps_preserves_attribution() {
+        let tracker = AttributionTracker::new();
+
+        let old_content = module_move_old_content();
+
+        let old_attributions = vec![Attribution::new(0, old_content.len(), "A".to_string(), TEST_TS)];
+
+        // Start with the baseline move scenario and add extra blank lines around the moved block
+        let mut new_content = module_move_new_content().to_string();
+        new_content = new_content.replace(
+            "return config\n      },",
+            "return config\n\n      },",
+        );
+        new_content = new_content.replace(
+            "})\n  }\n  if (typeof nextConfig.webpack === 'function')",
+            "})\n\n  }\n  if (typeof nextConfig.webpack === 'function')",
+        );
+
+        let new_attributions = tracker
+            .update_attributions(old_content, &new_content, &old_attributions, "B", TEST_TS)
+            .unwrap();
+
+        let return_config_pos = new_content
+            .find("return config")
+            .expect("Moved block should exist");
+        let closing_brace_after_return = new_content[return_config_pos..]
+            .find("  }")
+            .unwrap()
+            + return_config_pos
+            + 3;
+
+        for idx in return_config_pos..closing_brace_after_return {
+            let ch = new_content.as_bytes()[idx] as char;
+            if ch.is_whitespace() || ch == '{' || ch == '}' {
+                continue;
+            }
+
+            let attributed_to_b = new_attributions
+                .iter()
+                .filter(|a| a.author_id == "B")
+                .any(|a| a.start <= idx && a.end > idx);
+
+            assert!(
+                !attributed_to_b,
+                "Character at position {} ('{}') within moved body block should remain with author A",
+                idx,
+                ch
             );
         }
     }
