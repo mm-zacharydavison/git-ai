@@ -4,6 +4,7 @@ pub mod checkpoint_agent;
 pub mod git_ai_handlers;
 pub mod git_handlers;
 pub mod hooks;
+pub mod install_github_action;
 pub mod install_hooks;
 pub mod squash_authorship;
 pub mod stats_delta;

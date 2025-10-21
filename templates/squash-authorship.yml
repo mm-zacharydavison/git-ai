@@ -1,0 +1,59 @@
+name: Git AI Squash Authorship
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  squash-authorship:
+    if: github.event.pull_request.merged == true && github.event.pull_request.merge_commit_sha != null
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch PR commits and authorship notes
+        run: |
+          # Fetch the PR head commit (and its history) even though the branch was deleted
+          # GitHub retains these commits temporarily after branch deletion
+          git fetch origin ${{ github.event.pull_request.head.sha }} || {
+            echo "Warning: Could not fetch PR head commit"
+            exit 1
+          }
+          # Fetch git-ai authorship notes
+          git fetch origin 'refs/notes/ai:refs/notes/ai' || echo "No authorship notes found"
+
+      - name: Install git-ai
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh | bash
+          echo "$HOME/.git-ai/bin" >> $GITHUB_PATH
+
+      - name: Run squash-authorship
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          NEW_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          # Use the HEAD SHA of the PR branch before it was merged/deleted
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "Branch: $BRANCH"
+          echo "New SHA (merge commit): $NEW_SHA"
+          echo "Head SHA (PR branch HEAD): $HEAD_SHA"
+          echo ""
+          echo "Running: git-ai squash-authorship $BRANCH $NEW_SHA $HEAD_SHA"
+          git-ai squash-authorship "$BRANCH" "$NEW_SHA" "$HEAD_SHA" || {
+            echo "squash-authorship failed with exit code $?"
+            exit 1
+          }
+
+      - name: Push authorship notes
+        run: |
+          git push origin refs/notes/ai

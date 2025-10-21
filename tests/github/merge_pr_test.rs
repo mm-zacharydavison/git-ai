@@ -4,8 +4,8 @@ use super::github_test_harness::{GitHubTestRepo, MergeStrategy};
 
 #[test]
 #[ignore] // Ignored by default - run with `cargo test --test github_integration -- --ignored`
-fn test_basic_pr_with_mixed_authorship() {
-    let test_repo = match GitHubTestRepo::new("test_basic_pr_with_mixed_authorship") {
+fn test_merge_pr_with_mixed_authorship() {
+    let test_repo = match GitHubTestRepo::new("test_merge_pr_with_mixed_authorship") {
         Some(repo) => repo,
         None => {
             println!("⏭️  Test skipped - GitHub CLI not available");
@@ -13,7 +13,7 @@ fn test_basic_pr_with_mixed_authorship() {
         }
     };
 
-    println!("🚀 Starting basic PR test with mixed human+AI authorship");
+    println!("🚀 Starting merge PR test with mixed human+AI authorship");
 
     if let Err(e) = test_repo.create_on_github() {
         panic!("Failed to create GitHub repository: {}", e);
@@ -47,8 +47,8 @@ fn test_basic_pr_with_mixed_authorship() {
         .expect("Failed to push branch");
 
     let pr_url = test_repo.create_pr(
-        "Basic mixed authorship test",
-        "Testing basic human + AI authorship tracking"
+        "Merge mixed authorship test",
+        "Testing merge human + AI authorship tracking"
     ).expect("Failed to create PR");
 
     println!("✅ Pull request created: {}", pr_url);
