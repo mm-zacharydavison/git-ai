@@ -13,6 +13,7 @@ use crate::git::repository::CommitRange;
 use crate::utils::Timer;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn handle_git_ai(args: &[String]) {
     if args.is_empty() {
@@ -200,10 +201,17 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "mock_ai" => {
+                let mock_agent_id = format!(
+                    "ai-thread-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or_else(|_| 0)
+                );
                 agent_run_result = Some(AgentRunResult {
                     agent_id: AgentId {
                         tool: "some-ai".to_string(),
-                        id: "ai-thread".to_string(),
+                        id: mock_agent_id,
                         model: "unknown".to_string(),
                     },
                     checkpoint_kind: CheckpointKind::AiAgent,

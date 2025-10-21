@@ -1439,6 +1439,7 @@ pub fn reconstruct_working_log_after_reset(
         new_authorship_log.attestations.len(),
         new_authorship_log.metadata.prompts.len()
     ));
+    eprintln!("new_authorship_log: {:?}", new_authorship_log);
 
     // Step 4: Build file contents map from index
     use std::collections::HashMap;

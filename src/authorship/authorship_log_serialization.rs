@@ -661,8 +661,9 @@ impl AuthorshipLog {
         &self,
         file_contents: &HashMap<String, String>,
     ) -> Result<Vec<crate::authorship::working_log::Checkpoint>, Box<dyn std::error::Error>> {
+        use crate::authorship::authorship_log::PromptRecord;
         use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
-        use crate::authorship::attribution_tracker::line_attributions_to_attributions;
+        use crate::authorship::attribution_tracker::{line_attributions_to_attributions, LineAttribution};
         use std::collections::{HashMap, HashSet};
 
         let mut checkpoints = Vec::new();
@@ -698,35 +699,74 @@ impl AuthorshipLog {
                     .extend(entry.line_ranges.clone());
             }
 
-            // Create a checkpoint for each session that touched this file
-            for (session_hash, ranges) in session_lines {
-                let prompt_record =
-                    self.metadata.prompts.get(&session_hash).ok_or_else(|| {
-                        format!("Missing prompt record for hash: {}", session_hash)
-                    })?;
+            if session_lines.is_empty() {
+                continue;
+            }
+
+            let file_content = file_contents
+                .get(file_path)
+                .ok_or_else(|| format!("Missing file content for: {}", file_path))?;
+
+            // Sort sessions for deterministic output
+            let mut session_entries: Vec<(String, Vec<LineRange>)> =
+                session_lines.into_iter().collect();
+            session_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let mut combined_line_attributions: Vec<LineAttribution> = Vec::new();
+            let mut session_prompt_records: Vec<PromptRecord> = Vec::new();
+
+            for (session_hash, ranges) in &session_entries {
+                let prompt_record = self
+                    .metadata
+                    .prompts
+                    .get(session_hash)
+                    .ok_or_else(|| format!("Missing prompt record for hash: {}", session_hash))?
+                    .clone();
 
                 // Expand ranges to individual lines, then compress to working log format
                 let mut all_lines: Vec<u32> = Vec::new();
                 for range in ranges {
                     all_lines.extend(range.expand());
                 }
+                if all_lines.is_empty() {
+                    continue;
+                }
                 all_lines.sort_unstable();
                 all_lines.dedup();
 
-                let file_content = file_contents.get(file_path)
-                    .ok_or_else(|| format!("Missing file content for: {}", file_path))?;
-
                 // IMPORTANT: Use the session_hash that will be regenerated from agent_id when applying checkpoint
                 // This ensures line attributions match the prompts in metadata after apply_checkpoint
-                let regenerated_session_hash = generate_short_hash(&prompt_record.agent_id.id, &prompt_record.agent_id.tool);
-                let line_attributions = compress_lines_to_working_log_format(&all_lines, &regenerated_session_hash);
-                let attributions = line_attributions_to_attributions(&line_attributions, file_content.as_str(), ts);
+                let regenerated_session_hash = generate_short_hash(
+                    &prompt_record.agent_id.id,
+                    &prompt_record.agent_id.tool,
+                );
+                let line_attributions =
+                    compress_lines_to_working_log_format(&all_lines, &regenerated_session_hash);
 
+                combined_line_attributions.extend(line_attributions);
+                session_prompt_records.push(prompt_record);
+            }
+
+            if combined_line_attributions.is_empty() {
+                continue;
+            }
+
+            combined_line_attributions.sort_by(|a, b| {
+                a.start_line
+                    .cmp(&b.start_line)
+                    .then(a.end_line.cmp(&b.end_line))
+                    .then(a.author_id.cmp(&b.author_id))
+            });
+
+            let attributions =
+                line_attributions_to_attributions(&combined_line_attributions, file_content.as_str(), ts);
+
+            for prompt_record in session_prompt_records {
                 let entry = WorkingLogEntry::new(
                     file_path.clone(),
                     String::new(), // Empty blob_sha - will be set by caller
-                    attributions,
-                    line_attributions,
+                    attributions.clone(),
+                    combined_line_attributions.clone(),
                 );
 
                 let mut ai_checkpoint = Checkpoint::new(
@@ -1579,5 +1619,38 @@ mod tests {
             ai_checkpoints[0].agent_id.as_ref().unwrap().id,
             ai_checkpoints[1].agent_id.as_ref().unwrap().id
         );
+
+        // Each checkpoint should contain the full attribution state for the file
+        assert_eq!(ai_checkpoints[0].entries.len(), 1);
+        assert_eq!(ai_checkpoints[1].entries.len(), 1);
+        let entry1 = &ai_checkpoints[0].entries[0];
+        let entry2 = &ai_checkpoints[1].entries[0];
+        assert_eq!(entry1.line_attributions, entry2.line_attributions);
+        assert_eq!(entry1.attributions, entry2.attributions);
+        assert!(!entry1.line_attributions.is_empty());
+        assert!(!entry1.attributions.is_empty());
+
+        let total_lines: u32 = entry1
+            .line_attributions
+            .iter()
+            .map(|attr| attr.end_line - attr.start_line + 1)
+            .sum();
+        assert_eq!(total_lines, 30);
+
+        let lines_session1: u32 = entry1
+            .line_attributions
+            .iter()
+            .filter(|attr| attr.author_id.as_str() == session1_hash.as_str())
+            .map(|attr| attr.end_line - attr.start_line + 1)
+            .sum();
+        assert_eq!(lines_session1, 10);
+
+        let lines_session2: u32 = entry1
+            .line_attributions
+            .iter()
+            .filter(|attr| attr.author_id.as_str() == session2_hash.as_str())
+            .map(|attr| attr.end_line - attr.start_line + 1)
+            .sum();
+        assert_eq!(lines_session2, 20);
     }
 }
