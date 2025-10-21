@@ -54,6 +54,17 @@ pub fn handle_git_ai(args: &[String]) {
                 std::process::exit(1);
             }
         }
+        "install-github-action" => {
+            let repo_path = if args.len() > 1 {
+                Some(args[1].as_str())
+            } else {
+                None
+            };
+            if let Err(e) = commands::install_github_action::run(repo_path) {
+                eprintln!("Install GitHub Action failed: {}", e);
+                std::process::exit(1);
+            }
+        }
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
@@ -85,6 +96,8 @@ fn print_help() {
     );
     eprintln!("    --json                 Output created notes as JSON");
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
+    eprintln!("  install-github-action  Install GitHub Action for squash authorship");
+    eprintln!("    [path]                 Optional: path to repository (defaults to current directory)");
     eprintln!("  squash-authorship  Generate authorship from squashed commits");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");

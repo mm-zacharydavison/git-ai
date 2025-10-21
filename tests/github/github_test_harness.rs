@@ -209,6 +209,94 @@ impl GitHubTestRepo {
         Ok(())
     }
 
+    /// Install the GitHub Action workflow for squash-authorship
+    pub fn install_github_action(&self) -> Result<(), String> {
+        use crate::repos::test_repo::git_ai;
+
+        let repo_path = self.repo.path();
+
+        git_ai(&["install-github-action", repo_path.to_str().unwrap()])
+            .map_err(|e| format!("Failed to install GitHub Action: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Commit and push the GitHub Action workflow
+    pub fn commit_and_push_workflow(&self) -> Result<(), String> {
+        self.repo.git(&["add", ".github/workflows/git-ai-squash-authorship.yml"])?;
+        self.repo.git(&["commit", "-m", "Add git-ai squash authorship workflow"])?;
+        self.repo.git(&["push"])?;
+        println!("✅ Committed and pushed GitHub Action workflow");
+        Ok(())
+    }
+
+    /// Wait for a specific workflow run to complete
+    pub fn wait_for_workflow_completion(&self, max_wait_secs: u64) -> Result<String, String> {
+        use std::thread::sleep;
+        use std::time::Duration;
+
+        let repo_path = self.repo.path();
+        let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
+
+        println!("⏳ Waiting for workflow to complete (max {} seconds)...", max_wait_secs);
+
+        let start = std::time::Instant::now();
+        let mut last_status = String::new();
+
+        loop {
+            if start.elapsed().as_secs() > max_wait_secs {
+                return Err(format!("Workflow did not complete within {} seconds", max_wait_secs));
+            }
+
+            let output = Command::new("gh")
+                .args(&["run", "list", "--repo", &full_repo, "--limit", "1", "--json", "status,conclusion,databaseId"])
+                .current_dir(repo_path)
+                .output()
+                .map_err(|e| format!("Failed to query workflow runs: {}", e))?;
+
+            if !output.status.success() {
+                return Err(format!(
+                    "Failed to query workflow runs:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+
+            let output_str = String::from_utf8_lossy(&output.stdout);
+
+            if output_str.trim() == "[]" || output_str.trim().is_empty() {
+                sleep(Duration::from_secs(2));
+                continue;
+            }
+
+            let runs: serde_json::Value = serde_json::from_str(&output_str)
+                .map_err(|e| format!("Failed to parse workflow runs JSON: {}", e))?;
+
+            if let Some(run) = runs.as_array().and_then(|arr| arr.first()) {
+                let status = run.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
+                let conclusion = run.get("conclusion").and_then(|c| c.as_str());
+                let run_id = run.get("databaseId").and_then(|id| id.as_i64()).unwrap_or(0);
+
+                if status != last_status {
+                    println!("   Workflow status: {} (run ID: {})", status, run_id);
+                    last_status = status.to_string();
+                }
+
+                if status == "completed" {
+                    let conclusion = conclusion.unwrap_or("unknown");
+                    println!("✅ Workflow completed with conclusion: {}", conclusion);
+
+                    if conclusion == "success" {
+                        return Ok(run_id.to_string());
+                    } else {
+                        return Err(format!("Workflow completed but failed with conclusion: {}", conclusion));
+                    }
+                }
+            }
+
+            sleep(Duration::from_secs(2));
+        }
+    }
+
     /// Delete the GitHub repository
     pub fn delete_from_github(&self) -> Result<(), String> {
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);

@@ -260,6 +260,31 @@ fn get_binary_path() -> &'static PathBuf {
     COMPILED_BINARY.get_or_init(compile_binary)
 }
 
+pub fn git_ai(args: &[&str]) -> Result<String, String> {
+    let binary_path = get_binary_path();
+
+    let output = Command::new(binary_path)
+        .args(args)
+        .output()
+        .expect(&format!("Failed to execute git-ai command: {:?}", args));
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        let combined = if stdout.is_empty() {
+            stderr
+        } else if stderr.is_empty() {
+            stdout
+        } else {
+            format!("{}{}", stdout, stderr)
+        };
+        Ok(combined)
+    } else {
+        Err(stderr)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_file::ExpectedLineExt;
