@@ -179,6 +179,36 @@ impl GitHubTestRepo {
         pr_url.split('/').last().map(|s| s.to_string())
     }
 
+    /// Get the default branch name from the remote repository
+    pub fn get_default_branch(&self) -> Result<String, String> {
+        let repo_path = self.repo.path();
+        let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
+
+        let output = Command::new("gh")
+            .args(&["repo", "view", &full_repo, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| format!("Failed to get default branch: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to get default branch:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Checkout default branch and pull latest changes from remote
+    pub fn checkout_and_pull_default_branch(&self) -> Result<(), String> {
+        let default_branch = self.get_default_branch()?;
+        self.repo.git(&["checkout", &default_branch])?;
+        self.repo.git(&["pull", "origin", &default_branch])?;
+        println!("✅ Checked out and pulled latest {} branch", default_branch);
+        Ok(())
+    }
+
     /// Delete the GitHub repository
     pub fn delete_from_github(&self) -> Result<(), String> {
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
@@ -206,6 +236,14 @@ impl GitHubTestRepo {
 
 impl Drop for GitHubTestRepo {
     fn drop(&mut self) {
+        if std::env::var("GIT_AI_TEST_NO_CLEANUP").is_ok() {
+            eprintln!("⚠️  Cleanup disabled - repository preserved: {}/{}",
+                self.github_owner, self.github_repo_name);
+            eprintln!("   URL: https://github.com/{}/{}",
+                self.github_owner, self.github_repo_name);
+            return;
+        }
+
         if let Err(e) = self.delete_from_github() {
             eprintln!("⚠️  Failed to cleanup GitHub repository: {}", e);
             eprintln!("   Manual cleanup required: {}/{}", self.github_owner, self.github_repo_name);

@@ -56,16 +56,19 @@ fn test_basic_pr_with_mixed_authorship() {
     let pr_number = test_repo.extract_pr_number(&pr_url)
         .expect("Failed to extract PR number");
 
-    test_repo.merge_pr(&pr_number, MergeStrategy::Squash)
+    test_repo.merge_pr(&pr_number, MergeStrategy::Merge)
         .expect("Failed to merge PR");
+
+    test_repo.checkout_and_pull_default_branch()
+        .expect("Failed to checkout and pull main branch");
 
     println!("✅ Test completed successfully");
 
     test_file.assert_lines_and_blame(lines![
         "fn main() {".human(),
+        "    println!(\"Hello, world!\");".ai(),
         "    // AI-generated greeting".ai(),
         "    println!(\"Welcome to git-ai!\");".ai(),
-        "    println!(\"Hello, world!\");".ai(),
         "}".human(),
     ]);
 }
