@@ -5,7 +5,8 @@
 
 use diff_match_patch_rs::dmp::Diff;
 use crate::error::GitAiError;
-use diff_match_patch_rs::{Compat, DiffMatchPatch, Ops};
+use diff_match_patch_rs::{DiffMatchPatch, Ops};
+use diff_match_patch_rs::traits::Efficient;
 use std::collections::HashMap;
 use crate::authorship::working_log::CheckpointKind;
 
@@ -257,7 +258,7 @@ impl AttributionTracker {
         // Phase 1: Compute diff
         let diffs = self
             .dmp
-            .diff_main::<Compat>(old_content, new_content)
+            .diff_main::<Efficient>(old_content, new_content)
             .map_err(|e| GitAiError::Generic(format!("Diff computation failed: {:?}", e)))?;
 
         // Phase 2: Build deletion and insertion catalogs
@@ -281,7 +282,7 @@ impl AttributionTracker {
     }
 
     /// Build catalogs of deletions and insertions from the diff
-    fn build_diff_catalog(&self, diffs: &[Diff<char>]) -> (Vec<Deletion>, Vec<Insertion>) {
+    fn build_diff_catalog(&self, diffs: &[Diff<u8>]) -> (Vec<Deletion>, Vec<Insertion>) {
         let mut deletions = Vec::new();
         let mut insertions = Vec::new();
 
@@ -290,16 +291,17 @@ impl AttributionTracker {
 
         for diff in diffs {
             let op = diff.op();
-            let text_chars = diff.data();
-            let text: String = text_chars.iter().collect();
-            let len = text_chars.len();
-
             match op {
                 Ops::Equal => {
+                    let len = diff.data().len();
                     old_pos += len;
                     new_pos += len;
                 }
                 Ops::Delete => {
+                    let bytes = diff.data();
+                    let len = bytes.len();
+                    let text = String::from_utf8(bytes.to_vec())
+                        .expect("Diff segments should always be valid UTF-8");
                     deletions.push(Deletion {
                         start: old_pos,
                         end: old_pos + len,
@@ -308,6 +310,10 @@ impl AttributionTracker {
                     old_pos += len;
                 }
                 Ops::Insert => {
+                    let bytes = diff.data();
+                    let len = bytes.len();
+                    let text = String::from_utf8(bytes.to_vec())
+                        .expect("Diff segments should always be valid UTF-8");
                     insertions.push(Insertion {
                         start: new_pos,
                         end: new_pos + len,
@@ -466,7 +472,9 @@ impl AttributionTracker {
         }
 
         let dmp = DiffMatchPatch::new();
-        let diffs = dmp.diff_main::<Compat>(deletion_text, insertion_text).ok()?;
+        let diffs = dmp
+            .diff_main::<Efficient>(deletion_text, insertion_text)
+            .ok()?;
 
         let mut best = (0usize, 0usize, 0usize);
         let mut del_cursor = 0usize;
@@ -501,7 +509,7 @@ impl AttributionTracker {
     /// Transform attributions through the diff
     fn transform_attributions(
         &self,
-        diffs: &[Diff<char>],
+        diffs: &[Diff<u8>],
         old_attributions: &[Attribution],
         current_author: &str,
         insertions: &[Insertion],
@@ -530,8 +538,7 @@ impl AttributionTracker {
 
         for diff in diffs {
             let op = diff.op();
-            let text_chars = diff.data();
-            let len = text_chars.len();
+            let len = diff.data().len();
 
             match op {
                 Ops::Equal => {
@@ -1359,6 +1366,39 @@ fn foo() {
             assert!(attr.start >= 51 || attr.end <= 47,
                 "C should not have attribution in the newline range 47-51, but has {:?}", attr);
         }
+    }
+
+    #[test]
+    fn test_update_attributions_handles_utf8_characters() {
+        let tracker = AttributionTracker::new();
+
+        let old_content = "😀\n";
+        let new_content = "😀\n🙂\n";
+
+        let old_attributions =
+            vec![Attribution::new(0, old_content.len(), "Alice".to_string(), TEST_TS)];
+
+        let new_attributions = tracker
+            .update_attributions(old_content, new_content, &old_attributions, "Bob", TEST_TS)
+            .unwrap();
+
+        let alice_attr = new_attributions
+            .iter()
+            .find(|a| a.author_id == "Alice")
+            .expect("Alice attribution missing");
+
+        assert_eq!(alice_attr.start, 0, "Alice start should remain at byte 0");
+        assert_eq!(
+            alice_attr.end,
+            old_content.len(),
+            "Alice end should match original UTF-8 byte length"
+        );
+
+        let line_attrs = attributions_to_line_attributions(&new_attributions, new_content);
+
+        assert_eq!(line_attrs.len(), 2, "Each line should keep its author");
+        assert_eq!(line_attrs[0].author_id, "Alice");
+        assert_eq!(line_attrs[1].author_id, "Bob");
     }
 
     // ========== Line to Character Attribution Conversion Tests ==========
