@@ -1,5 +1,5 @@
-use crate::authorship::transcript::AiTranscript;
 use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
+use crate::authorship::transcript::AiTranscript;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -131,7 +131,12 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn new(kind: CheckpointKind, diff: String, author: String, entries: Vec<WorkingLogEntry>) -> Self {
+    pub fn new(
+        kind: CheckpointKind,
+        diff: String,
+        author: String,
+        entries: Vec<WorkingLogEntry>,
+    ) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -164,7 +169,12 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let checkpoint = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "claude".to_string(), vec![entry]);
+        let checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
 
         // Verify timestamp is set (should be recent)
         let current_time = SystemTime::now()
@@ -195,7 +205,12 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let checkpoint1 = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "claude".to_string(), vec![entry1]);
+        let checkpoint1 = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry1],
+        );
 
         let entry2 = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
@@ -251,7 +266,12 @@ mod tests {
             id: "session-abc123".to_string(),
         };
 
-        let mut checkpoint = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "claude".to_string(), vec![entry]);
+        let mut checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
         checkpoint.transcript = Some(transcript);
         checkpoint.agent_id = Some(agent_id);
 

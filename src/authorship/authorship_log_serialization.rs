@@ -1,12 +1,12 @@
 use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
-use crate::git::repository::Repository;
+use crate::authorship::working_log::CheckpointKind;
 use crate::config;
+use crate::git::repository::Repository;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::{BufRead, Write};
-use crate::authorship::working_log::CheckpointKind;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Authorship log format version identifier
@@ -284,16 +284,19 @@ impl AuthorshipLog {
                 let session_id = generate_short_hash(&agent.id, &agent.tool);
 
                 // Insert or update prompt record with latest transcript
-                let entry = self.metadata.prompts.entry(session_id.clone())
-                    .or_insert(PromptRecord {
-                        agent_id: agent.clone(),
-                        human_author: human_author.map(|s| s.to_string()),
-                        messages: transcript.messages().to_vec(),
-                        total_additions: 0,
-                        total_deletions: 0,
-                        accepted_lines: 0,
-                        overriden_lines: 0,
-                    });
+                let entry =
+                    self.metadata
+                        .prompts
+                        .entry(session_id.clone())
+                        .or_insert(PromptRecord {
+                            agent_id: agent.clone(),
+                            human_author: human_author.map(|s| s.to_string()),
+                            messages: transcript.messages().to_vec(),
+                            total_additions: 0,
+                            total_deletions: 0,
+                            accepted_lines: 0,
+                            overriden_lines: 0,
+                        });
 
                 // Keep the longest/latest transcript
                 if entry.messages.len() < transcript.messages().len() {
@@ -323,9 +326,15 @@ impl AuthorshipLog {
             let mut line_attributions_by_author: HashMap<String, Vec<LineRange>> = HashMap::new();
             for line_attr in &entry.line_attributions {
                 if line_attr.start_line == line_attr.end_line {
-                    line_attributions_by_author.entry(line_attr.author_id.clone()).or_insert_with(Vec::new).push(LineRange::Single(line_attr.start_line));
+                    line_attributions_by_author
+                        .entry(line_attr.author_id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(LineRange::Single(line_attr.start_line));
                 } else {
-                    line_attributions_by_author.entry(line_attr.author_id.clone()).or_insert_with(Vec::new).push(LineRange::Range(line_attr.start_line, line_attr.end_line));
+                    line_attributions_by_author
+                        .entry(line_attr.author_id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(LineRange::Range(line_attr.start_line, line_attr.end_line));
                 }
             }
 
@@ -609,16 +618,26 @@ impl AuthorshipLog {
                     };
 
                     // Return author and prompt info
-                    return Some((author, Some(entry.hash.clone()), Some(prompt_record.clone())));
+                    return Some((
+                        author,
+                        Some(entry.hash.clone()),
+                        Some(prompt_record.clone()),
+                    ));
                 } else {
                     // Check cache first before grepping
-                    let prompt_record = if let Some(cached_result) = foreign_prompts_cache.get(&entry.hash) {
+                    let prompt_record = if let Some(cached_result) =
+                        foreign_prompts_cache.get(&entry.hash)
+                    {
                         cached_result.clone()
                     } else {
                         // Try to find prompt record using git grep
-                        let shas = crate::git::refs::grep_ai_notes(repo, &format!("\"{}\"", &entry.hash)).unwrap_or_default();
+                        let shas =
+                            crate::git::refs::grep_ai_notes(repo, &format!("\"{}\"", &entry.hash))
+                                .unwrap_or_default();
                         let result = if let Some(latest_sha) = shas.first() {
-                            if let Some(authorship_log) = crate::git::refs::get_authorship(repo, latest_sha) {
+                            if let Some(authorship_log) =
+                                crate::git::refs::get_authorship(repo, latest_sha)
+                            {
                                 authorship_log.metadata.prompts.get(&entry.hash).cloned()
                             } else {
                                 None
@@ -630,7 +649,7 @@ impl AuthorshipLog {
                         foreign_prompts_cache.insert(entry.hash.clone(), result.clone());
                         result
                     };
-                    
+
                     if let Some(prompt_record) = prompt_record {
                         let author = Author {
                             username: prompt_record.agent_id.tool.clone(),
@@ -661,9 +680,11 @@ impl AuthorshipLog {
         &self,
         file_contents: &HashMap<String, String>,
     ) -> Result<Vec<crate::authorship::working_log::Checkpoint>, Box<dyn std::error::Error>> {
+        use crate::authorship::attribution_tracker::{
+            LineAttribution, line_attributions_to_attributions,
+        };
         use crate::authorship::authorship_log::PromptRecord;
         use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
-        use crate::authorship::attribution_tracker::{line_attributions_to_attributions, LineAttribution};
         use std::collections::{HashMap, HashSet};
 
         let mut checkpoints = Vec::new();
@@ -736,10 +757,8 @@ impl AuthorshipLog {
 
                 // IMPORTANT: Use the session_hash that will be regenerated from agent_id when applying checkpoint
                 // This ensures line attributions match the prompts in metadata after apply_checkpoint
-                let regenerated_session_hash = generate_short_hash(
-                    &prompt_record.agent_id.id,
-                    &prompt_record.agent_id.tool,
-                );
+                let regenerated_session_hash =
+                    generate_short_hash(&prompt_record.agent_id.id, &prompt_record.agent_id.tool);
                 let line_attributions =
                     compress_lines_to_working_log_format(&all_lines, &regenerated_session_hash);
 
@@ -758,8 +777,11 @@ impl AuthorshipLog {
                     .then(a.author_id.cmp(&b.author_id))
             });
 
-            let attributions =
-                line_attributions_to_attributions(&combined_line_attributions, file_content.as_str(), ts);
+            let attributions = line_attributions_to_attributions(
+                &combined_line_attributions,
+                file_content.as_str(),
+                ts,
+            );
 
             for prompt_record in session_prompt_records {
                 let entry = WorkingLogEntry::new(
@@ -771,7 +793,7 @@ impl AuthorshipLog {
 
                 let mut ai_checkpoint = Checkpoint::new(
                     CheckpointKind::AiAgent, // TODO Pull exact from prompt record?
-                    String::new(), // Empty diff hash
+                    String::new(),           // Empty diff hash
                     "ai".to_string(),
                     vec![entry],
                 );
@@ -1276,9 +1298,11 @@ mod tests {
 
     #[test]
     fn test_metrics_calculation() {
-        use crate::authorship::transcript::{AiTranscript, Message};
-        use crate::authorship::working_log::{AgentId, Checkpoint, CheckpointKind, WorkingLogEntry};
         use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
+        use crate::authorship::transcript::{AiTranscript, Message};
+        use crate::authorship::working_log::{
+            AgentId, Checkpoint, CheckpointKind, WorkingLogEntry,
+        };
         use std::time::{SystemTime, UNIX_EPOCH};
 
         // Create an agent ID
@@ -1302,19 +1326,20 @@ mod tests {
 
         // Create working log entries
         // First checkpoint: add 10 lines
-        let line_attributions1 = vec![
-            LineAttribution::new(1, 10, session_hash.clone())
-        ];
-        let attributions1 = vec![
-            Attribution::new(0, 100, session_hash.clone(), ts)
-        ];
+        let line_attributions1 = vec![LineAttribution::new(1, 10, session_hash.clone())];
+        let attributions1 = vec![Attribution::new(0, 100, session_hash.clone(), ts)];
         let entry1 = WorkingLogEntry::new(
             "src/test.rs".to_string(),
             "blob_sha_1".to_string(),
             attributions1,
             line_attributions1,
         );
-        let mut checkpoint1 = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "ai".to_string(), vec![entry1]);
+        let mut checkpoint1 = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "ai".to_string(),
+            vec![entry1],
+        );
         checkpoint1.agent_id = Some(agent_id.clone());
         checkpoint1.transcript = Some(transcript.clone());
         // First checkpoint cumulative stats: 10 added, 0 deleted
@@ -1337,12 +1362,17 @@ mod tests {
             attributions2,
             line_attributions2,
         );
-        let mut checkpoint2 = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "ai".to_string(), vec![entry2]);
+        let mut checkpoint2 = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "ai".to_string(),
+            vec![entry2],
+        );
         checkpoint2.agent_id = Some(agent_id.clone());
         checkpoint2.transcript = Some(transcript);
         // Second checkpoint cumulative stats: 10 (from checkpoint1) is already counted, so we add 5 more
-        checkpoint2.line_stats.ai_agent_additions = 5;  // Incremental: 5 new lines added
-        checkpoint2.line_stats.ai_agent_deletions = 3;  // Incremental: 3 lines deleted
+        checkpoint2.line_stats.ai_agent_additions = 5; // Incremental: 5 new lines added
+        checkpoint2.line_stats.ai_agent_deletions = 3; // Incremental: 3 lines deleted
 
         // Convert to authorship log
         let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
@@ -1433,7 +1463,9 @@ mod tests {
         // Verify line attributions instead of added_lines/deleted_lines
         assert!(!ai_entry.line_attributions.is_empty());
         // Should have line attributions for lines 1-5 and 10-15
-        let total_lines: u32 = ai_entry.line_attributions.iter()
+        let total_lines: u32 = ai_entry
+            .line_attributions
+            .iter()
             .map(|attr| attr.end_line - attr.start_line + 1)
             .sum();
         assert_eq!(total_lines, 11); // 5 lines (1-5) + 6 lines (10-15)
@@ -1441,9 +1473,11 @@ mod tests {
 
     #[test]
     fn test_overriden_lines_detection() {
-        use crate::authorship::transcript::{AiTranscript, Message};
-        use crate::authorship::working_log::{AgentId, Checkpoint, CheckpointKind, WorkingLogEntry};
         use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
+        use crate::authorship::transcript::{AiTranscript, Message};
+        use crate::authorship::working_log::{
+            AgentId, Checkpoint, CheckpointKind, WorkingLogEntry,
+        };
         use std::time::{SystemTime, UNIX_EPOCH};
 
         // Create an AI checkpoint that adds lines 1-5
@@ -1461,19 +1495,20 @@ mod tests {
             .as_millis();
 
         // First checkpoint: AI adds lines 1-5
-        let line_attributions1 = vec![
-            LineAttribution::new(1, 5, session_hash.clone())
-        ];
-        let attributions1 = vec![
-            Attribution::new(0, 50, session_hash.clone(), ts)
-        ];
+        let line_attributions1 = vec![LineAttribution::new(1, 5, session_hash.clone())];
+        let attributions1 = vec![Attribution::new(0, 50, session_hash.clone(), ts)];
         let entry1 = WorkingLogEntry::new(
             "src/main.rs".to_string(),
             "sha1".to_string(),
             attributions1,
             line_attributions1,
         );
-        let mut checkpoint1 = Checkpoint::new(CheckpointKind::AiAgent, "".to_string(), "ai".to_string(), vec![entry1]);
+        let mut checkpoint1 = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "ai".to_string(),
+            vec![entry1],
+        );
         checkpoint1.agent_id = Some(agent_id.clone());
         checkpoint1.line_stats.ai_agent_additions = 5;
         checkpoint1.line_stats.ai_agent_deletions = 0;
@@ -1500,7 +1535,12 @@ mod tests {
             attributions2,
             line_attributions2,
         );
-        let mut checkpoint2 = Checkpoint::new(CheckpointKind::Human, "".to_string(), "human".to_string(), vec![entry2]);
+        let mut checkpoint2 = Checkpoint::new(
+            CheckpointKind::Human,
+            "".to_string(),
+            "human".to_string(),
+            vec![entry2],
+        );
         checkpoint2.line_stats.ai_agent_additions = 5;
         checkpoint2.line_stats.ai_agent_deletions = 0;
         checkpoint2.line_stats.human_additions = 0;

@@ -1,5 +1,5 @@
-use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::attribution_tracker::Attribution;
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit::post_commit;
 use crate::authorship::working_log::{Checkpoint, CheckpointKind};
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
@@ -1287,11 +1287,12 @@ pub fn snapshot_checkpoints(checkpoints: &[Checkpoint]) -> Vec<SnapshotCheckpoin
                     let mut attributions = e.attributions.clone();
                     // Sort attributions by start position, then end position, then author_id for determinism
                     attributions.sort_by(|a, b| {
-                        a.start.cmp(&b.start)
+                        a.start
+                            .cmp(&b.start)
                             .then_with(|| a.end.cmp(&b.end))
                             .then_with(|| a.author_id.cmp(&b.author_id))
                     });
-                    
+
                     SnapshotEntry {
                         file: e.file.clone(),
                         attributions,

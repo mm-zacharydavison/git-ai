@@ -1,5 +1,5 @@
-use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::authorship_log::PromptRecord;
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
@@ -234,7 +234,8 @@ impl Repository {
         }
 
         // Step 2: Overlay AI authorship information
-        let (line_authors, prompt_records) = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path, options)?;
+        let (line_authors, prompt_records) =
+            overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path, options)?;
 
         if options.no_output {
             return Ok((line_authors, prompt_records));
@@ -566,21 +567,28 @@ fn overlay_ai_authorship(
                 let current_line_num = hunk.range.0 + i;
                 let orig_line_num = hunk.orig_range.0 + i;
 
-                if let Some((author, prompt_hash, prompt)) =
-                    authorship_log.get_line_attribution(repo, file_path, orig_line_num, &mut foreign_prompts_cache)
-                {
+                if let Some((author, prompt_hash, prompt)) = authorship_log.get_line_attribution(
+                    repo,
+                    file_path,
+                    orig_line_num,
+                    &mut foreign_prompts_cache,
+                ) {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
                     if let Some(prompt_record) = prompt {
                         let prompt_hash = prompt_hash.unwrap();
                         if options.use_prompt_hashes_as_names {
                             line_authors.insert(current_line_num, prompt_hash.clone());
                         } else {
-                            line_authors.insert(current_line_num, prompt_record.agent_id.tool.clone());
+                            line_authors
+                                .insert(current_line_num, prompt_record.agent_id.tool.clone());
                         }
                         prompt_records.insert(prompt_hash, prompt_record.clone());
                     } else {
                         if options.return_human_authors_as_human {
-                            line_authors.insert(current_line_num, CheckpointKind::Human.to_str().to_string());
+                            line_authors.insert(
+                                current_line_num,
+                                CheckpointKind::Human.to_str().to_string(),
+                            );
                         } else {
                             line_authors.insert(current_line_num, author.username.clone());
                         }
@@ -588,7 +596,8 @@ fn overlay_ai_authorship(
                 } else {
                     // Fall back to original author if no AI authorship
                     if options.return_human_authors_as_human {
-                        line_authors.insert(current_line_num, CheckpointKind::Human.to_str().to_string());
+                        line_authors
+                            .insert(current_line_num, CheckpointKind::Human.to_str().to_string());
                     } else {
                         line_authors.insert(current_line_num, hunk.original_author.clone());
                     }

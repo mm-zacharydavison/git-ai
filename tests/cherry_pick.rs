@@ -140,10 +140,7 @@ fn test_cherry_pick_abort() {
     repo.stage_all_and_commit("AI feature").unwrap();
 
     // Assert intermediary blame
-    file.assert_lines_and_blame(lines![
-        "Line 1".human(),
-        "AI modification of line 2".ai(),
-    ]);
+    file.assert_lines_and_blame(lines!["Line 1".human(), "AI modification of line 2".ai(),]);
 
     let feature_commit = repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
 

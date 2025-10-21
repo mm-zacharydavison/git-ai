@@ -223,10 +223,10 @@ fn test_cursor_preset_no_filepath_when_missing() {
 
 #[test]
 fn test_cursor_preset_human_checkpoint_no_filepath() {
+    use git_ai::authorship::working_log::CheckpointKind;
     use git_ai::commands::checkpoint_agent::agent_preset::{
         AgentCheckpointFlags, AgentCheckpointPreset, CursorPreset,
     };
-    use git_ai::authorship::working_log::CheckpointKind;
 
     let hook_input = r##"{
         "conversation_id": "test-conversation-id",
@@ -245,7 +245,10 @@ fn test_cursor_preset_human_checkpoint_no_filepath() {
         .expect("Should succeed for human checkpoint");
 
     // Verify this is a human checkpoint
-    assert!(result.checkpoint_kind == CheckpointKind::Human, "Should be a human checkpoint");
+    assert!(
+        result.checkpoint_kind == CheckpointKind::Human,
+        "Should be a human checkpoint"
+    );
     // Human checkpoints should not have edited_filepaths even if file_path is present
     assert!(result.edited_filepaths.is_none());
 }

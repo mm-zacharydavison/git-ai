@@ -126,8 +126,11 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     dry_run: bool,
 ) -> Result<AuthorshipLog, GitAiError> {
     // Cache for foreign prompts to avoid repeated grepping
-    let mut foreign_prompts_cache: HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>> = HashMap::new();
-    
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
+
     // Step 1: Find the common origin base
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
@@ -269,7 +272,10 @@ pub fn prepare_working_log_after_squash(
     // Step 7: Reconstruct authorship from the diff between temp_commit and origin_base
     // This shows ALL changes that came from the feature branch
     let temp_commit_obj = repo.find_commit(temp_commit.to_string())?;
-    let mut foreign_prompts_cache: HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>> = HashMap::new();
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
     let new_authorship_log = reconstruct_authorship_from_diff(
         repo,
         &temp_commit_obj,
@@ -679,7 +685,10 @@ fn reconstruct_authorship_for_commit(
     new_sha: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
     // Cache for foreign prompts to avoid repeated grepping
-    let mut foreign_prompts_cache: HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>> = HashMap::new();
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
     // Get commits
     let old_commit = repo.find_commit(old_sha.to_string())?;
     let new_commit = repo.find_commit(new_sha.to_string())?;
@@ -879,7 +888,10 @@ fn reconstruct_authorship_from_diff(
     new_commit_parent: &Commit,
     hanging_commit_sha: &str,
     authorship_log_cache: &mut AuthorshipLogCache,
-    foreign_prompts_cache: &mut HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>>,
+    foreign_prompts_cache: &mut HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    >,
 ) -> Result<AuthorshipLog, GitAiError> {
     use std::collections::{HashMap, HashSet};
 
@@ -1182,7 +1194,10 @@ fn run_blame_in_context(
     line_number: u32,
     hanging_commit_sha: &str,
     authorship_log_cache: &mut AuthorshipLogCache,
-    foreign_prompts_cache: &mut HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>>,
+    foreign_prompts_cache: &mut HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    >,
 ) -> Result<
     Option<(
         crate::authorship::authorship_log::Author,
@@ -1235,9 +1250,12 @@ fn run_blame_in_context(
         // Use the ORIGINAL line number from the blamed commit, not the current line number
         let orig_line_to_lookup = hunk.orig_range.0;
 
-        if let Some((author, _, prompt)) =
-            authorship_log.get_line_attribution(repo, file_path, orig_line_to_lookup, foreign_prompts_cache)
-        {
+        if let Some((author, _, prompt)) = authorship_log.get_line_attribution(
+            repo,
+            file_path,
+            orig_line_to_lookup,
+            foreign_prompts_cache,
+        ) {
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
@@ -1369,7 +1387,10 @@ pub fn reconstruct_working_log_after_reset(
     human_author: &str,
 ) -> Result<(), GitAiError> {
     // Cache for foreign prompts to avoid repeated grepping
-    let mut foreign_prompts_cache: HashMap<String, Option<crate::authorship::authorship_log::PromptRecord>> = HashMap::new();
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
     debug_log(&format!(
         "Reconstructing working log after reset from {} to {}",
         old_head_sha, target_commit_sha
@@ -1451,8 +1472,12 @@ pub fn reconstruct_working_log_after_reset(
         args.push(format!(":{}", file_attestation.file_path));
 
         let output = crate::git::repository::exec_git(&args)?;
-        let file_content = String::from_utf8(output.stdout)
-            .map_err(|_| GitAiError::Generic(format!("Failed to read file: {}", file_attestation.file_path)))?;
+        let file_content = String::from_utf8(output.stdout).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Failed to read file: {}",
+                file_attestation.file_path
+            ))
+        })?;
         file_contents.insert(file_attestation.file_path.clone(), file_content);
     }
 

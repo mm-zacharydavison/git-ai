@@ -1,12 +1,12 @@
-use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
 use crate::authorship::attribution_tracker::{Attribution, AttributionTracker};
+use crate::authorship::working_log::CheckpointKind;
+use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
+use crate::commands::blame::GitAiBlameOptions;
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::authorship::working_log::CheckpointKind;
-use crate::commands::blame::GitAiBlameOptions;
 use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
@@ -170,7 +170,10 @@ pub fn run(
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
                     debug_log(&format!("    Blob SHA: {}", entry.blob_sha));
-                    debug_log(&format!("    Line Attributions: {:?}", entry.line_attributions));
+                    debug_log(&format!(
+                        "    Line Attributions: {:?}",
+                        entry.line_attributions
+                    ));
                     debug_log(&format!("    Attributions: {:?}", entry.attributions));
                 }
                 debug_log("");
@@ -201,7 +204,15 @@ pub fn run(
     let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-        get_initial_checkpoint_entries(kind, repo, &files, &base_commit, &file_content_hashes, agent_run_result.as_ref(), ts)?
+        get_initial_checkpoint_entries(
+            kind,
+            repo,
+            &files,
+            &base_commit,
+            &file_content_hashes,
+            agent_run_result.as_ref(),
+            ts,
+        )?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
@@ -219,8 +230,12 @@ pub fn run(
 
     // Skip adding checkpoint if there are no changes
     if !entries.is_empty() {
-        let mut checkpoint =
-            Checkpoint::new(kind.clone(), combined_hash.clone(), author.to_string(), entries.clone());
+        let mut checkpoint = Checkpoint::new(
+            kind.clone(),
+            combined_hash.clone(),
+            author.to_string(),
+            entries.clone(),
+        );
 
         // Compute and set line stats
         let end_stats_clock = Timer::default().start_quiet("checkpoint: compute line stats");
@@ -229,7 +244,9 @@ pub fn run(
         Timer::default().print_duration("checkpoint: compute line stats", stats_duration);
 
         // Set transcript and agent_id if provided and not a human checkpoint
-        if kind != CheckpointKind::Human && let Some(agent_run) = &agent_run_result {
+        if kind != CheckpointKind::Human
+            && let Some(agent_run) = &agent_run_result
+        {
             checkpoint.transcript = Some(agent_run.transcript.clone().unwrap_or_default());
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
@@ -242,7 +259,9 @@ pub fn run(
         checkpoints.push(checkpoint);
     }
 
-    let agent_tool = if kind != CheckpointKind::Human && let Some(agent_run_result) = &agent_run_result {
+    let agent_tool = if kind != CheckpointKind::Human
+        && let Some(agent_run_result) = &agent_run_result
+    {
         Some(agent_run_result.agent_id.tool.as_str())
     } else {
         None
@@ -476,15 +495,22 @@ fn get_initial_checkpoint_entries(
                 if author == CheckpointKind::Human.to_str() {
                     continue;
                 }
-                prev_line_attributions.push(crate::authorship::attribution_tracker::LineAttribution {
-                    start_line: line,
-                    end_line: line,
-                    author_id: author.clone(),
-                });
+                prev_line_attributions.push(
+                    crate::authorship::attribution_tracker::LineAttribution {
+                        start_line: line,
+                        end_line: line,
+                        author_id: author.clone(),
+                    },
+                );
             }
         }
         // Convert any line attributions to character attributions
-        let prev_attributions = crate::authorship::attribution_tracker::line_attributions_to_attributions(&prev_line_attributions, &previous_content, ts);
+        let prev_attributions =
+            crate::authorship::attribution_tracker::line_attributions_to_attributions(
+                &prev_line_attributions,
+                &previous_content,
+                ts,
+            );
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
@@ -492,7 +518,15 @@ fn get_initial_checkpoint_entries(
             .cloned()
             .unwrap_or_default();
 
-        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content, ts)?;
+        let entry = make_entry_for_file(
+            file_path,
+            &blob_sha,
+            &author_id,
+            &previous_content,
+            &prev_attributions,
+            &current_content,
+            ts,
+        )?;
         entries.push(entry);
     }
 
@@ -527,10 +561,14 @@ fn get_subsequent_checkpoint_entries(
     };
 
     // Build a map of file path -> (blob_sha, attributions) by iterating through previous checkpoints to get the latest
-    let mut previous_file_hashes_with_attributions: HashMap<String, (String, Vec<Attribution>)> = HashMap::new();
+    let mut previous_file_hashes_with_attributions: HashMap<String, (String, Vec<Attribution>)> =
+        HashMap::new();
     for checkpoint in previous_checkpoints {
         for entry in &checkpoint.entries {
-            previous_file_hashes_with_attributions.insert(entry.file.clone(), (entry.blob_sha.clone(), entry.attributions.clone()));
+            previous_file_hashes_with_attributions.insert(
+                entry.file.clone(),
+                (entry.blob_sha.clone(), entry.attributions.clone()),
+            );
         }
     }
 
@@ -541,10 +579,13 @@ fn get_subsequent_checkpoint_entries(
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
         // Read the previous content from the blob storage using the previous checkpoint's blob_sha
-        let (previous_content, prev_attributions) = if let Some((prev_content_hash, prev_attrs)) = previous_file_hashes_with_attributions.get(file_path)
+        let (previous_content, prev_attributions) = if let Some((prev_content_hash, prev_attrs)) =
+            previous_file_hashes_with_attributions.get(file_path)
         {
             (
-                working_log.get_file_version(prev_content_hash).unwrap_or_default(),
+                working_log
+                    .get_file_version(prev_content_hash)
+                    .unwrap_or_default(),
                 prev_attrs.clone(),
             )
         } else {
@@ -562,7 +603,15 @@ fn get_subsequent_checkpoint_entries(
             .cloned()
             .unwrap_or_default();
 
-        let entry = make_entry_for_file(file_path, &blob_sha, &author_id, &previous_content, &prev_attributions, &current_content, ts)?;
+        let entry = make_entry_for_file(
+            file_path,
+            &blob_sha,
+            &author_id,
+            &previous_content,
+            &prev_attributions,
+            &current_content,
+            ts,
+        )?;
         entries.push(entry);
     }
 
@@ -579,7 +628,12 @@ fn make_entry_for_file(
     ts: u128,
 ) -> Result<WorkingLogEntry, GitAiError> {
     let tracker = AttributionTracker::new();
-    let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(previous_content, previous_attributions, &CheckpointKind::Human.to_str(), ts-1);
+    let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(
+        previous_content,
+        previous_attributions,
+        &CheckpointKind::Human.to_str(),
+        ts - 1,
+    );
     let new_attributions = tracker.update_attributions(
         previous_content,
         content,
@@ -589,8 +643,17 @@ fn make_entry_for_file(
     )?;
     // TODO Consider discarding any "uncontentious" attributions for the human author. Any human attributions that do not share a line with any other author's attributions can be discarded.
     // let filtered_attributions = crate::authorship::attribution_tracker::discard_uncontentious_attributions_for_author(&new_attributions, &CheckpointKind::Human.to_str());
-    let line_attributions = crate::authorship::attribution_tracker::attributions_to_line_attributions(&new_attributions, content);
-    Ok(WorkingLogEntry::new(file_path.to_string(), blob_sha.to_string(), new_attributions, line_attributions))
+    let line_attributions =
+        crate::authorship::attribution_tracker::attributions_to_line_attributions(
+            &new_attributions,
+            content,
+        );
+    Ok(WorkingLogEntry::new(
+        file_path.to_string(),
+        blob_sha.to_string(),
+        new_attributions,
+        line_attributions,
+    ))
 }
 
 /// Compute line statistics by diffing files against their previous versions
@@ -628,7 +691,9 @@ fn compute_line_stats(
             working_log.get_file_version(prev_hash).unwrap_or_default()
         } else {
             // No previous version, try to get from HEAD
-            let head_commit = repo.head().ok()
+            let head_commit = repo
+                .head()
+                .ok()
                 .and_then(|h| h.target().ok())
                 .and_then(|oid| repo.find_commit(oid).ok());
             let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());

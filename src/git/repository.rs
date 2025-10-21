@@ -1262,7 +1262,11 @@ impl Repository {
 
     /// Get the content of a file at a specific commit
     /// Uses `git show <commit>:<path>` for efficient single-call retrieval
-    pub fn get_file_content(&self, file_path: &str, commit_hash: &str) -> Result<Vec<u8>, GitAiError> {
+    pub fn get_file_content(
+        &self,
+        file_path: &str,
+        commit_hash: &str,
+    ) -> Result<Vec<u8>, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("show".to_string());
         args.push(format!("{}:{}", commit_hash, file_path));

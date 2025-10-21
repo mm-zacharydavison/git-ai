@@ -1,4 +1,4 @@
-use crate::authorship::working_log::{Checkpoint, CHECKPOINT_API_VERSION};
+use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
 use crate::utils::debug_log;
@@ -192,7 +192,10 @@ impl PersistedWorkingLog {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
             if checkpoint.api_version != CHECKPOINT_API_VERSION {
-                debug_log(&format!("unsupported checkpoint api version: {} (silently skipping checkpoint)", checkpoint.api_version));
+                debug_log(&format!(
+                    "unsupported checkpoint api version: {} (silently skipping checkpoint)",
+                    checkpoint.api_version
+                ));
                 continue;
             }
 
@@ -420,7 +423,11 @@ mod tests {
             .read_all_checkpoints()
             .expect("Failed to read checkpoints");
 
-        assert_eq!(checkpoints.len(), 1, "Only the correct version should remain");
+        assert_eq!(
+            checkpoints.len(),
+            1,
+            "Only the correct version should remain"
+        );
         assert_eq!(checkpoints[0].author, "correct-author");
         assert_eq!(checkpoints[0].api_version, CHECKPOINT_API_VERSION);
     }
