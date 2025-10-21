@@ -8,6 +8,7 @@ use crate::error::GitAiError;
 use diff_match_patch_rs::dmp::Diff;
 use diff_match_patch_rs::traits::Efficient;
 use diff_match_patch_rs::{DiffMatchPatch, Ops};
+use crate::authorship::move_detection::{detect_moves, InsertedLine, DeletedLine};
 use std::collections::HashMap;
 
 /// Represents a single attribution range in the file.
@@ -117,54 +118,96 @@ impl Attribution {
 
 /// Represents a deletion operation from the diff
 #[derive(Debug, Clone)]
-struct Deletion {
+pub(crate) struct Deletion {
     /// Start position in old content
-    start: usize,
+    pub(crate) start: usize,
     /// End position in old content
-    end: usize,
+    pub(crate) end: usize,
     /// The deleted text
-    text: String,
+    pub(crate) text: String,
 }
 
 /// Represents an insertion operation from the diff
 #[derive(Debug, Clone)]
-struct Insertion {
+pub(crate) struct Insertion {
     /// Start position in new content
-    start: usize,
+    pub(crate) start: usize,
     /// End position in new content
-    end: usize,
+    pub(crate) end: usize,
     /// The inserted text
-    text: String,
+    pub(crate) text: String,
 }
 
 /// Information about a detected move operation
 #[derive(Debug, Clone)]
-struct MoveMapping {
+pub(crate) struct MoveMapping {
     /// The deletion that was moved
-    deletion_idx: usize,
+    pub(crate) deletion_idx: usize,
     /// The insertion where it was moved to
-    insertion_idx: usize,
-    /// Similarity score (0.0 to 1.0)
-    similarity: f64,
+    pub(crate) insertion_idx: usize,
     /// Range within the deletion text that maps to the insertion (start, end) exclusive bounds
-    source_range: (usize, usize),
+    pub(crate) source_range: (usize, usize),
     /// Range within the insertion text where the deletion text lands (start, end) exclusive bounds
-    target_range: (usize, usize),
+    pub(crate) target_range: (usize, usize),
+}
+
+#[derive(Debug, Clone)]
+struct LineMetadata {
+    number: usize,
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+fn collect_line_metadata(content: &str) -> Vec<LineMetadata> {
+    let mut metadata = Vec::new();
+    let mut line_start = 0usize;
+    let mut line_number = 1usize;
+
+    for (idx, ch) in content.char_indices() {
+        if ch == '\n' {
+            let slice = &content[line_start..idx];
+            let mut text = slice.to_string();
+            if text.ends_with('\r') {
+                text.pop();
+            }
+            metadata.push(LineMetadata {
+                number: line_number,
+                start: line_start,
+                end: idx + 1,
+                text,
+            });
+            line_start = idx + 1;
+            line_number += 1;
+        }
+    }
+
+    if line_start < content.len() {
+        let slice = &content[line_start..content.len()];
+        let mut text = slice.to_string();
+        if text.ends_with('\r') {
+            text.pop();
+        }
+        metadata.push(LineMetadata {
+            number: line_number,
+            start: line_start,
+            end: content.len(),
+            text,
+        });
+    }
+
+    metadata
 }
 
 /// Configuration for the attribution tracker
 pub struct AttributionConfig {
-    /// Minimum similarity threshold for detecting moves (0.0 to 1.0)
-    pub move_threshold: f64,
-    /// Minimum text length to consider for move detection
-    pub min_move_length: usize,
+    move_lines_threshold: usize,
 }
 
 impl Default for AttributionConfig {
     fn default() -> Self {
         AttributionConfig {
-            move_threshold: 0.8,
-            min_move_length: 10,
+            move_lines_threshold: 3,
         }
     }
 }
@@ -270,9 +313,8 @@ impl AttributionTracker {
         // Phase 2: Build deletion and insertion catalogs
         let (deletions, insertions) = self.build_diff_catalog(&diffs);
 
-        // TODO Phase 3: Detect move operations
-        // let move_mappings = self.detect_moves(&deletions, &insertions);
-        let move_mappings = Vec::new();
+        // Phase 3: Detect move operations
+        let move_mappings = self.detect_moves(old_content, new_content, &deletions, &insertions);
 
         // Phase 4: Transform attributions through the diff
         let new_attributions = self.transform_attributions(
@@ -335,177 +377,165 @@ impl AttributionTracker {
     }
 
     /// Detect move operations between deletions and insertions
-    fn detect_moves(&self, deletions: &[Deletion], insertions: &[Insertion]) -> Vec<MoveMapping> {
+    fn detect_moves(
+        &self,
+        old_content: &str,
+        new_content: &str,
+        deletions: &[Deletion],
+        insertions: &[Insertion],
+    ) -> Vec<MoveMapping> {
+        let threshold = self.config.move_lines_threshold;
+        if threshold == 0 || deletions.is_empty() || insertions.is_empty() {
+            return Vec::new();
+        }
+
+        let old_lines = collect_line_metadata(old_content);
+        let new_lines = collect_line_metadata(new_content);
+
+        let old_line_map: HashMap<usize, LineMetadata> = old_lines
+            .iter()
+            .cloned()
+            .map(|line| (line.number, line))
+            .collect();
+        let new_line_map: HashMap<usize, LineMetadata> = new_lines
+            .iter()
+            .cloned()
+            .map(|line| (line.number, line))
+            .collect();
+
+        let mut inserted_lines: Vec<InsertedLine> = Vec::new();
+        for (insertion_idx, insertion) in insertions.iter().enumerate() {
+            for line in new_lines.iter() {
+                if line.start < insertion.end && line.end > insertion.start {
+                    inserted_lines.push(InsertedLine::new(
+                        line.text.clone(),
+                        line.number,
+                        insertion_idx,
+                    ));
+                }
+            }
+        }
+
+        let mut deleted_lines: Vec<DeletedLine> = Vec::new();
+        for (deletion_idx, deletion) in deletions.iter().enumerate() {
+            for line in old_lines.iter() {
+                if line.start < deletion.end && line.end > deletion.start {
+                    deleted_lines.push(DeletedLine::new(
+                        line.text.clone(),
+                        line.number,
+                        deletion_idx,
+                    ));
+                }
+            }
+        }
+
+        if inserted_lines.is_empty() || deleted_lines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut inserted_lines_slice = inserted_lines;
+        let mut deleted_lines_slice = deleted_lines;
+        let line_mappings = detect_moves(
+            inserted_lines_slice.as_mut_slice(),
+            deleted_lines_slice.as_mut_slice(),
+            threshold,
+        );
+
         let mut move_mappings = Vec::new();
-        let mut used_insertions = std::collections::HashSet::new();
 
-        // Process deletions from largest to smallest for better matching
-        let mut deletion_indices: Vec<usize> = (0..deletions.len()).collect();
-        deletion_indices.sort_by_key(|&i| std::cmp::Reverse(deletions[i].text.len()));
-
-        for &del_idx in &deletion_indices {
-            let deletion = &deletions[del_idx];
-
-            // Skip small deletions
-            if deletion.text.len() < self.config.min_move_length {
+        'mapping: for line_mapping in line_mappings {
+            if line_mapping.deleted.is_empty() || line_mapping.inserted.is_empty() {
+                continue;
+            }
+            if line_mapping.deleted.len() != line_mapping.inserted.len() {
                 continue;
             }
 
-            let mut best_match: Option<(usize, usize, f64, f64, (usize, usize), (usize, usize))> =
-                None;
-
-            for (ins_idx, insertion) in insertions.iter().enumerate() {
-                if used_insertions.contains(&ins_idx) {
-                    continue;
-                }
-
-                if let Some((source_range, target_range, match_len, score, similarity)) =
-                    self.evaluate_move_candidate(&deletion.text, &insertion.text)
-                {
-                    match &best_match {
-                        Some((_, best_len, best_score, _, _, _)) => {
-                            if match_len > *best_len
-                                || (match_len == *best_len && score > *best_score)
-                            {
-                                best_match = Some((
-                                    ins_idx,
-                                    match_len,
-                                    score,
-                                    similarity,
-                                    source_range,
-                                    target_range,
-                                ));
-                            }
-                        }
-                        None => {
-                            best_match = Some((
-                                ins_idx,
-                                match_len,
-                                score,
-                                similarity,
-                                source_range,
-                                target_range,
-                            ));
-                        }
-                    }
-                }
-            }
-
-            if let Some((ins_idx, _match_len, _score, similarity, source_range, target_range)) =
-                best_match
+            let deletion_idx = line_mapping.deleted[0].deletion_idx;
+            if !line_mapping
+                .deleted
+                .iter()
+                .all(|line| line.deletion_idx == deletion_idx)
             {
-                move_mappings.push(MoveMapping {
-                    deletion_idx: del_idx,
-                    insertion_idx: ins_idx,
-                    similarity,
-                    source_range,
-                    target_range,
-                });
-                used_insertions.insert(ins_idx);
+                continue;
             }
+
+            let insertion_idx = line_mapping.inserted[0].insertion_idx;
+            if !line_mapping
+                .inserted
+                .iter()
+                .all(|line| line.insertion_idx == insertion_idx)
+            {
+                continue;
+            }
+
+            let deletion = match deletions.get(deletion_idx) {
+                Some(value) => value,
+                None => continue,
+            };
+            let insertion = match insertions.get(insertion_idx) {
+                Some(value) => value,
+                None => continue,
+            };
+
+            let mut source_start_opt: Option<usize> = None;
+            let mut source_end_opt: Option<usize> = None;
+            for deleted_line in &line_mapping.deleted {
+                let meta = match old_line_map.get(&deleted_line.line_number) {
+                    Some(meta) => meta,
+                    None => continue 'mapping,
+                };
+                let start = meta.start.max(deletion.start);
+                let end = meta.end.min(deletion.end);
+                if start >= end {
+                    continue 'mapping;
+                }
+                let rel_start = start - deletion.start;
+                let rel_end = end - deletion.start;
+                if source_start_opt.is_none() {
+                    source_start_opt = Some(rel_start);
+                }
+                source_end_opt = Some(rel_end);
+            }
+
+            let mut target_start_opt: Option<usize> = None;
+            let mut target_end_opt: Option<usize> = None;
+            for inserted_line in &line_mapping.inserted {
+                let meta = match new_line_map.get(&inserted_line.line_number) {
+                    Some(meta) => meta,
+                    None => continue 'mapping,
+                };
+                let start = meta.start.max(insertion.start);
+                let end = meta.end.min(insertion.end);
+                if start >= end {
+                    continue 'mapping;
+                }
+                let rel_start = start - insertion.start;
+                let rel_end = end - insertion.start;
+                if target_start_opt.is_none() {
+                    target_start_opt = Some(rel_start);
+                }
+                target_end_opt = Some(rel_end);
+            }
+
+            let (source_start, source_end) = match (source_start_opt, source_end_opt) {
+                (Some(start), Some(end)) if start < end => (start, end),
+                _ => continue,
+            };
+            let (target_start, target_end) = match (target_start_opt, target_end_opt) {
+                (Some(start), Some(end)) if start < end => (start, end),
+                _ => continue,
+            };
+
+            move_mappings.push(MoveMapping {
+                deletion_idx,
+                insertion_idx,
+                source_range: (source_start, source_end),
+                target_range: (target_start, target_end),
+            });
         }
 
         move_mappings
-    }
-
-    /// Compute similarity between two text strings
-    fn compute_similarity(&self, text1: &str, text2: &str) -> f64 {
-        if text1 == text2 {
-            return 1.0;
-        }
-
-        if text1.is_empty() || text2.is_empty() {
-            return 0.0;
-        }
-
-        // Use Jaro-Winkler similarity from strsim
-        strsim::jaro_winkler(text1, text2)
-    }
-
-    /// Evaluate whether a deletion/insertion pair represents a move and return the best overlap.
-    /// Returns (source_range, target_range, matched_length, ranking_score, similarity)
-    fn evaluate_move_candidate(
-        &self,
-        deletion_text: &str,
-        insertion_text: &str,
-    ) -> Option<((usize, usize), (usize, usize), usize, f64, f64)> {
-        if deletion_text.is_empty() || insertion_text.is_empty() {
-            return None;
-        }
-
-        let similarity = self.compute_similarity(deletion_text, insertion_text);
-        let overlap = self.find_best_overlap(deletion_text, insertion_text)?;
-        let match_len = overlap.2;
-
-        // Determine if this overlap is meaningful enough to consider as a move
-        let has_strong_overlap = match_len >= self.config.min_move_length;
-        let meets_similarity = similarity >= self.config.move_threshold;
-
-        if !has_strong_overlap && !meets_similarity {
-            return None;
-        }
-
-        let source_range = (overlap.0, overlap.0 + match_len);
-        let target_range = (overlap.1, overlap.1 + match_len);
-
-        // Ranking score prioritizes longer overlaps, with similarity as a tie-breaker
-        let score = if has_strong_overlap {
-            match_len as f64
-        } else {
-            similarity
-        };
-
-        Some((source_range, target_range, match_len, score, similarity))
-    }
-
-    /// Finds the longest overlapping region between the deletion and insertion text.
-    /// Returns (deletion_offset, insertion_offset, length) in characters.
-    fn find_best_overlap(
-        &self,
-        deletion_text: &str,
-        insertion_text: &str,
-    ) -> Option<(usize, usize, usize)> {
-        if deletion_text.is_empty() || insertion_text.is_empty() {
-            return None;
-        }
-
-        if let Some(pos) = insertion_text.find(deletion_text) {
-            return Some((0, pos, deletion_text.len()));
-        }
-
-        if let Some(pos) = deletion_text.find(insertion_text) {
-            return Some((pos, 0, insertion_text.len()));
-        }
-
-        let dmp = DiffMatchPatch::new();
-        let diffs = dmp
-            .diff_main::<Efficient>(deletion_text, insertion_text)
-            .ok()?;
-
-        let mut best = (0usize, 0usize, 0usize);
-        let mut del_cursor = 0usize;
-        let mut ins_cursor = 0usize;
-
-        for diff in diffs {
-            let len = diff.data().len();
-            match diff.op() {
-                Ops::Equal => {
-                    if len > best.2 {
-                        best = (del_cursor, ins_cursor, len);
-                    }
-                    del_cursor += len;
-                    ins_cursor += len;
-                }
-                Ops::Delete => {
-                    del_cursor += len;
-                }
-                Ops::Insert => {
-                    ins_cursor += len;
-                }
-            }
-        }
-
-        if best.2 > 0 { Some(best) } else { None }
     }
 
     /// Transform attributions through the diff
@@ -521,15 +551,25 @@ impl AttributionTracker {
         let mut new_attributions = Vec::new();
 
         // Build lookup maps for moves
-        let mut deletion_to_move: HashMap<usize, &MoveMapping> = HashMap::new();
+        let mut deletion_to_move: HashMap<usize, Vec<&MoveMapping>> = HashMap::new();
         let mut insertion_move_ranges: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
 
         for mapping in move_mappings {
-            deletion_to_move.insert(mapping.deletion_idx, mapping);
+            let entry = deletion_to_move.entry(mapping.deletion_idx).or_default();
+            if !entry.iter().any(|existing| {
+                existing.source_range == mapping.source_range
+                    && existing.target_range == mapping.target_range
+            }) {
+                entry.push(mapping);
+            }
             insertion_move_ranges
                 .entry(mapping.insertion_idx)
                 .or_default()
                 .push(mapping.target_range);
+        }
+
+        for mappings in deletion_to_move.values_mut() {
+            mappings.sort_by_key(|m| m.source_range.0);
         }
 
         let mut old_pos = 0;
@@ -571,30 +611,31 @@ impl AttributionTracker {
                     let deletion_range = (old_pos, old_pos + len);
 
                     // Check if this deletion is part of a move
-                    if let Some(mapping) = deletion_to_move.get(&deletion_idx) {
-                        // This text was moved - transform attributions to new location
-                        let insertion = &insertions[mapping.insertion_idx];
-                        let source_start = deletion_range.0 + mapping.source_range.0;
-                        let source_end = deletion_range.0 + mapping.source_range.1;
+                    if let Some(mappings) = deletion_to_move.get(&deletion_idx) {
+                        for mapping in mappings {
+                            let insertion = &insertions[mapping.insertion_idx];
+                            let source_start = deletion_range.0 + mapping.source_range.0;
+                            let source_end = deletion_range.0 + mapping.source_range.1;
 
-                        if source_start < source_end {
-                            let target_start = insertion.start + mapping.target_range.0;
+                            if source_start < source_end {
+                                let target_start = insertion.start + mapping.target_range.0;
 
-                            for attr in old_attributions {
-                                if let Some((overlap_start, overlap_end)) =
-                                    attr.intersection(source_start, source_end)
-                                {
-                                    let offset_in_source = overlap_start - source_start;
-                                    let new_start = target_start + offset_in_source;
-                                    let new_end = new_start + (overlap_end - overlap_start);
+                                for attr in old_attributions {
+                                    if let Some((overlap_start, overlap_end)) =
+                                        attr.intersection(source_start, source_end)
+                                    {
+                                        let offset_in_source = overlap_start - source_start;
+                                        let new_start = target_start + offset_in_source;
+                                        let new_end = new_start + (overlap_end - overlap_start);
 
-                                    if new_start < new_end {
-                                        new_attributions.push(Attribution::new(
-                                            new_start,
-                                            new_end,
-                                            attr.author_id.clone(),
-                                            attr.ts,
-                                        ));
+                                        if new_start < new_end {
+                                            new_attributions.push(Attribution::new(
+                                                new_start,
+                                                new_end,
+                                                attr.author_id.clone(),
+                                                attr.ts,
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -1866,7 +1907,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore]
     fn test_move_with_unchanged_content_between() {
         let tracker = AttributionTracker::new();
 
@@ -2630,5 +2670,427 @@ fn compute() -> i32 {
         assert!(gap_ranges.contains(&(3, 4)), "Should have gap 3-4");
         assert!(gap_ranges.contains(&(6, 7)), "Should have gap 6-7");
         assert!(gap_ranges.contains(&(9, 10)), "Should have gap 9-10");
+    }
+
+    // Test data for mobile nav scenarios
+    fn mobile_nav_test_blocks() -> (&'static str, &'static str, &'static str) {
+        let human_block_1 = r#""use client"
+
+import * as React from "react"
+import Link, { LinkProps } from "next/link"
+import { useRouter } from "next/navigation"
+
+import { PAGES_NEW } from "@/lib/docs"
+import { showMcpDocs } from "@/lib/flags"
+import { source } from "@/lib/source"
+import { cn } from "@/lib/utils"
+import { Button } from "@/registry/new-york-v4/ui/button"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/registry/new-york-v4/ui/popover""#;
+
+        let human_block_2 = r#"const TOP_LEVEL_SECTIONS = [
+  { name: "Get Started", href: "/docs" },
+  {
+    name: "Components",
+    href: "/docs/components",
+  },
+  {
+    name: "Registry",
+    href: "/docs/registry",
+  },
+  {
+    name: "MCP Server",
+    href: "/docs/mcp",
+  },
+  {
+    name: "Forms",
+    href: "/docs/forms",
+  },
+  {
+    name: "Changelog",
+    href: "/docs/changelog",
+  },
+]
+
+export function MobileNav({
+  tree,
+  items,
+  className,
+}: {
+  tree: typeof source.pageTree
+  items: { href: string; label: string }[]
+  className?: string
+}) {
+  const [open, setOpen] = React.useState(false)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn(
+            "extend-touch-target h-8 touch-manipulation items-center justify-start gap-2.5 !p-0 hover:bg-transparent focus-visible:bg-transparent focus-visible:ring-0 active:bg-transparent dark:hover:bg-transparent",
+            className
+          )}
+        >
+          <div className="relative flex h-8 w-4 items-center justify-center">
+            <div className="relative size-4">
+              <span
+                className={cn(
+                  "bg-foreground absolute left-0 block h-0.5 w-4 transition-all duration-100",
+                  open ? "top-[0.4rem] -rotate-45" : "top-1"
+                )}
+              />
+              <span
+                className={cn(
+                  "bg-foreground absolute left-0 block h-0.5 w-4 transition-all duration-100",
+                  open ? "top-[0.4rem] rotate-45" : "top-2.5"
+                )}
+              />
+            </div>
+            <span className="sr-only">Toggle Menu</span>
+          </div>
+          <span className="flex h-8 items-center text-lg leading-none font-medium">
+            Menu
+          </span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="bg-background/90 no-scrollbar h-(--radix-popper-available-height) w-(--radix-popper-available-width) overflow-y-auto rounded-none border-none p-0 shadow-none backdrop-blur duration-100"
+        align="start"
+        side="bottom"
+        alignOffset={-16}
+        sideOffset={14}
+      >
+        <div className="flex flex-col gap-12 overflow-auto px-6 py-6">
+          <div className="flex flex-col gap-4">
+            <div className="text-muted-foreground text-sm font-medium">
+              Menu
+            </div>
+            <div className="flex flex-col gap-3">
+              <MobileLink href="/" onOpenChange={setOpen}>
+                Home
+              </MobileLink>
+              {items.map((item, index) => (
+                <MobileLink key={index} href={item.href} onOpenChange={setOpen}>
+                  {item.label}
+                </MobileLink>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="text-muted-foreground text-sm font-medium">
+              Sections
+            </div>
+            <div className="flex flex-col gap-3">
+              {TOP_LEVEL_SECTIONS.map(({ name, href }) => {
+                if (!showMcpDocs && href.includes("/mcp")) {
+                  return null
+                }
+                return (
+                  <MobileLink key={name} href={href} onOpenChange={setOpen}>
+                    {name}
+                  </MobileLink>
+                )
+              })}
+            </div>
+          </div>
+          <div className="flex flex-col gap-8">
+            {tree?.children?.map((group, index) => {
+              if (group.type === "folder") {
+                return (
+                  <div key={index} className="flex flex-col gap-4">
+                    <div className="text-muted-foreground text-sm font-medium">
+                      {group.name}
+                    </div>
+                    <div className="flex flex-col gap-3">
+                      {group.children.map((item) => {
+                        if (item.type === "page") {
+                          if (!showMcpDocs && item.url.includes("/mcp")) {
+                            return null
+                          }
+                          return (
+                            <MobileLink
+                              href={item.url}
+                              onOpenChange={setOpen}
+                              className="flex items-center gap-2"
+                            >
+                              {item.name}{" "}
+                              {PAGES_NEW.includes(item.url) && (
+                                <span className="flex size-2 rounded-full bg-blue-500" />
+                              )}
+                            </MobileLink>
+                          )
+                        }
+                      })}
+                    </div>
+                  </div>
+                )
+              }
+            })}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}"#;
+
+        let ai_block = r#"function MobileLink({
+    href,
+    onOpenChange,
+    className,
+    children,
+    ...props
+  }: LinkProps & {
+    onOpenChange?: (open: boolean) => void
+    children: React.ReactNode
+    className?: string
+  }) {
+
+    const router = useRouter()
+    return (
+      <Link
+        href={href}
+        onClick={() => {
+          router.push(href.toString())
+          onOpenChange?.(false)
+        }}
+        className={cn("text-2xl font-medium", className)}
+        {...props}
+      >
+
+        {children}
+
+      </Link>
+    )
+  }"#;
+
+        (human_block_1, human_block_2, ai_block)
+    }
+
+    #[test]
+    fn test_mobile_nav_move_scenario() {
+        // This test mimics the behavior from scripts/mobile-nav-test.ts
+        // where an AI block is added at the bottom, then moved to the middle
+        let tracker = AttributionTracker::new();
+        let (human_block_1, human_block_2, ai_block) = mobile_nav_test_blocks();
+
+        // Step 1: Two human blocks only
+        let step1_content = format!("{}\n\n{}", human_block_1, human_block_2);
+        let step1_attributions = vec![Attribution::new(
+            0,
+            step1_content.len(),
+            "human".to_string(),
+            TEST_TS,
+        )];
+
+        // Step 2: AI block added at the bottom
+        let step2_content = format!("{}\n\n{}\n\n{}", human_block_1, human_block_2, ai_block);
+        let step2_attributions = tracker
+            .update_attributions(
+                &step1_content,
+                &step2_content,
+                &step1_attributions,
+                "ai",
+                TEST_TS + 1,
+            )
+            .unwrap();
+
+        // Verify AI block is attributed to "ai"
+        let ai_block_start = step2_content.find("function MobileLink").unwrap();
+        let ai_block_end = ai_block_start + ai_block.len();
+
+        let ai_chars_in_step2: usize = step2_attributions
+            .iter()
+            .filter(|a| a.author_id == "ai")
+            .map(|a| {
+                let overlap_start = a.start.max(ai_block_start);
+                let overlap_end = a.end.min(ai_block_end);
+                if overlap_start < overlap_end {
+                    overlap_end - overlap_start
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        assert!(
+            ai_chars_in_step2 > ai_block.len() / 2,
+            "AI block should be mostly attributed to 'ai' in step 2, got {} chars out of {}",
+            ai_chars_in_step2,
+            ai_block.len()
+        );
+
+        // Step 3: Move AI block to the middle (Human 1 + AI + Human 2)
+        let step3_content = format!("{}\n\n{}\n\n{}", human_block_1, ai_block, human_block_2);
+        let step3_attributions = tracker
+            .update_attributions(
+                &step2_content,
+                &step3_content,
+                &step2_attributions,
+                "human",
+                TEST_TS + 2,
+            )
+            .unwrap();
+
+        // Verify the AI block MOVED and retained attribution
+        let ai_block_new_start = step3_content.find("function MobileLink").unwrap();
+        let ai_block_new_end = ai_block_new_start + ai_block.len();
+
+        let ai_chars_in_step3: usize = step3_attributions
+            .iter()
+            .filter(|a| a.author_id == "ai")
+            .map(|a| {
+                let overlap_start = a.start.max(ai_block_new_start);
+                let overlap_end = a.end.min(ai_block_new_end);
+                if overlap_start < overlap_end {
+                    overlap_end - overlap_start
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        // The critical assertion: AI block should retain AI attribution after the move
+        assert!(
+            ai_chars_in_step3 > ai_block.len() / 2,
+            "AI block should retain 'ai' attribution after move, got {} chars out of {} ({}%)",
+            ai_chars_in_step3,
+            ai_block.len(),
+            (ai_chars_in_step3 * 100) / ai_block.len()
+        );
+
+        // Additional verification: human blocks should remain attributed to human
+        let human_block_2_start = step3_content.rfind("const TOP_LEVEL_SECTIONS").unwrap();
+        let human_chars_in_block2: usize = step3_attributions
+            .iter()
+            .filter(|a| a.author_id == "human")
+            .filter(|a| a.start >= human_block_2_start)
+            .map(|a| a.len())
+            .sum();
+
+        assert!(
+            human_chars_in_block2 > human_block_2.len() / 2,
+            "Human block 2 should retain 'human' attribution, got {} chars out of {}",
+            human_chars_in_block2,
+            human_block_2.len()
+        );
+    }
+
+    #[test]
+    fn test_mobile_nav_move_scenario_with_indentation() {
+        // This test mimics the behavior from scripts/mobile-nav-test.ts
+        // where an AI block is added at the bottom, then moved to the middle
+        let tracker = AttributionTracker::new();
+        let (human_block_1, human_block_2, ai_block) = mobile_nav_test_blocks();
+
+        // Step 1: Two human blocks only
+        let step1_content = format!("{}\n\n{}", human_block_1, human_block_2);
+        let step1_attributions = vec![Attribution::new(
+            0,
+            step1_content.len(),
+            "human".to_string(),
+            TEST_TS,
+        )];
+
+        // Step 2: AI block added at the bottom
+        let step2_content = format!("{}\n\n{}\n\n{}", human_block_1, human_block_2, ai_block);
+        let step2_attributions = tracker
+            .update_attributions(
+                &step1_content,
+                &step2_content,
+                &step1_attributions,
+                "ai",
+                TEST_TS + 1,
+            )
+            .unwrap();
+
+        // Verify AI block is attributed to "ai"
+        let ai_block_start = step2_content.find("function MobileLink").unwrap();
+        let ai_block_end = ai_block_start + ai_block.len();
+
+        let ai_chars_in_step2: usize = step2_attributions
+            .iter()
+            .filter(|a| a.author_id == "ai")
+            .map(|a| {
+                let overlap_start = a.start.max(ai_block_start);
+                let overlap_end = a.end.min(ai_block_end);
+                if overlap_start < overlap_end {
+                    overlap_end - overlap_start
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        assert!(
+            ai_chars_in_step2 > ai_block.len() / 2,
+            "AI block should be mostly attributed to 'ai' in step 2, got {} chars out of {}",
+            ai_chars_in_step2,
+            ai_block.len()
+        );
+
+        // Step 3: Move AI block to the middle (Human 1 + AI + Human 2)
+        let step3_content = format!(
+            "{}\n\n{}\n\n{}",
+            human_block_1,
+            ai_block.replace("\n", "\n    "),
+            human_block_2
+        );
+        let step3_attributions = tracker
+            .update_attributions(
+                &step2_content,
+                &step3_content,
+                &step2_attributions,
+                "human",
+                TEST_TS + 2,
+            )
+            .unwrap();
+
+        // Verify the AI block MOVED and retained attribution
+        let ai_block_new_start = step3_content.find("function MobileLink").unwrap();
+        let ai_block_new_end = ai_block_new_start + ai_block.len();
+
+        let ai_chars_in_step3: usize = step3_attributions
+            .iter()
+            .filter(|a| a.author_id == "ai")
+            .map(|a| {
+                let overlap_start = a.start.max(ai_block_new_start);
+                let overlap_end = a.end.min(ai_block_new_end);
+                if overlap_start < overlap_end {
+                    overlap_end - overlap_start
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        // The critical assertion: AI block should retain AI attribution after the move
+        assert!(
+            ai_chars_in_step3 > ai_block.len() / 2,
+            "AI block should retain 'ai' attribution after move, got {} chars out of {} ({}%)",
+            ai_chars_in_step3,
+            ai_block.len(),
+            (ai_chars_in_step3 * 100) / ai_block.len()
+        );
+
+        // Additional verification: human blocks should remain attributed to human
+        let human_block_2_start = step3_content.rfind("const TOP_LEVEL_SECTIONS").unwrap();
+        let human_chars_in_block2: usize = step3_attributions
+            .iter()
+            .filter(|a| a.author_id == "human")
+            .filter(|a| a.start >= human_block_2_start)
+            .map(|a| a.len())
+            .sum();
+
+        assert!(
+            human_chars_in_block2 > human_block_2.len() / 2,
+            "Human block 2 should retain 'human' attribution, got {} chars out of {}",
+            human_chars_in_block2,
+            human_block_2.len()
+        );
     }
 }

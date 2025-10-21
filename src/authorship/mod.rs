@@ -1,4 +1,5 @@
 pub mod attribution_tracker;
+pub mod move_detection;
 pub mod authorship_log;
 pub mod authorship_log_serialization;
 pub mod post_commit;
