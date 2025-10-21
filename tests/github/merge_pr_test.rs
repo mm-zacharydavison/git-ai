@@ -19,6 +19,13 @@ fn test_merge_pr_with_mixed_authorship() {
         panic!("Failed to create GitHub repository: {}", e);
     }
 
+    println!("📦 Installing GitHub Action workflow (should skip on merge commits)");
+    test_repo.install_github_action()
+        .expect("Failed to install GitHub Action");
+
+    test_repo.commit_and_push_workflow()
+        .expect("Failed to commit and push workflow");
+
     test_repo.create_branch("feature/basic-test")
         .expect("Failed to create feature branch");
 
@@ -58,6 +65,17 @@ fn test_merge_pr_with_mixed_authorship() {
 
     test_repo.merge_pr(&pr_number, MergeStrategy::Merge)
         .expect("Failed to merge PR");
+
+    println!("⏳ Waiting for GitHub Action to complete (should skip merge commits)...");
+    match test_repo.wait_for_workflow_completion(120) {
+        Ok(run_id) => {
+            println!("✅ GitHub Action completed (run ID: {})", run_id);
+            println!("   Note: Workflow should have skipped authorship processing for merge commit");
+        }
+        Err(e) => {
+            eprintln!("⚠️  Warning: GitHub Action workflow issue: {}", e);
+        }
+    }
 
     test_repo.checkout_and_pull_default_branch()
         .expect("Failed to checkout and pull main branch");

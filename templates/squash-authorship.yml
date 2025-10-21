@@ -34,26 +34,44 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh | bash
           echo "$HOME/.git-ai/bin" >> $GITHUB_PATH
 
-      - name: Run squash-authorship
+      - name: Run squash-authorship if needed
+        id: run-squash-authorship-if-needed
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          BRANCH="${{ github.event.pull_request.head.ref }}"
           NEW_SHA="${{ github.event.pull_request.merge_commit_sha }}"
-          # Use the HEAD SHA of the PR branch before it was merged/deleted
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
 
-          echo "Branch: $BRANCH"
-          echo "New SHA (merge commit): $NEW_SHA"
-          echo "Head SHA (PR branch HEAD): $HEAD_SHA"
-          echo ""
-          echo "Running: git-ai squash-authorship $BRANCH $NEW_SHA $HEAD_SHA"
-          git-ai squash-authorship "$BRANCH" "$NEW_SHA" "$HEAD_SHA" || {
-            echo "squash-authorship failed with exit code $?"
-            exit 1
-          }
+          # Check if this is a squash merge (1 parent) or regular merge (2 parents)
+          PARENT_COUNT=$(git rev-list --parents -n 1 "$NEW_SHA" | wc -w)
+          # rev-list output includes the commit itself, so subtract 1
+          PARENT_COUNT=$((PARENT_COUNT - 1))
+
+          echo "Merge commit: $NEW_SHA"
+          echo "Number of parents: $PARENT_COUNT"
+
+          if [ "$PARENT_COUNT" -eq 1 ]; then
+            echo "✓ This is a squash merge - processing authorship"
+
+            BRANCH="${{ github.event.pull_request.head.ref }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+            echo "Branch: $BRANCH"
+            echo "Head SHA (PR branch HEAD): $HEAD_SHA"
+            echo ""
+            echo "Running: git-ai squash-authorship $BRANCH $NEW_SHA $HEAD_SHA"
+            git-ai squash-authorship "$BRANCH" "$NEW_SHA" "$HEAD_SHA" || {
+              echo "squash-authorship failed with exit code $?"
+              exit 1
+            }
+          else
+            echo "⊘ This is a merge commit (not squash) - skipping authorship processing"
+            echo "  Authorship is already preserved in the individual commits"
+            # Set output to skip the push step
+            echo "skip_push=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Push authorship notes
+        if: steps.run-squash-authorship-if-needed.outputs.skip_push != 'true'
         run: |
           git push origin refs/notes/ai
