@@ -777,6 +777,8 @@ impl AuthorshipLog {
                 );
                 ai_checkpoint.agent_id = Some(prompt_record.agent_id.clone());
 
+                // TODO Fill in the LineStats
+
                 // Reconstruct transcript from messages
                 let mut transcript = crate::authorship::transcript::AiTranscript::new();
                 for message in &prompt_record.messages {

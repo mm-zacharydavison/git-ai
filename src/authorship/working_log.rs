@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub const CHECKPOINT_API_VERSION: &str = "checkpoint/1.0.0";
+
 /// Represents a working log entry for a specific file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkingLogEntry {
@@ -124,6 +126,8 @@ pub struct Checkpoint {
     pub agent_id: Option<AgentId>,
     #[serde(default)]
     pub line_stats: CheckpointLineStats,
+    #[serde(default)]
+    pub api_version: String,
 }
 
 impl Checkpoint {
@@ -142,6 +146,7 @@ impl Checkpoint {
             transcript: None,
             agent_id: None,
             line_stats: CheckpointLineStats::default(),
+            api_version: CHECKPOINT_API_VERSION.to_string(),
         }
     }
 }
