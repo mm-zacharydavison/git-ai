@@ -1299,6 +1299,20 @@ impl Repository {
         Ok(Tree { repo: self, oid })
     }
 
+    /// Get the content of a file at a specific commit
+    /// Uses `git show <commit>:<path>` for efficient single-call retrieval
+    pub fn get_file_content(
+        &self,
+        file_path: &str,
+        commit_hash: &str,
+    ) -> Result<Vec<u8>, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("show".to_string());
+        args.push(format!("{}:{}", commit_hash, file_path));
+        let output = exec_git(&args)?;
+        Ok(output.stdout)
+    }
+
     /// List all files changed in a commit
     /// Returns a HashSet of file paths relative to the repository root
     pub fn list_commit_files(

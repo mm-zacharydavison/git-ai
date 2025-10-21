@@ -311,3 +311,53 @@ pub fn copy_ref(repo: &Repository, source_ref: &str, dest_ref: &str) -> Result<(
     exec_git(&args)?;
     Ok(())
 }
+
+/// Search AI notes for a pattern and return matching commit SHAs ordered by commit date (newest first)
+/// Uses git grep to search through refs/notes/ai
+pub fn grep_ai_notes(repo: &Repository, pattern: &str) -> Result<Vec<String>, GitAiError> {
+    let mut args = repo.global_args_for_exec();
+    args.push("--no-pager".to_string());
+    args.push("grep".to_string());
+    args.push("-nI".to_string());
+    args.push(pattern.to_string());
+    args.push("refs/notes/ai".to_string());
+
+    let output = exec_git(&args)?;
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| GitAiError::Generic("Failed to parse git grep output".to_string()))?;
+
+    // Parse output format: refs/notes/ai:ab/cdef123...:line_number:matched_content
+    // Extract the commit SHA from the path
+    let mut shas = HashSet::new();
+    for line in stdout.lines() {
+        if let Some(path_and_rest) = line.strip_prefix("refs/notes/ai:") {
+            if let Some(path_end) = path_and_rest.find(':') {
+                let path = &path_and_rest[..path_end];
+                // Path is in format "ab/cdef123..." - combine to get full SHA
+                let sha = path.replace('/', "");
+                shas.insert(sha);
+            }
+        }
+    }
+
+    // If we have multiple results, sort by commit date (newest first)
+    if shas.len() > 1 {
+        let sha_vec: Vec<String> = shas.into_iter().collect();
+        let mut args = repo.global_args_for_exec();
+        args.push("log".to_string());
+        args.push("--format=%H".to_string());
+        args.push("--date-order".to_string());
+        args.push("--no-walk".to_string());
+        for sha in &sha_vec {
+            args.push(sha.clone());
+        }
+
+        let output = exec_git(&args)?;
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| GitAiError::Generic("Failed to parse git log output".to_string()))?;
+
+        Ok(stdout.lines().map(|s| s.to_string()).collect())
+    } else {
+        Ok(shas.into_iter().collect())
+    }
+}

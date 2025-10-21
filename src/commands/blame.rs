@@ -1,4 +1,6 @@
+use crate::authorship::authorship_log::PromptRecord;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
@@ -94,6 +96,15 @@ pub struct GitAiBlameOptions {
 
     // Encoding
     pub encoding: Option<String>,
+
+    // Use prompt hashes as name instead of author names
+    pub use_prompt_hashes_as_names: bool,
+
+    // Return all human authors as CheckpointKind::Human
+    pub return_human_authors_as_human: bool,
+
+    // No output
+    pub no_output: bool,
 }
 
 impl Default for GitAiBlameOptions {
@@ -127,6 +138,9 @@ impl Default for GitAiBlameOptions {
             reverse: None,
             first_parent: false,
             encoding: None,
+            use_prompt_hashes_as_names: false,
+            return_human_authors_as_human: false,
+            no_output: false,
         }
     }
 }
@@ -136,7 +150,7 @@ impl Repository {
         &self,
         file_path: &str,
         options: &GitAiBlameOptions,
-    ) -> Result<HashMap<u32, String>, GitAiError> {
+    ) -> Result<(HashMap<u32, String>, HashMap<String, PromptRecord>), GitAiError> {
         // Use repo root for file system operations
         let repo_root = self.workdir().or_else(|e| {
             Err(GitAiError::Generic(format!(
@@ -220,7 +234,12 @@ impl Repository {
         }
 
         // Step 2: Overlay AI authorship information
-        let line_authors = overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path)?;
+        let (line_authors, prompt_records) =
+            overlay_ai_authorship(self, &all_blame_hunks, &relative_file_path, options)?;
+
+        if options.no_output {
+            return Ok((line_authors, prompt_records));
+        }
 
         // Output based on format
         if options.porcelain || options.line_porcelain {
@@ -252,7 +271,7 @@ impl Repository {
             )?;
         }
 
-        Ok(line_authors)
+        Ok((line_authors, prompt_records))
     }
 
     pub fn blame_hunks(
@@ -515,11 +534,15 @@ fn overlay_ai_authorship(
     repo: &Repository,
     blame_hunks: &[BlameHunk],
     file_path: &str,
-) -> Result<HashMap<u32, String>, GitAiError> {
+    options: &GitAiBlameOptions,
+) -> Result<(HashMap<u32, String>, HashMap<String, PromptRecord>), GitAiError> {
     let mut line_authors: HashMap<u32, String> = HashMap::new();
+    let mut prompt_records: HashMap<String, PromptRecord> = HashMap::new();
 
     // Group hunks by commit SHA to avoid repeated lookups
     let mut commit_authorship_cache: HashMap<String, Option<AuthorshipLog>> = HashMap::new();
+    // Cache for foreign prompts to avoid repeated grepping
+    let mut foreign_prompts_cache: HashMap<String, Option<PromptRecord>> = HashMap::new();
 
     for hunk in blame_hunks {
         // Check if we've already looked up this commit's authorship
@@ -544,29 +567,55 @@ fn overlay_ai_authorship(
                 let current_line_num = hunk.range.0 + i;
                 let orig_line_num = hunk.orig_range.0 + i;
 
-                if let Some((author, prompt)) =
-                    authorship_log.get_line_attribution(file_path, orig_line_num)
-                {
+                if let Some((author, prompt_hash, prompt)) = authorship_log.get_line_attribution(
+                    repo,
+                    file_path,
+                    orig_line_num,
+                    &mut foreign_prompts_cache,
+                ) {
                     // If this line is AI-assisted, display the tool name; otherwise the human username
                     if let Some(prompt_record) = prompt {
-                        line_authors.insert(current_line_num, prompt_record.agent_id.tool.clone());
+                        let prompt_hash = prompt_hash.unwrap();
+                        if options.use_prompt_hashes_as_names {
+                            line_authors.insert(current_line_num, prompt_hash.clone());
+                        } else {
+                            line_authors
+                                .insert(current_line_num, prompt_record.agent_id.tool.clone());
+                        }
+                        prompt_records.insert(prompt_hash, prompt_record.clone());
                     } else {
-                        line_authors.insert(current_line_num, author.username.clone());
+                        if options.return_human_authors_as_human {
+                            line_authors.insert(
+                                current_line_num,
+                                CheckpointKind::Human.to_str().to_string(),
+                            );
+                        } else {
+                            line_authors.insert(current_line_num, author.username.clone());
+                        }
                     }
                 } else {
                     // Fall back to original author if no AI authorship
-                    line_authors.insert(current_line_num, hunk.original_author.clone());
+                    if options.return_human_authors_as_human {
+                        line_authors
+                            .insert(current_line_num, CheckpointKind::Human.to_str().to_string());
+                    } else {
+                        line_authors.insert(current_line_num, hunk.original_author.clone());
+                    }
                 }
             }
         } else {
             // No authorship log, use original author for all lines in hunk
             for line_num in hunk.range.0..=hunk.range.1 {
-                line_authors.insert(line_num, hunk.original_author.clone());
+                if options.return_human_authors_as_human {
+                    line_authors.insert(line_num, CheckpointKind::Human.to_str().to_string());
+                } else {
+                    line_authors.insert(line_num, hunk.original_author.clone());
+                }
             }
         }
     }
 
-    Ok(line_authors)
+    Ok((line_authors, prompt_records))
 }
 
 #[allow(unused_variables)]

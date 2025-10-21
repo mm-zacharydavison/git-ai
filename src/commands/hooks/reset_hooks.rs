@@ -1,4 +1,5 @@
 use crate::{
+    authorship::working_log::CheckpointKind,
     commands::hooks::commit_hooks,
     git::{cli_parser::ParsedGitInvocation, repository::Repository, rewrite_log::ResetKind},
     utils::debug_log,
@@ -10,8 +11,15 @@ pub fn pre_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Reposi
         commit_hooks::get_commit_default_author(repository, &parsed_args.command_args);
 
     // Run checkpoint to capture current working directory state before reset
-    let _result =
-        crate::commands::checkpoint::run(repository, &human_author, false, false, true, None);
+    let _result = crate::commands::checkpoint::run(
+        repository,
+        &human_author,
+        CheckpointKind::Human,
+        false,
+        false,
+        true,
+        None,
+    );
 
     // Capture HEAD before reset happens
     repository.require_pre_command_head();

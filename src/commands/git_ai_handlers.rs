@@ -1,6 +1,6 @@
 use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
-use crate::authorship::working_log::AgentId;
+use crate::authorship::working_log::{AgentId, CheckpointKind};
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_preset::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
@@ -13,6 +13,7 @@ use crate::git::repository::CommitRange;
 use crate::utils::Timer;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn handle_git_ai(args: &[String]) {
     if args.is_empty() {
@@ -200,13 +201,20 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
             "mock_ai" => {
+                let mock_agent_id = format!(
+                    "ai-thread-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or_else(|_| 0)
+                );
                 agent_run_result = Some(AgentRunResult {
                     agent_id: AgentId {
                         tool: "some-ai".to_string(),
-                        id: "ai-thread".to_string(),
+                        id: mock_agent_id,
                         model: "unknown".to_string(),
                     },
-                    is_human: false,
+                    checkpoint_kind: CheckpointKind::AiAgent,
                     transcript: None,
                     repo_working_dir: None,
                     edited_filepaths: None,
@@ -230,6 +238,11 @@ fn handle_checkpoint(args: &[String]) {
         }
     };
 
+    let checkpoint_kind = agent_run_result
+        .as_ref()
+        .map(|r| r.checkpoint_kind)
+        .unwrap_or(CheckpointKind::Human);
+
     // Get the current user name from git config
     let default_user_name = match repo.config_get_str("user.name") {
         Ok(Some(name)) if !name.trim().is_empty() => name,
@@ -242,6 +255,7 @@ fn handle_checkpoint(args: &[String]) {
     if let Err(e) = commands::checkpoint::run(
         &repo,
         &default_user_name,
+        checkpoint_kind,
         show_working_log,
         reset,
         false,

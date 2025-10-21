@@ -1,49 +1,10 @@
+use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
 use crate::authorship::transcript::AiTranscript;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/* Types  */
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Line {
-    Single(u32),
-    Range(u32, u32),
-}
-
-#[allow(dead_code)]
-impl Line {
-    pub fn start(&self) -> u32 {
-        match self {
-            Line::Single(line) => *line,
-            Line::Range(start, _) => *start,
-        }
-    }
-
-    pub fn end(&self) -> u32 {
-        match self {
-            Line::Single(line) => *line,
-            Line::Range(_, end) => *end,
-        }
-    }
-
-    /// Check if this line/range contains a given line number
-    pub fn contains(&self, line_number: u32) -> bool {
-        match self {
-            Line::Single(line) => *line == line_number,
-            Line::Range(start, end) => line_number >= *start && line_number <= *end,
-        }
-    }
-}
-
-impl fmt::Display for Line {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Line::Single(line) => write!(f, "{}", line),
-            Line::Range(start, end) => write!(f, "[{}, {}]", start, end),
-        }
-    }
-}
+pub const CHECKPOINT_API_VERSION: &str = "checkpoint/1.0.0";
 
 /// Represents a working log entry for a specific file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,10 +14,10 @@ pub struct WorkingLogEntry {
     /// SHA256 hash of the file content at this checkpoint
     #[serde(default)]
     pub blob_sha: String,
-    /// List of lines or line ranges that were added
-    pub added_lines: Vec<Line>,
-    /// List of lines or line ranges that were deleted
-    pub deleted_lines: Vec<Line>,
+    #[serde(default)]
+    pub attributions: Vec<Attribution>,
+    #[serde(default)]
+    pub line_attributions: Vec<LineAttribution>,
 }
 
 impl WorkingLogEntry {
@@ -64,60 +25,15 @@ impl WorkingLogEntry {
     pub fn new(
         file: String,
         blob_sha: String,
-        added_lines: Vec<Line>,
-        deleted_lines: Vec<Line>,
+        attributions: Vec<Attribution>,
+        line_attributions: Vec<LineAttribution>,
     ) -> Self {
         Self {
             file,
             blob_sha,
-            added_lines,
-            deleted_lines,
+            attributions,
+            line_attributions,
         }
-    }
-
-    /// Add a single line to the added lines
-    #[allow(dead_code)]
-    pub fn add_added_line(&mut self, line: u32) {
-        self.added_lines.push(Line::Single(line));
-    }
-
-    /// Add a line range to the added lines
-    #[allow(dead_code)]
-    pub fn add_added_range(&mut self, start: u32, end: u32) {
-        self.added_lines.push(Line::Range(start, end));
-    }
-
-    /// Add a single line to the deleted lines
-    #[allow(dead_code)]
-    pub fn add_deleted_line(&mut self, line: u32) {
-        self.deleted_lines.push(Line::Single(line));
-    }
-
-    /// Add a line range to the deleted lines
-    #[allow(dead_code)]
-    pub fn add_deleted_range(&mut self, start: u32, end: u32) {
-        self.deleted_lines.push(Line::Range(start, end));
-    }
-
-    /// Check if a specific line number is covered by this working log entry
-    #[allow(dead_code)]
-    pub fn covers_line(&self, line_number: u32) -> bool {
-        self.added_lines
-            .iter()
-            .any(|line| line.contains(line_number))
-            || self
-                .deleted_lines
-                .iter()
-                .any(|line| line.contains(line_number))
-    }
-
-    /// Get all lines (both added and deleted) for backward compatibility
-    #[allow(dead_code)]
-    pub fn all_lines(&self) -> Vec<Line> {
-        let mut all_lines = Vec::new();
-        all_lines.extend(self.added_lines.clone());
-        all_lines.extend(self.deleted_lines.clone());
-        all_lines
     }
 }
 
@@ -128,8 +44,80 @@ pub struct AgentId {
     pub model: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CheckpointKind {
+    Human,
+    AiAgent,
+    AiTab,
+}
+
+impl fmt::Display for CheckpointKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_str())
+    }
+}
+
+impl CheckpointKind {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "human" => CheckpointKind::Human,
+            "ai_agent" => CheckpointKind::AiAgent,
+            "ai_tab" => CheckpointKind::AiTab,
+            _ => panic!("Invalid checkpoint kind: {}", s),
+        }
+    }
+
+    pub fn to_str(&self) -> String {
+        match self {
+            CheckpointKind::Human => "human".to_string(),
+            CheckpointKind::AiAgent => "ai_agent".to_string(),
+            CheckpointKind::AiTab => "ai_tab".to_string(),
+        }
+    }
+}
+
+/// Line-level statistics tracked per checkpoint kind
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CheckpointLineStats {
+    pub human_additions: u32,
+    pub human_deletions: u32,
+    pub ai_agent_additions: u32,
+    pub ai_agent_deletions: u32,
+    pub ai_tab_additions: u32,
+    pub ai_tab_deletions: u32,
+}
+
+impl CheckpointLineStats {
+    pub fn additions_for_kind(&self, kind: CheckpointKind) -> u32 {
+        match kind {
+            CheckpointKind::Human => self.human_additions,
+            CheckpointKind::AiAgent => self.ai_agent_additions,
+            CheckpointKind::AiTab => self.ai_tab_additions,
+        }
+    }
+
+    pub fn deletions_for_kind(&self, kind: CheckpointKind) -> u32 {
+        match kind {
+            CheckpointKind::Human => self.human_deletions,
+            CheckpointKind::AiAgent => self.ai_agent_deletions,
+            CheckpointKind::AiTab => self.ai_tab_deletions,
+        }
+    }
+
+    /// Total AI additions (for authorship log - collapses ai_agent and ai_tab)
+    pub fn total_ai_additions(&self) -> u32 {
+        self.ai_agent_additions + self.ai_tab_additions
+    }
+
+    /// Total AI deletions (for authorship log - collapses ai_agent and ai_tab)
+    pub fn total_ai_deletions(&self) -> u32 {
+        self.ai_agent_deletions + self.ai_tab_deletions
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
+    pub kind: CheckpointKind,
     pub diff: String,
     pub author: String,
     pub entries: Vec<WorkingLogEntry>,
@@ -137,24 +125,33 @@ pub struct Checkpoint {
     pub transcript: Option<AiTranscript>,
     pub agent_id: Option<AgentId>,
     #[serde(default)]
-    pub allow_reset_to_checkpoint: bool,
+    pub line_stats: CheckpointLineStats,
+    #[serde(default)]
+    pub api_version: String,
 }
 
 impl Checkpoint {
-    pub fn new(diff: String, author: String, entries: Vec<WorkingLogEntry>) -> Self {
+    pub fn new(
+        kind: CheckpointKind,
+        diff: String,
+        author: String,
+        entries: Vec<WorkingLogEntry>,
+    ) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
         Self {
+            kind,
             diff,
             author,
             entries,
             timestamp,
             transcript: None,
             agent_id: None,
-            allow_reset_to_checkpoint: false,
+            line_stats: CheckpointLineStats::default(),
+            api_version: CHECKPOINT_API_VERSION.to_string(),
         }
     }
 }
@@ -165,32 +162,19 @@ mod tests {
     use crate::authorship::transcript::Message;
 
     #[test]
-    fn test_line_serialization() {
-        let single_line = Line::Single(5);
-        let range_line = Line::Range(10, 15);
-
-        let single_json = serde_json::to_string(&single_line).unwrap();
-        let range_json = serde_json::to_string(&range_line).unwrap();
-
-        assert_eq!(single_json, "5");
-        assert_eq!(range_json, "[10,15]");
-
-        let deserialized_single: Line = serde_json::from_str(&single_json).unwrap();
-        let deserialized_range: Line = serde_json::from_str(&range_json).unwrap();
-
-        assert_eq!(deserialized_single, single_line);
-        assert_eq!(deserialized_range, range_line);
-    }
-
-    #[test]
     fn test_checkpoint_serialization() {
         let entry = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "abc123def456".to_string(),
-            vec![Line::Single(1), Line::Range(2, 5), Line::Single(10)],
-            vec![],
+            Vec::new(),
+            Vec::new(),
         );
-        let checkpoint = Checkpoint::new("".to_string(), "claude".to_string(), vec![entry]);
+        let checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
 
         // Verify timestamp is set (should be recent)
         let current_time = SystemTime::now()
@@ -218,18 +202,24 @@ mod tests {
         let entry1 = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "sha1".to_string(),
-            vec![Line::Single(1), Line::Range(2, 5), Line::Single(10)],
-            vec![],
+            Vec::new(),
+            Vec::new(),
         );
-        let checkpoint1 = Checkpoint::new("".to_string(), "claude".to_string(), vec![entry1]);
+        let checkpoint1 = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry1],
+        );
 
         let entry2 = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "sha2".to_string(),
-            vec![Line::Single(12), Line::Single(13)],
-            vec![],
+            Vec::new(),
+            Vec::new(),
         );
         let checkpoint2 = Checkpoint::new(
+            CheckpointKind::AiAgent,
             "/refs/ai/working/xyz.patch".to_string(),
             "user".to_string(),
             vec![entry2],
@@ -251,44 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn test_line_contains() {
-        let single = Line::Single(5);
-        let range = Line::Range(10, 15);
-
-        assert!(single.contains(5));
-        assert!(!single.contains(6));
-
-        assert!(range.contains(10));
-        assert!(range.contains(12));
-        assert!(range.contains(15));
-        assert!(!range.contains(9));
-        assert!(!range.contains(16));
-    }
-
-    #[test]
-    fn test_working_log_entry_covers_line() {
-        let entry = WorkingLogEntry::new(
-            "src/xyz.rs".to_string(),
-            "test_sha".to_string(),
-            vec![Line::Single(1), Line::Range(2, 5), Line::Single(10)],
-            vec![],
-        );
-
-        assert!(entry.covers_line(1));
-        assert!(entry.covers_line(2));
-        assert!(entry.covers_line(5));
-        assert!(entry.covers_line(10));
-        assert!(!entry.covers_line(6));
-        assert!(!entry.covers_line(11));
-    }
-
-    #[test]
     fn test_checkpoint_with_transcript() {
         let entry = WorkingLogEntry::new(
             "src/xyz.rs".to_string(),
             "test_sha".to_string(),
-            vec![Line::Single(1)],
-            vec![],
+            Vec::new(),
+            Vec::new(),
         );
 
         let user_message = Message::user(
@@ -308,7 +266,12 @@ mod tests {
             id: "session-abc123".to_string(),
         };
 
-        let mut checkpoint = Checkpoint::new("".to_string(), "claude".to_string(), vec![entry]);
+        let mut checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "claude".to_string(),
+            vec![entry],
+        );
         checkpoint.transcript = Some(transcript);
         checkpoint.agent_id = Some(agent_id);
 

@@ -1,6 +1,7 @@
+use crate::authorship::attribution_tracker::Attribution;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit::post_commit;
-use crate::authorship::working_log::{Checkpoint, Line};
+use crate::authorship::working_log::{Checkpoint, CheckpointKind};
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
@@ -347,6 +348,7 @@ impl TmpRepo {
         checkpoint(
             &self.repo_gitai,
             author,
+            CheckpointKind::Human,
             false, // show_working_log
             false, // reset
             true,
@@ -391,7 +393,7 @@ impl TmpRepo {
         let agent_run_result = AgentRunResult {
             agent_id,
             transcript: Some(transcript),
-            is_human: false,
+            checkpoint_kind: CheckpointKind::AiAgent,
             repo_working_dir: None,
             edited_filepaths: None,
             will_edit_filepaths: None,
@@ -400,6 +402,7 @@ impl TmpRepo {
         checkpoint(
             &self.repo_gitai,
             agent_name,
+            CheckpointKind::AiAgent,
             false, // show_working_log
             false, // reset
             true,
@@ -413,9 +416,14 @@ impl TmpRepo {
         author: &str,
         agent_run_result: Option<AgentRunResult>,
     ) -> Result<(usize, usize, usize), GitAiError> {
+        let checkpoint_kind = agent_run_result
+            .as_ref()
+            .map(|r| r.checkpoint_kind)
+            .unwrap_or(CheckpointKind::Human);
         checkpoint(
             &self.repo_gitai,
             author,
+            checkpoint_kind,
             false, // show_working_log
             false, // reset
             true,  // quiet
@@ -1007,7 +1015,7 @@ impl TmpRepo {
             std::env::set_var("PAGER", "cat");
         }
 
-        let blame_map = self.repo_gitai.blame(&tmp_file.filename, &options)?;
+        let (blame_map, _) = self.repo_gitai.blame(&tmp_file.filename, &options)?;
         println!("blame_map: {:?}", blame_map);
         Ok(blame_map.into_iter().collect())
     }
@@ -1265,8 +1273,7 @@ pub struct SnapshotCheckpoint {
 #[derive(Debug)]
 pub struct SnapshotEntry {
     file: String,
-    added_lines: Vec<Line>,
-    deleted_lines: Vec<Line>,
+    attributions: Vec<Attribution>,
 }
 
 pub fn snapshot_checkpoints(checkpoints: &[Checkpoint]) -> Vec<SnapshotCheckpoint> {
@@ -1276,10 +1283,20 @@ pub fn snapshot_checkpoints(checkpoints: &[Checkpoint]) -> Vec<SnapshotCheckpoin
             let mut entries: Vec<SnapshotEntry> = cp
                 .entries
                 .iter()
-                .map(|e| SnapshotEntry {
-                    file: e.file.clone(),
-                    added_lines: e.added_lines.clone(),
-                    deleted_lines: e.deleted_lines.clone(),
+                .map(|e| {
+                    let mut attributions = e.attributions.clone();
+                    // Sort attributions by start position, then end position, then author_id for determinism
+                    attributions.sort_by(|a, b| {
+                        a.start
+                            .cmp(&b.start)
+                            .then_with(|| a.end.cmp(&b.end))
+                            .then_with(|| a.author_id.cmp(&b.author_id))
+                    });
+
+                    SnapshotEntry {
+                        file: e.file.clone(),
+                        attributions,
+                    }
                 })
                 .collect();
 
@@ -1295,7 +1312,7 @@ pub fn snapshot_checkpoints(checkpoints: &[Checkpoint]) -> Vec<SnapshotCheckpoin
         })
         .collect();
 
-    // Sort checkpoints by author name, then by first file name, then by first line number
+    // Sort checkpoints by author name, then by first file name, then by first attribution start position
     // for deterministic ordering
     snapshots.sort_by(|a, b| {
         // First sort by author
@@ -1306,26 +1323,20 @@ pub fn snapshot_checkpoints(checkpoints: &[Checkpoint]) -> Vec<SnapshotCheckpoin
                 let b_file = b.entries.first().map(|e| e.file.as_str()).unwrap_or("");
                 match a_file.cmp(b_file) {
                     std::cmp::Ordering::Equal => {
-                        // If files are equal, sort by first added line number
-                        let a_line = a
+                        // If files are equal, sort by first attribution start position
+                        let a_start = a
                             .entries
                             .first()
-                            .and_then(|e| e.added_lines.first())
-                            .map(|l| match l {
-                                Line::Single(n) => *n,
-                                Line::Range(start, _) => *start,
-                            })
+                            .and_then(|e| e.attributions.first())
+                            .map(|attr| attr.start)
                             .unwrap_or(0);
-                        let b_line = b
+                        let b_start = b
                             .entries
                             .first()
-                            .and_then(|e| e.added_lines.first())
-                            .map(|l| match l {
-                                Line::Single(n) => *n,
-                                Line::Range(start, _) => *start,
-                            })
+                            .and_then(|e| e.attributions.first())
+                            .map(|attr| attr.start)
                             .unwrap_or(0);
-                        a_line.cmp(&b_line)
+                        a_start.cmp(&b_start)
                     }
                     other => other,
                 }

@@ -1,4 +1,7 @@
-use crate::authorship::working_log::{Checkpoint, Line, WorkingLogEntry};
+use crate::authorship::attribution_tracker::{Attribution, AttributionTracker};
+use crate::authorship::working_log::CheckpointKind;
+use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
+use crate::commands::blame::GitAiBlameOptions;
 use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
@@ -8,10 +11,12 @@ use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn run(
     repo: &Repository,
     author: &str,
+    kind: CheckpointKind,
     show_working_log: bool,
     reset: bool,
     quiet: bool,
@@ -39,11 +44,11 @@ pub fn run(
     let repo_storage = RepoStorage::for_repo_path(repo.path());
     let working_log = repo_storage.working_log_for_base_commit(&base_commit);
 
-    // Determine if this is a human checkpoint
-    let is_human = agent_run_result
-        .as_ref()
-        .map(|result| result.is_human)
-        .unwrap_or(true);
+    // Get the current timestamp in milliseconds since the Unix epoch
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
 
     // Extract edited filepaths from agent_run_result if available
     // For human checkpoints, use will_edit_filepaths to narrow git status scope
@@ -51,7 +56,7 @@ pub fn run(
     // Filter out paths outside the repository to prevent git call crashes
     let mut filtered_pathspec: Option<Vec<String>> = None;
     let pathspec_filter = agent_run_result.as_ref().and_then(|result| {
-        let paths = if result.is_human {
+        let paths = if result.checkpoint_kind == CheckpointKind::Human {
             result.will_edit_filepaths.as_ref()
         } else {
             result.edited_filepaths.as_ref()
@@ -164,8 +169,12 @@ pub fn run(
                 debug_log("  Entries:");
                 for entry in &checkpoint.entries {
                     debug_log(&format!("    File: {}", entry.file));
-                    debug_log(&format!("    Added lines: {:?}", entry.added_lines));
-                    debug_log(&format!("    Deleted lines: {:?}", entry.deleted_lines));
+                    debug_log(&format!("    Blob SHA: {}", entry.blob_sha));
+                    debug_log(&format!(
+                        "    Line Attributions: {:?}",
+                        entry.line_attributions
+                    ));
+                    debug_log(&format!("    Attributions: {:?}", entry.attributions));
                 }
                 debug_log("");
             }
@@ -195,14 +204,25 @@ pub fn run(
     let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-        get_initial_checkpoint_entries(repo, &files, &base_commit, &file_content_hashes)?
+        get_initial_checkpoint_entries(
+            kind,
+            repo,
+            &files,
+            &base_commit,
+            &file_content_hashes,
+            agent_run_result.as_ref(),
+            ts,
+        )?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
+            kind,
             &working_log,
             &files,
             &file_content_hashes,
-            checkpoints.last(),
+            &checkpoints,
+            agent_run_result.as_ref(),
+            ts,
         )?
     };
     let entries_duration = end_entries_clock();
@@ -210,11 +230,23 @@ pub fn run(
 
     // Skip adding checkpoint if there are no changes
     if !entries.is_empty() {
-        let mut checkpoint =
-            Checkpoint::new(combined_hash.clone(), author.to_string(), entries.clone());
+        let mut checkpoint = Checkpoint::new(
+            kind.clone(),
+            combined_hash.clone(),
+            author.to_string(),
+            entries.clone(),
+        );
+
+        // Compute and set line stats
+        let end_stats_clock = Timer::default().start_quiet("checkpoint: compute line stats");
+        checkpoint.line_stats = compute_line_stats(repo, &working_log, &files, &checkpoints, kind)?;
+        let stats_duration = end_stats_clock();
+        Timer::default().print_duration("checkpoint: compute line stats", stats_duration);
 
         // Set transcript and agent_id if provided and not a human checkpoint
-        if !is_human && let Some(agent_run) = &agent_run_result {
+        if kind != CheckpointKind::Human
+            && let Some(agent_run) = &agent_run_result
+        {
             checkpoint.transcript = Some(agent_run.transcript.clone().unwrap_or_default());
             checkpoint.agent_id = Some(agent_run.agent_id.clone());
         }
@@ -227,7 +259,9 @@ pub fn run(
         checkpoints.push(checkpoint);
     }
 
-    let agent_tool = if !is_human && let Some(agent_run_result) = &agent_run_result {
+    let agent_tool = if kind != CheckpointKind::Human
+        && let Some(agent_run_result) = &agent_run_result
+    {
         Some(agent_run_result.agent_id.tool.as_str())
     } else {
         None
@@ -254,8 +288,8 @@ pub fn run(
         if files_with_entries == total_uncommitted_files {
             // All files with changes got entries
             eprintln!(
-                "{}{} changed {} file(s) that have changed since the last {}",
-                if is_human { "Human: " } else { "AI: " },
+                "{} {} changed {} file(s) that have changed since the last {}",
+                kind.to_str(),
                 log_author,
                 files_with_entries,
                 label
@@ -263,8 +297,8 @@ pub fn run(
         } else {
             // Some files were already checkpointed
             eprintln!(
-                "{}{} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
-                if is_human { "Human: " } else { "AI: " },
+                "{} {} changed {} of the {} file(s) that have changed since the last {} ({} already checkpointed)",
+                kind.to_str(),
                 log_author,
                 files_with_entries,
                 total_uncommitted_files,
@@ -384,12 +418,31 @@ fn save_current_file_states(
 }
 
 fn get_initial_checkpoint_entries(
+    kind: CheckpointKind,
     repo: &Repository,
     files: &[String],
     _base_commit: &str,
     file_content_hashes: &HashMap<String, String>,
+    agent_run_result: Option<&AgentRunResult>,
+    ts: u128,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
+
+    // Determine author_id based on checkpoint kind and agent_id
+    let author_id = if kind != CheckpointKind::Human {
+        // For AI checkpoints, use session hash
+        agent_run_result
+            .map(|result| {
+                crate::authorship::authorship_log_serialization::generate_short_hash(
+                    &result.agent_id.id,
+                    &result.agent_id.tool,
+                )
+            })
+            .unwrap_or_else(|| kind.to_str())
+    } else {
+        // For human checkpoints, use checkpoint kind string
+        kind.to_str()
+    };
 
     // Diff working directory against HEAD tree for each file
     let head_commit = repo
@@ -397,6 +450,7 @@ fn get_initial_checkpoint_entries(
         .ok()
         .and_then(|h| h.target().ok())
         .and_then(|oid| repo.find_commit(oid).ok());
+    let head_commit_sha = head_commit.as_ref().map(|c| c.id().to_string());
     let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
 
     for file_path in files {
@@ -423,96 +477,100 @@ fn get_initial_checkpoint_entries(
         // Current content from filesystem
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
-        // Normalize trailing newlines to avoid spurious inserts
-        let prev_norm = if previous_content.ends_with('\n') {
-            previous_content.clone()
-        } else {
-            format!("{}\n", previous_content)
-        };
-        let curr_norm = if current_content.ends_with('\n') {
-            current_content.clone()
-        } else {
-            format!("{}\n", current_content)
-        };
+        if current_content == previous_content {
+            // No changes, no need to add entries
+            continue;
+        }
 
-        let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
-        let mut added_line_numbers = Vec::new();
-        let mut deleted_line_numbers = Vec::new();
-        let mut current_line = 1u32;
-
-        let mut deletions_at_current_line = 0u32;
-
-        for change in diff.iter_all_changes() {
-            match change.tag() {
-                ChangeTag::Equal => {
-                    current_line += change.value().lines().count() as u32;
-                    deletions_at_current_line = 0; // Reset deletion counter when we hit non-deleted content
+        // Get the previous line attributions from ai blame
+        let mut ai_blame_opts = GitAiBlameOptions::default();
+        ai_blame_opts.no_output = true;
+        ai_blame_opts.return_human_authors_as_human = true;
+        ai_blame_opts.use_prompt_hashes_as_names = true;
+        ai_blame_opts.newest_commit = head_commit_sha.clone();
+        let ai_blame = repo.blame(file_path, &ai_blame_opts);
+        let mut prev_line_attributions = Vec::new();
+        if let Ok((blames, _)) = ai_blame {
+            for (line, author) in blames {
+                if author == CheckpointKind::Human.to_str() {
+                    continue;
                 }
-                ChangeTag::Delete => {
-                    let delete_start = current_line + deletions_at_current_line;
-                    let delete_count = change.value().lines().count() as u32;
-                    // Collect individual line numbers for consolidation
-                    for i in 0..delete_count {
-                        deleted_line_numbers.push(delete_start + i);
-                    }
-                    deletions_at_current_line += delete_count;
-                    // Don't advance current_line for deletions - insertions will happen at the same position
-                }
-                ChangeTag::Insert => {
-                    let insert_start = current_line;
-                    let insert_count = change.value().lines().count() as u32;
-                    // Collect individual line numbers for consolidation
-                    for i in 0..insert_count {
-                        added_line_numbers.push(insert_start + i);
-                    }
-                    current_line += insert_count;
-                    deletions_at_current_line = 0; // Reset deletion counter after insertions
-                }
+                prev_line_attributions.push(
+                    crate::authorship::attribution_tracker::LineAttribution {
+                        start_line: line,
+                        end_line: line,
+                        author_id: author.clone(),
+                    },
+                );
             }
         }
+        // Convert any line attributions to character attributions
+        let prev_attributions =
+            crate::authorship::attribution_tracker::line_attributions_to_attributions(
+                &prev_line_attributions,
+                &previous_content,
+                ts,
+            );
 
-        // Consolidate consecutive lines into ranges
-        let added_lines = consolidate_lines(added_line_numbers);
-        let deleted_lines = consolidate_lines(deleted_line_numbers);
+        // Get the blob SHA for this file from the pre-computed hashes
+        let blob_sha = file_content_hashes
+            .get(file_path)
+            .cloned()
+            .unwrap_or_default();
 
-        if !added_lines.is_empty() || !deleted_lines.is_empty() {
-            // Get the blob SHA for this file from the pre-computed hashes
-            let blob_sha = file_content_hashes
-                .get(file_path)
-                .cloned()
-                .unwrap_or_default();
-
-            entries.push(WorkingLogEntry::new(
-                file_path.clone(),
-                blob_sha,
-                added_lines,
-                deleted_lines,
-            ));
-        }
+        let entry = make_entry_for_file(
+            file_path,
+            &blob_sha,
+            &author_id,
+            &previous_content,
+            &prev_attributions,
+            &current_content,
+            ts,
+        )?;
+        entries.push(entry);
     }
 
     Ok(entries)
 }
 
 fn get_subsequent_checkpoint_entries(
+    kind: CheckpointKind,
     working_log: &PersistedWorkingLog,
     files: &[String],
     file_content_hashes: &HashMap<String, String>,
-    previous_checkpoint: Option<&Checkpoint>,
+    previous_checkpoints: &Vec<Checkpoint>,
+    agent_run_result: Option<&AgentRunResult>,
+    ts: u128,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
     let mut entries = Vec::new();
 
-    // Build a map of file path -> blob_sha from the previous checkpoint's entries
-    let previous_file_hashes: HashMap<String, String> =
-        if let Some(prev_checkpoint) = previous_checkpoint {
-            prev_checkpoint
-                .entries
-                .iter()
-                .map(|entry| (entry.file.clone(), entry.blob_sha.clone()))
-                .collect()
-        } else {
-            HashMap::new()
-        };
+    // Determine author_id based on checkpoint kind and agent_id
+    let author_id = if kind != CheckpointKind::Human {
+        // For AI checkpoints, use session hash
+        agent_run_result
+            .map(|result| {
+                crate::authorship::authorship_log_serialization::generate_short_hash(
+                    &result.agent_id.id,
+                    &result.agent_id.tool,
+                )
+            })
+            .unwrap_or_else(|| kind.to_str())
+    } else {
+        // For human checkpoints, use checkpoint kind string
+        kind.to_str()
+    };
+
+    // Build a map of file path -> (blob_sha, attributions) by iterating through previous checkpoints to get the latest
+    let mut previous_file_hashes_with_attributions: HashMap<String, (String, Vec<Attribution>)> =
+        HashMap::new();
+    for checkpoint in previous_checkpoints {
+        for entry in &checkpoint.entries {
+            previous_file_hashes_with_attributions.insert(
+                entry.file.clone(),
+                (entry.blob_sha.clone(), entry.attributions.clone()),
+            );
+        }
+    }
 
     for file_path in files {
         let abs_path = working_log.repo_root.join(file_path);
@@ -521,167 +579,181 @@ fn get_subsequent_checkpoint_entries(
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
         // Read the previous content from the blob storage using the previous checkpoint's blob_sha
-        let previous_content = if let Some(prev_content_hash) = previous_file_hashes.get(file_path)
+        let (previous_content, prev_attributions) = if let Some((prev_content_hash, prev_attrs)) =
+            previous_file_hashes_with_attributions.get(file_path)
         {
-            working_log
-                .get_file_version(prev_content_hash)
-                .unwrap_or_default()
+            (
+                working_log
+                    .get_file_version(prev_content_hash)
+                    .unwrap_or_default(),
+                prev_attrs.clone(),
+            )
         } else {
-            String::new() // No previous version, treat as empty
+            (String::new(), Vec::new()) // No previous version, treat as empty
         };
 
-        // Normalize by ensuring trailing newline to avoid off-by-one when appending lines
-        let prev_norm = if previous_content.ends_with('\n') {
-            previous_content.clone()
-        } else {
-            format!("{}\n", previous_content)
-        };
-        let curr_norm = if current_content.ends_with('\n') {
-            current_content.clone()
-        } else {
-            format!("{}\n", current_content)
-        };
-
-        let diff = TextDiff::from_lines(&prev_norm, &curr_norm);
-        let mut added_line_numbers = Vec::new();
-        let mut deleted_line_numbers = Vec::new();
-        let mut current_line = 1u32;
-
-        let mut deletions_at_current_line = 0u32;
-
-        for change in diff.iter_all_changes() {
-            match change.tag() {
-                ChangeTag::Equal => {
-                    current_line += change.value().lines().count() as u32;
-                    deletions_at_current_line = 0; // Reset deletion counter when we hit non-deleted content
-                }
-                ChangeTag::Delete => {
-                    let delete_start = current_line + deletions_at_current_line;
-                    let delete_count = change.value().lines().count() as u32;
-                    // Collect individual line numbers for consolidation
-                    for i in 0..delete_count {
-                        deleted_line_numbers.push(delete_start + i);
-                    }
-                    deletions_at_current_line += delete_count;
-                    // Don't advance current_line for deletions - insertions will happen at the same position
-                }
-                ChangeTag::Insert => {
-                    let insert_start = current_line;
-                    let insert_count = change.value().lines().count() as u32;
-                    // Collect individual line numbers for consolidation
-                    for i in 0..insert_count {
-                        added_line_numbers.push(insert_start + i);
-                    }
-                    current_line += insert_count;
-                    deletions_at_current_line = 0; // Reset deletion counter after insertions
-                }
-            }
+        if current_content == previous_content {
+            // No changes, no need to add entries
+            continue;
         }
 
-        // Consolidate consecutive lines into ranges
-        let added_lines = consolidate_lines(added_line_numbers);
-        let deleted_lines = consolidate_lines(deleted_line_numbers);
+        // Get the blob SHA for this file from the pre-computed hashes
+        let blob_sha = file_content_hashes
+            .get(file_path)
+            .cloned()
+            .unwrap_or_default();
 
-        if !added_lines.is_empty() || !deleted_lines.is_empty() {
-            // Get the blob SHA for this file from the pre-computed hashes
-            let blob_sha = file_content_hashes
-                .get(file_path)
-                .cloned()
-                .unwrap_or_default();
-
-            entries.push(WorkingLogEntry::new(
-                file_path.clone(),
-                blob_sha,
-                added_lines,
-                deleted_lines,
-            ));
-        }
+        let entry = make_entry_for_file(
+            file_path,
+            &blob_sha,
+            &author_id,
+            &previous_content,
+            &prev_attributions,
+            &current_content,
+            ts,
+        )?;
+        entries.push(entry);
     }
 
     Ok(entries)
 }
 
-/// Consolidate consecutive line numbers into ranges for efficiency
-fn consolidate_lines(mut lines: Vec<u32>) -> Vec<Line> {
-    if lines.is_empty() {
-        return Vec::new();
-    }
+fn make_entry_for_file(
+    file_path: &str,
+    blob_sha: &str,
+    author_id: &str,
+    previous_content: &str,
+    previous_attributions: &Vec<Attribution>,
+    content: &str,
+    ts: u128,
+) -> Result<WorkingLogEntry, GitAiError> {
+    let tracker = AttributionTracker::new();
+    let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(
+        previous_content,
+        previous_attributions,
+        &CheckpointKind::Human.to_str(),
+        ts - 1,
+    );
+    let new_attributions = tracker.update_attributions(
+        previous_content,
+        content,
+        &filled_in_prev_attributions,
+        author_id,
+        ts,
+    )?;
+    // TODO Consider discarding any "uncontentious" attributions for the human author. Any human attributions that do not share a line with any other author's attributions can be discarded.
+    // let filtered_attributions = crate::authorship::attribution_tracker::discard_uncontentious_attributions_for_author(&new_attributions, &CheckpointKind::Human.to_str());
+    let line_attributions =
+        crate::authorship::attribution_tracker::attributions_to_line_attributions(
+            &new_attributions,
+            content,
+        );
+    Ok(WorkingLogEntry::new(
+        file_path.to_string(),
+        blob_sha.to_string(),
+        new_attributions,
+        line_attributions,
+    ))
+}
 
-    // Sort lines to ensure proper consolidation
-    lines.sort_unstable();
-    lines.dedup(); // Remove duplicates
+/// Compute line statistics by diffing files against their previous versions
+fn compute_line_stats(
+    repo: &Repository,
+    working_log: &PersistedWorkingLog,
+    files: &[String],
+    previous_checkpoints: &[Checkpoint],
+    kind: CheckpointKind,
+) -> Result<crate::authorship::working_log::CheckpointLineStats, GitAiError> {
+    // Start with previous checkpoint's stats (if exists)
+    let mut stats = previous_checkpoints
+        .last()
+        .map(|cp| cp.line_stats.clone())
+        .unwrap_or_default();
 
-    let mut consolidated = Vec::new();
-    let mut start = lines[0];
-    let mut end = lines[0];
-
-    for &line in lines.iter().skip(1) {
-        if line == end + 1 {
-            // Consecutive line, extend the range
-            end = line;
-        } else {
-            // Gap found, save the current range and start a new one
-            if start == end {
-                consolidated.push(Line::Single(start));
-            } else {
-                consolidated.push(Line::Range(start, end));
-            }
-            start = line;
-            end = line;
+    // Build a map of file path -> most recent blob_sha
+    let mut previous_file_hashes: HashMap<String, String> = HashMap::new();
+    for checkpoint in previous_checkpoints {
+        for entry in &checkpoint.entries {
+            previous_file_hashes.insert(entry.file.clone(), entry.blob_sha.clone());
         }
     }
 
-    // Add the final range
-    if start == end {
-        consolidated.push(Line::Single(start));
-    } else {
-        consolidated.push(Line::Range(start, end));
+    // Count added/deleted lines for each file in this checkpoint
+    let mut total_additions = 0u32;
+    let mut total_deletions = 0u32;
+
+    for file_path in files {
+        let abs_path = working_log.repo_root.join(file_path);
+        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+        // Get previous content
+        let previous_content = if let Some(prev_hash) = previous_file_hashes.get(file_path) {
+            working_log.get_file_version(prev_hash).unwrap_or_default()
+        } else {
+            // No previous version, try to get from HEAD
+            let head_commit = repo
+                .head()
+                .ok()
+                .and_then(|h| h.target().ok())
+                .and_then(|oid| repo.find_commit(oid).ok());
+            let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
+
+            if let Some(tree) = head_tree {
+                match tree.get_path(std::path::Path::new(file_path)) {
+                    Ok(entry) => {
+                        if let Ok(blob) = repo.find_blob(entry.id()) {
+                            let blob_content = blob.content().unwrap_or_default();
+                            String::from_utf8_lossy(&blob_content).to_string()
+                        } else {
+                            String::new()
+                        }
+                    }
+                    Err(_) => String::new(),
+                }
+            } else {
+                String::new()
+            }
+        };
+
+        // Use TextDiff to count line changes
+        let diff = TextDiff::from_lines(&previous_content, &current_content);
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Insert => {
+                    total_additions += change.value().lines().count() as u32;
+                }
+                ChangeTag::Delete => {
+                    total_deletions += change.value().lines().count() as u32;
+                }
+                ChangeTag::Equal => {}
+            }
+        }
     }
 
-    consolidated
+    // Accumulate based on checkpoint kind
+    match kind {
+        CheckpointKind::Human => {
+            stats.human_additions += total_additions;
+            stats.human_deletions += total_deletions;
+        }
+        CheckpointKind::AiAgent => {
+            stats.ai_agent_additions += total_additions;
+            stats.ai_agent_deletions += total_deletions;
+        }
+        CheckpointKind::AiTab => {
+            stats.ai_tab_additions += total_additions;
+            stats.ai_tab_deletions += total_deletions;
+        }
+    }
+
+    Ok(stats)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authorship::working_log::Line;
     use crate::git::test_utils::TmpRepo;
-
-    #[test]
-    fn test_consolidate_lines() {
-        // Test consecutive lines
-        let lines = vec![1, 2, 3, 4];
-        let result = consolidate_lines(lines);
-        assert_eq!(result, vec![Line::Range(1, 4)]);
-
-        // Test single line
-        let lines = vec![5];
-        let result = consolidate_lines(lines);
-        assert_eq!(result, vec![Line::Single(5)]);
-
-        // Test mixed consecutive and single
-        let lines = vec![1, 2, 5, 6, 7, 10];
-        let result = consolidate_lines(lines);
-        assert_eq!(
-            result,
-            vec![Line::Range(1, 2), Line::Range(5, 7), Line::Single(10)]
-        );
-
-        // Test unsorted input
-        let lines = vec![5, 1, 3, 2, 4];
-        let result = consolidate_lines(lines);
-        assert_eq!(result, vec![Line::Range(1, 5)]);
-
-        // Test duplicates
-        let lines = vec![1, 1, 2, 2, 3];
-        let result = consolidate_lines(lines);
-        assert_eq!(result, vec![Line::Range(1, 3)]);
-
-        // Test empty input
-        let lines = vec![];
-        let result = consolidate_lines(lines);
-        assert_eq!(result, vec![]);
-    }
 
     #[test]
     fn test_checkpoint_with_staged_changes() {
@@ -918,7 +990,7 @@ mod tests {
                 model: "test_model".to_string(),
             },
             transcript: Some(AiTranscript { messages: vec![] }),
-            is_human: false,
+            checkpoint_kind: CheckpointKind::AiAgent,
             repo_working_dir: None,
             edited_filepaths: Some(vec![
                 "/tmp/outside_file.txt".to_string(),

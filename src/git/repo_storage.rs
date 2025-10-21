@@ -1,6 +1,7 @@
-use crate::authorship::working_log::Checkpoint;
+use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
+use crate::utils::debug_log;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -190,6 +191,14 @@ impl PersistedWorkingLog {
             let checkpoint: Checkpoint = serde_json::from_str(line)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
+            if checkpoint.api_version != CHECKPOINT_API_VERSION {
+                debug_log(&format!(
+                    "unsupported checkpoint api version: {} (silently skipping checkpoint)",
+                    checkpoint.api_version
+                ));
+                continue;
+            }
+
             checkpoints.push(checkpoint);
         }
 
@@ -315,6 +324,8 @@ mod tests {
 
     #[test]
     fn test_persisted_working_log_checkpoint_storage() {
+        use crate::authorship::working_log::CheckpointKind;
+
         // Create a temporary repository
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
@@ -324,6 +335,7 @@ mod tests {
 
         // Create a test checkpoint
         let checkpoint = Checkpoint::new(
+            CheckpointKind::Human,
             "test-diff".to_string(),
             "test-author".to_string(),
             vec![], // empty entries for simplicity
@@ -350,6 +362,7 @@ mod tests {
 
         // Test appending another checkpoint
         let checkpoint2 = Checkpoint::new(
+            CheckpointKind::Human,
             "test-diff-2".to_string(),
             "test-author-2".to_string(),
             vec![],
@@ -368,7 +381,61 @@ mod tests {
     }
 
     #[test]
+    fn test_read_all_checkpoints_filters_incompatible_versions() {
+        use crate::authorship::working_log::CheckpointKind;
+
+        // Create a temporary repository
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+
+        // Create RepoStorage and PersistedWorkingLog
+        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let working_log = repo_storage.working_log_for_base_commit("test-commit-sha");
+
+        // Build three checkpoints: missing version, wrong version, and correct version
+        let base_checkpoint = Checkpoint::new(
+            CheckpointKind::Human,
+            "diff --git a/file b/file".to_string(),
+            "base-author".to_string(),
+            vec![],
+        );
+
+        let missing_version_json = {
+            let mut value = serde_json::to_value(&base_checkpoint).unwrap();
+            if let serde_json::Value::Object(ref mut map) = value {
+                map.remove("api_version");
+            }
+            serde_json::to_string(&value).unwrap()
+        };
+
+        let mut wrong_version_checkpoint = base_checkpoint.clone();
+        wrong_version_checkpoint.api_version = "checkpoint/0.9.0".to_string();
+        let wrong_version_json = serde_json::to_string(&wrong_version_checkpoint).unwrap();
+
+        let mut correct_checkpoint = base_checkpoint.clone();
+        correct_checkpoint.author = "correct-author".to_string();
+        let correct_json = serde_json::to_string(&correct_checkpoint).unwrap();
+
+        let checkpoints_file = working_log.dir.join("checkpoints.jsonl");
+        let combined = [missing_version_json, wrong_version_json, correct_json].join("\n");
+        fs::write(&checkpoints_file, combined).expect("Failed to write checkpoints.jsonl");
+
+        let checkpoints = working_log
+            .read_all_checkpoints()
+            .expect("Failed to read checkpoints");
+
+        assert_eq!(
+            checkpoints.len(),
+            1,
+            "Only the correct version should remain"
+        );
+        assert_eq!(checkpoints[0].author, "correct-author");
+        assert_eq!(checkpoints[0].api_version, CHECKPOINT_API_VERSION);
+    }
+
+    #[test]
     fn test_persisted_working_log_reset() {
+        use crate::authorship::working_log::CheckpointKind;
+
         // Create a temporary repository
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
@@ -383,8 +450,12 @@ mod tests {
             .expect("Failed to persist file version");
 
         // Add some checkpoints
-        let checkpoint =
-            Checkpoint::new("test-diff".to_string(), "test-author".to_string(), vec![]);
+        let checkpoint = Checkpoint::new(
+            CheckpointKind::Human,
+            "test-diff".to_string(),
+            "test-author".to_string(),
+            vec![],
+        );
         working_log
             .append_checkpoint(&checkpoint)
             .expect("Failed to append checkpoint");

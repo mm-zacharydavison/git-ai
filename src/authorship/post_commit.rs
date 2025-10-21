@@ -89,46 +89,141 @@ pub fn post_commit(
             repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
         }
     } else {
-        // Filter the working log to remove committed lines, keeping only unstaged ones
+        // Transfer working log entries for files with unstaged changes
         let parent_working_log = repo_storage.working_log_for_base_commit(&parent_sha);
         let parent_checkpoints = parent_working_log.read_all_checkpoints()?;
 
         let new_working_log = repo_storage.working_log_for_base_commit(&commit_sha);
 
-        for mut checkpoint in parent_checkpoints {
-            // Filter entries to only include unstaged lines
-            for entry in &mut checkpoint.entries {
-                if let Some(unstaged_ranges) = unstaged_hunks.get(&entry.file) {
-                    // Expand all lines from added_lines, filter to unstaged, then recompress
-                    let mut all_lines: Vec<u32> = Vec::new();
-                    for line in &entry.added_lines {
-                        match line {
-                            crate::authorship::working_log::Line::Single(l) => all_lines.push(*l),
-                            crate::authorship::working_log::Line::Range(start, end) => {
-                                all_lines.extend(*start..=*end);
+        // Build a map of file -> (most recent entry, checkpoint)
+        // The last checkpoint for a given file contains the full attribution snapshot
+        let mut file_to_latest: HashMap<
+            String,
+            (
+                crate::authorship::working_log::WorkingLogEntry,
+                &crate::authorship::working_log::Checkpoint,
+            ),
+        > = HashMap::new();
+
+        for checkpoint in &parent_checkpoints {
+            for entry in &checkpoint.entries {
+                // Later checkpoints override earlier ones (we want the most recent snapshot)
+                file_to_latest.insert(entry.file.clone(), (entry.clone(), checkpoint));
+            }
+        }
+
+        // Collect author_ids from attributions that overlap with unstaged lines
+        let mut referenced_author_ids: HashSet<String> = HashSet::new();
+
+        for (file, (entry, _)) in &file_to_latest {
+            if let Some(unstaged_ranges) = unstaged_hunks.get(file) {
+                // Check line attributions for overlaps with unstaged ranges
+                for line_attr in &entry.line_attributions {
+                    for unstaged_range in unstaged_ranges {
+                        // Check if this line attribution overlaps with any unstaged range
+                        let unstaged_lines = unstaged_range.expand();
+                        for unstaged_line in unstaged_lines {
+                            if line_attr.start_line <= unstaged_line
+                                && unstaged_line <= line_attr.end_line
+                            {
+                                referenced_author_ids.insert(line_attr.author_id.clone());
+                                break;
                             }
                         }
                     }
-
-                    // Keep only unstaged lines
-                    all_lines.retain(|l| unstaged_ranges.iter().any(|range| range.contains(*l)));
-
-                    // Recompress to Line format
-                    entry.added_lines = crate::authorship::authorship_log_serialization::compress_lines_to_working_log_format(&all_lines);
-
-                    // Clear deleted_lines since they're relative to the old base commit
-                    // After a commit, the base commit changes, so old deletions are no longer relevant
-                    entry.deleted_lines.clear();
                 }
             }
+        }
 
-            // Remove entries with no lines left
-            checkpoint
-                .entries
-                .retain(|entry| !entry.added_lines.is_empty());
+        // Build a map of author_id -> latest checkpoint with that author_id
+        // This ensures we preserve transcripts for AI authors referenced in unstaged lines
+        let mut author_to_latest_checkpoint: HashMap<
+            String,
+            &crate::authorship::working_log::Checkpoint,
+        > = HashMap::new();
 
-            // Only append if there are entries left
-            if !checkpoint.entries.is_empty() {
+        for checkpoint in &parent_checkpoints {
+            // Compute the author_id for this checkpoint (same logic as in checkpoint.rs)
+            let checkpoint_author_id =
+                if checkpoint.kind != crate::authorship::working_log::CheckpointKind::Human {
+                    if let Some(agent_id) = &checkpoint.agent_id {
+                        crate::authorship::authorship_log_serialization::generate_short_hash(
+                            &agent_id.id,
+                            &agent_id.tool,
+                        )
+                    } else {
+                        checkpoint.kind.to_str()
+                    }
+                } else {
+                    checkpoint.kind.to_str()
+                };
+
+            // If this checkpoint's author_id is referenced by unstaged lines, track it
+            // Later checkpoints override earlier ones (we want the latest version)
+            if referenced_author_ids.contains(&checkpoint_author_id) {
+                author_to_latest_checkpoint.insert(checkpoint_author_id, checkpoint);
+            }
+        }
+
+        // Group entries by their author_id for files with unstaged changes
+        // We create one checkpoint per unique author_id that has unstaged lines
+        let mut author_checkpoint_groups: HashMap<
+            String,
+            (
+                crate::authorship::working_log::Checkpoint,
+                Vec<crate::authorship::working_log::WorkingLogEntry>,
+            ),
+        > = HashMap::new();
+
+        for (file, (entry, _original_checkpoint)) in file_to_latest {
+            // Only process files with unstaged changes
+            if !unstaged_hunks.contains_key(&file) {
+                continue;
+            }
+
+            // Check which author_ids from this entry have unstaged lines
+            if let Some(unstaged_ranges) = unstaged_hunks.get(&file) {
+                let mut authors_in_unstaged_lines: HashSet<String> = HashSet::new();
+
+                for line_attr in &entry.line_attributions {
+                    for unstaged_range in unstaged_ranges {
+                        let unstaged_lines = unstaged_range.expand();
+                        for unstaged_line in &unstaged_lines {
+                            if line_attr.start_line <= *unstaged_line
+                                && *unstaged_line <= line_attr.end_line
+                            {
+                                authors_in_unstaged_lines.insert(line_attr.author_id.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // For each author with unstaged lines, add the entry to their checkpoint group
+                for author_id in authors_in_unstaged_lines {
+                    if let Some((_, entries)) = author_checkpoint_groups.get_mut(&author_id) {
+                        // Check if this file is already in the entries
+                        if !entries.iter().any(|e| e.file == entry.file) {
+                            entries.push(entry.clone());
+                        }
+                    } else if let Some(checkpoint) = author_to_latest_checkpoint.get(&author_id) {
+                        // Create a new checkpoint group with the latest checkpoint for this author
+                        // Set line stats to zero to avoid double counting
+                        let mut new_checkpoint = (*checkpoint).clone();
+                        new_checkpoint.line_stats =
+                            crate::authorship::working_log::CheckpointLineStats::default();
+                        new_checkpoint.entries = vec![entry.clone()];
+                        author_checkpoint_groups
+                            .insert(author_id, (new_checkpoint, vec![entry.clone()]));
+                    }
+                }
+            }
+        }
+
+        // Append all checkpoint groups to the new working log
+        for (_, (mut checkpoint, entries)) in author_checkpoint_groups {
+            if !entries.is_empty() {
+                checkpoint.entries = entries;
                 new_working_log.append_checkpoint(&checkpoint)?;
             }
         }

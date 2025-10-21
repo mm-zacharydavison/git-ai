@@ -52,9 +52,10 @@ impl Config {
     }
 
     pub fn is_allowed_repository(&self, repository: &Option<Repository>) -> bool {
-
         // First check if repository is in exclusion list - exclusions take precedence
-        if !self.exclude_repositories.is_empty() && let Some(repository) = repository {
+        if !self.exclude_repositories.is_empty()
+            && let Some(repository) = repository
+        {
             if let Some(remotes) = repository.remotes_with_urls().ok() {
                 // If any remote matches the exclusion list, deny access
                 if remotes
@@ -230,10 +231,8 @@ mod tests {
 
     #[test]
     fn test_exclude_without_allow() {
-        let config = create_test_config(
-            vec![],
-            vec!["https://github.com/excluded/repo".to_string()],
-        );
+        let config =
+            create_test_config(vec![], vec!["https://github.com/excluded/repo".to_string()]);
 
         // With empty allowlist but exclusions, should allow everything (exclusions only matter when checking remotes)
         assert!(config.is_allowed_repository(&None));
@@ -241,10 +240,8 @@ mod tests {
 
     #[test]
     fn test_allow_without_exclude() {
-        let config = create_test_config(
-            vec!["https://github.com/allowed/repo".to_string()],
-            vec![],
-        );
+        let config =
+            create_test_config(vec!["https://github.com/allowed/repo".to_string()], vec![]);
 
         // With allowlist but no exclusions, should deny when no repository provided
         assert!(!config.is_allowed_repository(&None));

@@ -1,5 +1,6 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit;
+use crate::authorship::working_log::CheckpointKind;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
 use crate::git::authorship_log_cache::AuthorshipLogCache;
@@ -8,6 +9,7 @@ use crate::git::repository::{Commit, Repository};
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::utils::debug_log;
 use similar::{ChangeTag, TextDiff};
+use std::collections::HashMap;
 
 // Process events in the rewrite log and call the correct rewrite functions in this file
 pub fn rewrite_authorship_if_needed(
@@ -123,6 +125,12 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     new_sha: &str,
     dry_run: bool,
 ) -> Result<AuthorshipLog, GitAiError> {
+    // Cache for foreign prompts to avoid repeated grepping
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
+
     // Step 1: Find the common origin base
     let origin_base = find_common_origin_base_from_head(repo, head_sha, new_sha)?;
 
@@ -172,6 +180,7 @@ pub fn rewrite_authorship_after_squash_or_rebase(
         &new_commit_parent,
         &hanging_commit_sha,
         &mut authorship_log_cache,
+        &mut foreign_prompts_cache,
     )?;
 
     // Set the base_commit_sha to the new commit
@@ -263,21 +272,43 @@ pub fn prepare_working_log_after_squash(
     // Step 7: Reconstruct authorship from the diff between temp_commit and origin_base
     // This shows ALL changes that came from the feature branch
     let temp_commit_obj = repo.find_commit(temp_commit.to_string())?;
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
     let new_authorship_log = reconstruct_authorship_from_diff(
         repo,
         &temp_commit_obj,
         &origin_base_commit,
         &hanging_commit_sha,
         &mut AuthorshipLogCache::new(),
+        &mut foreign_prompts_cache,
     )?;
 
     // Step 8: Clean up temporary commits
     delete_hanging_commit(repo, &hanging_commit_sha)?;
     delete_hanging_commit(repo, &temp_commit.to_string())?;
 
-    // Step 9: Convert authorship log to checkpoints
+    // Step 9: Build file contents map from staged files
+    use std::collections::HashMap;
+    let mut file_contents: HashMap<String, String> = HashMap::new();
+    for file_attestation in &new_authorship_log.attestations {
+        let file_path = &file_attestation.file_path;
+        // Read the staged version of the file using git show :path
+        let mut args = repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push(format!(":{}", file_path));
+
+        let output = crate::git::repository::exec_git(&args)?;
+        let file_content = String::from_utf8(output.stdout).map_err(|_| {
+            GitAiError::Generic(format!("Failed to read staged file: {}", file_path))
+        })?;
+        file_contents.insert(file_path.clone(), file_content);
+    }
+
+    // Step 10: Convert authorship log to checkpoints
     let mut checkpoints = new_authorship_log
-        .convert_to_checkpoints_for_squash(human_author)
+        .convert_to_checkpoints_for_squash(&file_contents)
         .map_err(|e| {
             GitAiError::Generic(format!(
                 "Failed to convert authorship log to checkpoints: {}",
@@ -286,9 +317,9 @@ pub fn prepare_working_log_after_squash(
         })?;
 
     // Filter to keep only AI checkpoints - we don't track human-only changes in working logs
-    checkpoints.retain(|checkpoint| checkpoint.agent_id.is_some());
+    checkpoints.retain(|checkpoint| checkpoint.kind != CheckpointKind::Human);
 
-    // Step 10: For each checkpoint, read the staged file content and save blobs
+    // Step 11: For each checkpoint, read the staged file content and save blobs
     let working_log = repo
         .storage
         .working_log_for_base_commit(target_branch_head_sha);
@@ -653,6 +684,11 @@ fn reconstruct_authorship_for_commit(
     old_sha: &str,
     new_sha: &str,
 ) -> Result<AuthorshipLog, GitAiError> {
+    // Cache for foreign prompts to avoid repeated grepping
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
     // Get commits
     let old_commit = repo.find_commit(old_sha.to_string())?;
     let new_commit = repo.find_commit(new_sha.to_string())?;
@@ -675,6 +711,7 @@ fn reconstruct_authorship_for_commit(
         &new_parent,
         &hanging_commit_sha,
         &mut AuthorshipLogCache::new(),
+        &mut foreign_prompts_cache,
     )?;
 
     // Set the base_commit_sha to the new commit
@@ -851,6 +888,10 @@ fn reconstruct_authorship_from_diff(
     new_commit_parent: &Commit,
     hanging_commit_sha: &str,
     authorship_log_cache: &mut AuthorshipLogCache,
+    foreign_prompts_cache: &mut HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    >,
 ) -> Result<AuthorshipLog, GitAiError> {
     use std::collections::{HashMap, HashSet};
 
@@ -953,7 +994,7 @@ fn reconstruct_authorship_from_diff(
                     ));
 
                     // For each inserted line, try to find the same content in the hanging commit
-                    for (i, inserted_line) in inserted.iter().enumerate() {
+                    for (_i, inserted_line) in inserted.iter().enumerate() {
                         // Find a matching line number in hanging content, prefer the first not yet used
                         let mut matched_hanging_line: Option<u32> = None;
                         for (idx, h_line) in hanging_lines.iter().enumerate() {
@@ -977,6 +1018,7 @@ fn reconstruct_authorship_from_diff(
                                 h_line_no,
                                 hanging_commit_sha,
                                 authorship_log_cache,
+                                foreign_prompts_cache,
                             );
 
                             // Handle blame errors gracefully (e.g., file doesn't exist in hanging commit)
@@ -1152,6 +1194,10 @@ fn run_blame_in_context(
     line_number: u32,
     hanging_commit_sha: &str,
     authorship_log_cache: &mut AuthorshipLogCache,
+    foreign_prompts_cache: &mut HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    >,
 ) -> Result<
     Option<(
         crate::authorship::authorship_log::Author,
@@ -1159,8 +1205,6 @@ fn run_blame_in_context(
     )>,
     GitAiError,
 > {
-    use crate::git::refs::get_reference_as_authorship_log_v3;
-
     // println!(
     //     "Running blame in context for line {} in file {}",
     //     line_number, file_path
@@ -1206,9 +1250,12 @@ fn run_blame_in_context(
         // Use the ORIGINAL line number from the blamed commit, not the current line number
         let orig_line_to_lookup = hunk.orig_range.0;
 
-        if let Some((author, prompt)) =
-            authorship_log.get_line_attribution(file_path, orig_line_to_lookup)
-        {
+        if let Some((author, _, prompt)) = authorship_log.get_line_attribution(
+            repo,
+            file_path,
+            orig_line_to_lookup,
+            foreign_prompts_cache,
+        ) {
             Ok(Some((author.clone(), prompt.map(|p| (p.clone(), 0)))))
         } else {
             // Line not found in authorship log, fall back to git author
@@ -1339,6 +1386,11 @@ pub fn reconstruct_working_log_after_reset(
     old_head_sha: &str,      // Where HEAD was BEFORE reset
     human_author: &str,
 ) -> Result<(), GitAiError> {
+    // Cache for foreign prompts to avoid repeated grepping
+    let mut foreign_prompts_cache: HashMap<
+        String,
+        Option<crate::authorship::authorship_log::PromptRecord>,
+    > = HashMap::new();
     debug_log(&format!(
         "Reconstructing working log after reset from {} to {}",
         old_head_sha, target_commit_sha
@@ -1400,6 +1452,7 @@ pub fn reconstruct_working_log_after_reset(
         &target_commit_obj,
         &hanging_commit_sha.to_string(),
         &mut AuthorshipLogCache::new(),
+        &mut foreign_prompts_cache,
     )?;
 
     debug_log(&format!(
@@ -1407,10 +1460,30 @@ pub fn reconstruct_working_log_after_reset(
         new_authorship_log.attestations.len(),
         new_authorship_log.metadata.prompts.len()
     ));
+    eprintln!("new_authorship_log: {:?}", new_authorship_log);
 
-    // Step 4: Convert to checkpoints
+    // Step 4: Build file contents map from index
+    use std::collections::HashMap;
+    let mut file_contents: HashMap<String, String> = HashMap::new();
+    for file_attestation in &new_authorship_log.attestations {
+        // Read from index using git show :path
+        let mut args = repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push(format!(":{}", file_attestation.file_path));
+
+        let output = crate::git::repository::exec_git(&args)?;
+        let file_content = String::from_utf8(output.stdout).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Failed to read file: {}",
+                file_attestation.file_path
+            ))
+        })?;
+        file_contents.insert(file_attestation.file_path.clone(), file_content);
+    }
+
+    // Step 5: Convert to checkpoints
     let mut checkpoints = new_authorship_log
-        .convert_to_checkpoints_for_squash(human_author)
+        .convert_to_checkpoints_for_squash(&file_contents)
         .map_err(|e| {
             GitAiError::Generic(format!(
                 "Failed to convert authorship log to checkpoints: {}",
@@ -1419,9 +1492,9 @@ pub fn reconstruct_working_log_after_reset(
         })?;
 
     // Filter to keep only AI checkpoints - we don't track human-only changes in working logs
-    checkpoints.retain(|checkpoint| checkpoint.agent_id.is_some());
+    checkpoints.retain(|checkpoint| checkpoint.kind != CheckpointKind::Human);
 
-    // Step 5: Persist blobs and write working log
+    // Step 6: Persist blobs and write working log
     let new_working_log = repo.storage.working_log_for_base_commit(target_commit_sha);
     // reset first (can have stuff in it from before if you're operating on HEAD)
     new_working_log.reset_working_log()?;
@@ -1431,7 +1504,7 @@ pub fn reconstruct_working_log_after_reset(
         new_working_log.append_checkpoint(checkpoint)?;
     }
 
-    // Step 6: Cleanup hanging commits
+    // Step 7: Cleanup hanging commits
     delete_hanging_commit(repo, &hanging_commit_sha.to_string())?;
     delete_hanging_commit(repo, &temp_working_commit.to_string())?;
 
