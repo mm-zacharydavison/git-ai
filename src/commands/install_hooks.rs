@@ -1,6 +1,8 @@
 use crate::error::GitAiError;
 use crate::utils::debug_log;
 use indicatif::{ProgressBar, ProgressStyle};
+use jsonc_parser::ParseOptions;
+use jsonc_parser::cst::CstRootNode;
 use serde_json::{Value, json};
 use similar::{ChangeTag, TextDiff};
 use std::fs;
@@ -110,6 +112,36 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     eprintln!("  Check that ~/.cursor/hooks.json is valid JSON");
                 }
             }
+
+            #[cfg(windows)]
+            {
+                let settings_spinner = Spinner::new("Cursor: configuring git.path");
+                settings_spinner.start();
+
+                match configure_cursor_git_path(dry_run) {
+                    Ok(diffs) => {
+                        if diffs.is_empty() {
+                            settings_spinner.success("Cursor: git.path already configured");
+                        } else if dry_run {
+                            settings_spinner.pending("Cursor: Pending git.path update");
+                        } else {
+                            settings_spinner.success("Cursor: git.path updated");
+                        }
+
+                        if !diffs.is_empty() {
+                            for diff in diffs {
+                                println!(); // Blank line before diff
+                                print_diff(&diff);
+                            }
+                            has_changes = true;
+                        }
+                    }
+                    Err(e) => {
+                        settings_spinner.error("Cursor: Failed to configure git.path");
+                        eprintln!("  Error: {}", e);
+                    }
+                }
+            }
         }
         Ok(false) => {
             // Cursor not detected
@@ -163,6 +195,36 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                 }
             } else {
                 spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+            }
+
+            #[cfg(windows)]
+            {
+                let settings_spinner = Spinner::new("VS Code: configuring git.path");
+                settings_spinner.start();
+
+                match configure_vscode_git_path(dry_run) {
+                    Ok(diffs) => {
+                        if diffs.is_empty() {
+                            settings_spinner.success("VS Code: git.path already configured");
+                        } else if dry_run {
+                            settings_spinner.pending("VS Code: Pending git.path update");
+                        } else {
+                            settings_spinner.success("VS Code: git.path updated");
+                        }
+
+                        if !diffs.is_empty() {
+                            for diff in diffs {
+                                println!(); // Blank line before diff
+                                print_diff(&diff);
+                            }
+                            has_changes = true;
+                        }
+                    }
+                    Err(e) => {
+                        settings_spinner.error("VS Code: Failed to configure git.path");
+                        eprintln!("  Error: {}", e);
+                    }
+                }
             }
         }
         Ok(false) => {
@@ -253,7 +315,11 @@ fn check_cursor() -> Result<bool, String> {
         home.join(".cursor").exists()
     };
 
-    if !has_binary && !has_dotfiles {
+    let has_settings_targets = cursor_settings_targets()
+        .iter()
+        .any(|path| should_process_settings_target(path));
+
+    if !has_binary && !has_dotfiles && !has_settings_targets {
         return Ok(false);
     }
 
@@ -287,7 +353,11 @@ fn check_vscode() -> Result<bool, String> {
         home.join(".vscode").exists()
     };
 
-    if !has_binary && !has_dotfiles {
+    let has_settings_targets = vscode_settings_targets()
+        .iter()
+        .any(|path| should_process_settings_target(path));
+
+    if !has_binary && !has_dotfiles && !has_settings_targets {
         return Ok(false);
     }
 
@@ -784,6 +854,238 @@ fn home_dir() -> PathBuf {
         }
     }
     PathBuf::from(".")
+}
+
+#[cfg(windows)]
+fn git_shim_path() -> PathBuf {
+    home_dir().join(".git-ai").join("bin").join("git")
+}
+
+#[cfg(windows)]
+fn git_shim_path_string() -> String {
+    git_shim_path().to_string_lossy().into_owned()
+}
+
+fn should_process_settings_target(path: &Path) -> bool {
+    path.exists() || path.parent().map(|parent| parent.exists()).unwrap_or(false)
+}
+
+fn settings_path_candidates(product: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            paths.push(
+                PathBuf::from(&appdata)
+                    .join(product)
+                    .join("User")
+                    .join("settings.json"),
+            );
+        }
+        paths.push(
+            home_dir()
+                .join("AppData")
+                .join("Roaming")
+                .join(product)
+                .join("User")
+                .join("settings.json"),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(
+            home_dir()
+                .join("Library")
+                .join("Application Support")
+                .join(product)
+                .join("User")
+                .join("settings.json"),
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        paths.push(
+            home_dir()
+                .join(".config")
+                .join(product)
+                .join("User")
+                .join("settings.json"),
+        );
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn settings_paths_for_products(product_names: &[&str]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = product_names
+        .iter()
+        .flat_map(|product| settings_path_candidates(product))
+        .collect();
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn vscode_settings_targets() -> Vec<PathBuf> {
+    settings_paths_for_products(&["Code", "Code - Insiders"])
+}
+
+fn cursor_settings_targets() -> Vec<PathBuf> {
+    settings_paths_for_products(&["Cursor"])
+}
+
+#[cfg(windows)]
+fn configure_git_path_for_products(
+    product_names: &[&str],
+    dry_run: bool,
+) -> Result<Vec<String>, GitAiError> {
+    let git_path = git_shim_path_string();
+    let mut diffs = Vec::new();
+
+    for settings_path in settings_paths_for_products(product_names) {
+        if !should_process_settings_target(&settings_path) {
+            continue;
+        }
+
+        if let Some(diff) = update_git_path_setting(&settings_path, &git_path, dry_run)? {
+            diffs.push(diff);
+        }
+    }
+
+    Ok(diffs)
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn configure_git_path_for_products(
+    product_names: &[&str],
+    dry_run: bool,
+) -> Result<Vec<String>, GitAiError> {
+    let _ = (product_names, dry_run);
+    Ok(Vec::new())
+}
+
+#[cfg(windows)]
+fn configure_vscode_git_path(dry_run: bool) -> Result<Vec<String>, GitAiError> {
+    configure_git_path_for_products(&["Code", "Code - Insiders"], dry_run)
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn configure_vscode_git_path(dry_run: bool) -> Result<Vec<String>, GitAiError> {
+    let _ = dry_run;
+    Ok(Vec::new())
+}
+
+#[cfg(windows)]
+fn configure_cursor_git_path(dry_run: bool) -> Result<Vec<String>, GitAiError> {
+    configure_git_path_for_products(&["Cursor"], dry_run)
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn configure_cursor_git_path(dry_run: bool) -> Result<Vec<String>, GitAiError> {
+    let _ = dry_run;
+    Ok(Vec::new())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn update_git_path_setting(
+    settings_path: &Path,
+    git_path: &str,
+    dry_run: bool,
+) -> Result<Option<String>, GitAiError> {
+    let original = if settings_path.exists() {
+        fs::read_to_string(settings_path)?
+    } else {
+        String::new()
+    };
+
+    let parse_input = if original.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        original.clone()
+    };
+
+    let parse_options = ParseOptions::default();
+
+    let root = CstRootNode::parse(&parse_input, &parse_options).map_err(|err| {
+        GitAiError::Generic(format!(
+            "Failed to parse {}: {}",
+            settings_path.display(),
+            err
+        ))
+    })?;
+
+    let object = root.object_value_or_set();
+    let mut changed = false;
+    let serialized_git_path = git_path.replace('\\', "\\\\");
+
+    match object.get("git.path") {
+        Some(prop) => {
+            let should_update = match prop.value() {
+                Some(node) => match node.as_string_lit() {
+                    Some(string_node) => match string_node.decoded_value() {
+                        Ok(existing_value) => existing_value != git_path,
+                        Err(_) => true,
+                    },
+                    None => true,
+                },
+                None => true,
+            };
+
+            if should_update {
+                prop.set_value(jsonc_parser::json!(serialized_git_path.as_str()));
+                changed = true;
+            }
+        }
+        None => {
+            object.append(
+                "git.path",
+                jsonc_parser::json!(serialized_git_path.as_str()),
+            );
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return Ok(None);
+    }
+
+    let new_content = root.to_string();
+
+    let diff = TextDiff::from_lines(&original, &new_content);
+    let mut diff_output = format!(
+        "--- {}\n+++ {}\n",
+        settings_path.display(),
+        settings_path.display()
+    );
+
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        diff_output.push_str(&format!("{}{}", sign, change));
+    }
+
+    if !dry_run {
+        if let Some(parent) = settings_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        write_atomic(settings_path, new_content.as_bytes())?;
+    }
+
+    Ok(Some(diff_output))
 }
 
 /// Get the absolute path to the currently running binary
@@ -1375,6 +1677,72 @@ mod tests {
         assert!(path.is_absolute());
         // The path should contain the test binary
         assert!(path.to_string_lossy().len() > 0);
+    }
+
+    #[test]
+    fn test_update_git_path_setting_appends_with_comments() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+        let initial = r#"{
+    // comment
+    "editor.tabSize": 4
+}
+"#;
+        fs::write(&settings_path, initial).unwrap();
+
+        let git_path = r"C:\Users\Test\.git-ai\bin\git";
+
+        // Dry-run should produce a diff without modifying the file
+        let dry_run_result = update_git_path_setting(&settings_path, git_path, true).unwrap();
+        assert!(dry_run_result.is_some());
+        let after_dry_run = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(after_dry_run, initial);
+
+        // Apply the change
+        let apply_result = update_git_path_setting(&settings_path, git_path, false).unwrap();
+        assert!(apply_result.is_some());
+
+        let final_content = fs::read_to_string(&settings_path).unwrap();
+        assert!(final_content.contains("// comment"));
+        let tab_index = final_content.find("\"editor.tabSize\"").unwrap();
+        let git_index = final_content.find("\"git.path\"").unwrap();
+        assert!(tab_index < git_index);
+        let verify = update_git_path_setting(&settings_path, git_path, true).unwrap();
+        assert!(verify.is_none());
+    }
+
+    #[test]
+    fn test_update_git_path_setting_updates_existing_value_in_place() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+        let initial = r#"{
+    "git.path": "old-path",
+    "editor.tabSize": 2
+}
+"#;
+        fs::write(&settings_path, initial).unwrap();
+
+        let result = update_git_path_setting(&settings_path, "new-path", false).unwrap();
+        assert!(result.is_some());
+
+        let final_content = fs::read_to_string(&settings_path).unwrap();
+        assert!(final_content.contains("\"git.path\": \"new-path\""));
+        assert_eq!(final_content.matches("git.path").count(), 1);
+        assert!(final_content.contains("\"editor.tabSize\": 2"));
+    }
+
+    #[test]
+    fn test_update_git_path_setting_detects_no_change() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+        let initial = "{\n    \"git.path\": \"same\"\n}\n";
+        fs::write(&settings_path, initial).unwrap();
+
+        let result = update_git_path_setting(&settings_path, "same", false).unwrap();
+        assert!(result.is_none());
+
+        let final_content = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(final_content, initial);
     }
 
     // Claude Code tests
