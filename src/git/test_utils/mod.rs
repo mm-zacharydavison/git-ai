@@ -2,7 +2,7 @@ use crate::authorship::attribution_tracker::Attribution;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit::post_commit;
 use crate::authorship::working_log::{Checkpoint, CheckpointKind};
-use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+use crate::commands::checkpoint_agent::agent_presets::AgentRunResult;
 use crate::commands::{blame, checkpoint::run as checkpoint};
 use crate::error::GitAiError;
 use crate::git::repository::Repository as GitAiRepository;
@@ -365,7 +365,7 @@ impl TmpRepo {
     ) -> Result<(usize, usize, usize), GitAiError> {
         use crate::authorship::transcript::AiTranscript;
         use crate::authorship::working_log::AgentId;
-        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+        use crate::commands::checkpoint_agent::agent_presets::AgentRunResult;
 
         // Use a deterministic but unique session ID based on agent_name
         // For common agent names (Claude, GPT-4), use fixed ID for backwards compat

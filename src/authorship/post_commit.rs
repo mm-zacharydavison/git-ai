@@ -2,7 +2,7 @@ use crate::authorship::authorship_log::LineRange;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::stats::{stats_for_commit_stats, write_stats_to_terminal};
 use crate::authorship::working_log::Checkpoint;
-use crate::commands::checkpoint_agent::agent_preset::CursorPreset;
+use crate::commands::checkpoint_agent::agent_presets::CursorPreset;
 use crate::error::GitAiError;
 use crate::git::refs::notes_add;
 use crate::git::repository::Repository;

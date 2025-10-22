@@ -2,7 +2,7 @@ use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::{AgentId, CheckpointKind};
 use crate::commands;
-use crate::commands::checkpoint_agent::agent_preset::{
+use crate::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
     GithubCopilotPreset,
 };

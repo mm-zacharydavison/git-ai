@@ -2,7 +2,7 @@ use crate::authorship::attribution_tracker::{Attribution, AttributionTracker};
 use crate::authorship::working_log::CheckpointKind;
 use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
 use crate::commands::blame::GitAiBlameOptions;
-use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+use crate::commands::checkpoint_agent::agent_presets::AgentRunResult;
 use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
@@ -974,7 +974,7 @@ mod tests {
     fn test_checkpoint_with_paths_outside_repo() {
         use crate::authorship::transcript::AiTranscript;
         use crate::authorship::working_log::AgentId;
-        use crate::commands::checkpoint_agent::agent_preset::AgentRunResult;
+        use crate::commands::checkpoint_agent::agent_presets::AgentRunResult;
 
         // Create a repo with an initial commit
         let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();

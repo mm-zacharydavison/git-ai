@@ -1,7 +1,7 @@
 mod test_utils;
 
 use git_ai::authorship::transcript::Message;
-use git_ai::commands::checkpoint_agent::agent_preset::GithubCopilotPreset;
+use git_ai::commands::checkpoint_agent::agent_presets::GithubCopilotPreset;
 use serde_json::json;
 use test_utils::load_fixture;
 

@@ -1,7 +1,7 @@
 mod test_utils;
 
 use git_ai::authorship::transcript::{AiTranscript, Message};
-use git_ai::commands::checkpoint_agent::agent_preset::{
+use git_ai::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, ClaudePreset,
 };
 use test_utils::load_fixture;
