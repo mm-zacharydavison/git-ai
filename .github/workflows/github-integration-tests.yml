@@ -43,11 +43,18 @@ jobs:
         run: |
           if [ -z "$GH_INTEGRATION_TEST_TOKEN" ]; then
             echo "❌ GH_INTEGRATION_TEST_TOKEN secret is not set"
-            echo "Please add a Personal Access Token with 'repo' and 'delete_repo' scopes"
+            echo "Please add a Personal Access Token with 'repo', 'delete_repo', and 'read:org' scopes"
             exit 1
           fi
           echo "$GH_INTEGRATION_TEST_TOKEN" | gh auth login --with-token
           gh auth status
+
+      - name: Configure git credentials
+        env:
+          GH_INTEGRATION_TEST_TOKEN: ${{ secrets.GH_INTEGRATION_TEST_TOKEN }}
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${GH_INTEGRATION_TEST_TOKEN}@github.com" > ~/.git-credentials
 
       - name: Run GitHub integration tests
         run: cargo test --test github_integration -- --ignored --nocapture
