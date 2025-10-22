@@ -1,0 +1,56 @@
+name: Integration Tests - GitHub
+
+on:
+  workflow_dispatch:
+    inputs:
+      no-cleanup:
+        description: 'Skip cleanup (leave test repos for inspection)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  github-integration:
+    name: GitHub Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Authenticate GitHub CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_INTEGRATION_TEST_TOKEN }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "❌ GITHUB_INTEGRATION_TEST_TOKEN secret is not set"
+            echo "Please add a Personal Access Token with 'repo' and 'delete_repo' scopes"
+            exit 1
+          fi
+          echo "$GITHUB_TOKEN" | gh auth login --with-token
+          gh auth status
+
+      - name: Run GitHub integration tests
+        run: cargo test --test github_integration -- --ignored --nocapture
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_INTEGRATION_TEST_TOKEN }}
+          GIT_AI_TEST_NO_CLEANUP: ${{ inputs.no-cleanup && '1' || '' }}
