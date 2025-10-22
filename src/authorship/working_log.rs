@@ -74,6 +74,11 @@ impl CheckpointKind {
             CheckpointKind::AiTab => "ai_tab".to_string(),
         }
     }
+
+    /// Default value to prevent crashes on old versions
+    pub fn serde_default() -> Self {
+        CheckpointKind::Human
+    }
 }
 
 /// Line-level statistics tracked per checkpoint kind
@@ -117,6 +122,7 @@ impl CheckpointLineStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
+    #[serde(default = "CheckpointKind::serde_default")]
     pub kind: CheckpointKind,
     pub diff: String,
     pub author: String,
