@@ -57,7 +57,10 @@ jobs:
           echo "https://x-access-token:${GH_INTEGRATION_TEST_TOKEN}@github.com" > ~/.git-credentials
 
       - name: Run GitHub integration tests
-        run: cargo test --test github_integration -- --ignored --nocapture
+        run: |
+          if [ "${{ inputs.no-cleanup }}" = "true" ]; then
+            export GIT_AI_TEST_NO_CLEANUP=1
+          fi
+          cargo test --test github_integration -- --ignored --nocapture
         env:
           GH_INTEGRATION_TEST_TOKEN: ${{ secrets.GH_INTEGRATION_TEST_TOKEN }}
-          GIT_AI_TEST_NO_CLEANUP: ${{ inputs.no-cleanup && '1' || '' }}
