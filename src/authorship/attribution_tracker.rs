@@ -3,12 +3,12 @@
 //! This library maintains attribution ranges as files are edited, preserving
 //! authorship information even through moves, edits, and whitespace changes.
 
+use crate::authorship::move_detection::{DeletedLine, InsertedLine, detect_moves};
 use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
 use diff_match_patch_rs::dmp::Diff;
 use diff_match_patch_rs::traits::Efficient;
 use diff_match_patch_rs::{DiffMatchPatch, Ops};
-use crate::authorship::move_detection::{detect_moves, InsertedLine, DeletedLine};
 use std::collections::HashMap;
 
 /// Represents a single attribution range in the file.

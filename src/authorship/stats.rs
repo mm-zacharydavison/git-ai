@@ -13,7 +13,7 @@ pub struct CommitStats {
     #[serde(default)]
     pub mixed_additions: u32, // AI-generated lines that were edited by humans
     #[serde(default)]
-    pub ai_additions: u32,    // AI-generated lines with no human editingso
+    pub ai_additions: u32, // AI-generated lines with no human editingso
     #[serde(default)]
     pub ai_accepted: u32,
     #[serde(default)]
