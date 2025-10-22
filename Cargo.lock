@@ -683,6 +683,7 @@ dependencies = [
  "git2",
  "indicatif",
  "insta",
+ "jsonc-parser",
  "libc",
  "once_cell",
  "predicates",
@@ -954,6 +955,12 @@ dependencies = [
  "once_cell",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ec4ac49f13c7b00f435f8a5bb55d725705e2cf620df35a5859321595102eb7e"
 
 [[package]]
 name = "libc"
