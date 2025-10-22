@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 
 class AIEditManager {
   private workspaceBaseStoragePath: string | null = null;
@@ -166,30 +166,57 @@ class AIEditManager {
         return;
       }
 
-      exec(
-        // NOTE: The single quotes should be safe for the kind of data we have
-        `git-ai checkpoint ${author === "ai" ? "github-copilot" : ""} ${hookInput ? `--hook-input '${hookInput}'` : ""}`,
-        { cwd: workspaceRoot },
-        (error) => {
-          if (error) {
-            const config = vscode.workspace.getConfiguration("gitai");
-            if (config.get("enableCheckpointLogging")) {
-              vscode.window.showInformationMessage(
-                "Error with checkpoint: " + error.message
-              );
-            }
-            resolve(false);
-          } else {
-            const config = vscode.workspace.getConfiguration("gitai");
-            if (config.get("enableCheckpointLogging")) {
-              vscode.window.showInformationMessage(
-                "Checkpoint created " + author
-              );
-            }
-            resolve(true);
+      const args = ["checkpoint"];
+      if (author === "ai") {
+        args.push("github-copilot");
+      }
+      if (hookInput) {
+        args.push("--hook-input", "stdin");
+      }
+
+      const proc = spawn("git-ai", args, { cwd: workspaceRoot });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("error", (error) => {
+        console.error('[git-ai] AIEditManager: Checkpoint error:', error, stdout, stderr);
+        vscode.window.showErrorMessage(
+          "git-ai checkpoint error: " + error.message + " - " + stdout + " - " + stderr
+        );
+        resolve(false);
+      });
+
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          console.error('[git-ai] AIEditManager: Checkpoint exited with code:', code, stdout, stderr);
+          vscode.window.showErrorMessage(
+            "git-ai checkpoint error: exited with code " + code + " - " + stdout + " - " + stderr
+          );
+          resolve(false);
+        } else {
+          const config = vscode.workspace.getConfiguration("gitai");
+          if (config.get("enableCheckpointLogging")) {
+            vscode.window.showInformationMessage(
+              "Checkpoint created " + author
+            );
           }
+          resolve(true);
         }
-      );
+      });
+
+      if (hookInput) {
+        proc.stdin.write(hookInput);
+        proc.stdin.end();
+      }
     });
   }
 
