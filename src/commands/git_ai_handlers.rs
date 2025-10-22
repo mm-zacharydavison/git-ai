@@ -405,6 +405,7 @@ fn handle_stats(args: &[String]) {
     if let Some(range) = commit_range {
         match range_authorship::range_authorship(range, true) {
             Ok(stats) => {
+                println!("stats from lib: {:?}", stats);
                 if json_output {
                     let json_str = serde_json::to_string(&stats).unwrap();
                     println!("{}", json_str);

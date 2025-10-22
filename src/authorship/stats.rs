@@ -263,6 +263,169 @@ pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
     return output;
 }
 
+pub fn write_stats_to_markdown(stats: &CommitStats) -> String {
+    let mut output = String::new();
+
+    // Set maximum bar width to 40 characters
+    let bar_width: usize = 40;
+
+    // Handle deletion-only commits (no additions)
+    if stats.git_diff_added_lines == 0 && stats.git_diff_deleted_lines > 0 {
+        // Show gray bar for deletion-only commit
+        let mut progress_bar = String::new();
+        progress_bar.push_str("you&nbsp;&nbsp;");
+        progress_bar.push_str(&"&nbsp;".repeat(bar_width)); // Gray bar
+        progress_bar.push_str("&nbsp;ai");
+
+        output.push_str(&progress_bar);
+        output.push('\n');
+
+        // Show "(no additions)" message below the bar
+        let no_additions_msg = format!("{}{:^40}", "&nbsp;".repeat(6), "(no additions)");
+        output.push_str(&no_additions_msg);
+        output.push('\n');
+        // No percentage line or AI stats for deletion-only commits
+        return output;
+    }
+
+    // Calculate total additions for the progress bar
+    // Total = pure human + mixed (AI-edited-by-human) + pure AI
+    let total_additions = stats.human_additions + stats.ai_additions;
+
+    // Calculate AI acceptance percentage (capped at 100%)
+    // It can go higher because AI can write on top of AI code. This feels reasonable for now
+    let ai_acceptance_percentage = if stats.ai_additions > 0 {
+        ((stats.ai_accepted as f64 / stats.ai_additions as f64) * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+
+    // Create progress bar with three categories
+    // Pure human = human_additions - mixed_additions (overridden lines)
+    let pure_human = stats.human_additions.saturating_sub(stats.mixed_additions);
+
+    let pure_human_bars = if total_additions > 0 {
+        ((pure_human as f64 / total_additions as f64) * bar_width as f64) as usize
+    } else {
+        0
+    };
+
+    #[allow(unused_variables)]
+    let mixed_bars = if total_additions > 0 {
+        ((stats.mixed_additions as f64 / total_additions as f64) * bar_width as f64) as usize
+    } else {
+        0
+    };
+
+    #[allow(unused_variables)]
+    let ai_bars = if total_additions > 0 {
+        ((stats.ai_additions as f64 / total_additions as f64) * bar_width as f64) as usize
+    } else {
+        0
+    };
+
+    // Ensure human contributions get at least 2 visible blocks if they have more than 1 line
+    let min_human_bars = if stats.human_additions > 1 { 2 } else { 0 };
+    let final_pure_human_bars = if stats.human_additions > 1 {
+        pure_human_bars.max(min_human_bars)
+    } else {
+        pure_human_bars
+    };
+
+    // Adjust other bars if we had to give more space to human
+    let remaining_width = bar_width.saturating_sub(final_pure_human_bars);
+    let total_other_additions = stats.mixed_additions + stats.ai_additions;
+
+    let final_mixed_bars = if total_other_additions > 0 {
+        ((stats.mixed_additions as f64 / total_other_additions as f64) * remaining_width as f64)
+            as usize
+    } else {
+        0
+    };
+
+    let final_ai_bars = remaining_width.saturating_sub(final_mixed_bars);
+
+    // Build the progress bar with three categories
+    let mut progress_bar = String::new();
+    progress_bar.push_str("you&nbsp;&nbsp;");
+
+    // Pure human bars (darkest)
+    progress_bar.push_str(&"█".repeat(final_pure_human_bars));
+
+    // Mixed bars (medium) - AI-generated but human-edited
+    progress_bar.push_str(&"▒".repeat(final_mixed_bars));
+
+    // AI bars (lightest) - pure AI, untouched
+    progress_bar.push_str(&"░".repeat(final_ai_bars));
+
+    progress_bar.push_str("&nbsp;ai");
+
+    // Format time waiting for AI
+    #[allow(unused_variables)]
+    let waiting_time_str = if stats.time_waiting_for_ai > 0 {
+        let minutes = stats.time_waiting_for_ai / 60;
+        let seconds = stats.time_waiting_for_ai % 60;
+        if minutes > 0 {
+            format!("{}m {}s", minutes, seconds)
+        } else {
+            format!("{}s", seconds)
+        }
+    } else {
+        "0s".to_string()
+    };
+
+    // Calculate percentages for display
+    let pure_human_percentage = if total_additions > 0 {
+        ((pure_human as f64 / total_additions as f64) * 100.0).round() as u32
+    } else {
+        0
+    };
+    let mixed_percentage = if total_additions > 0 {
+        ((stats.mixed_additions as f64 / total_additions as f64) * 100.0).round() as u32
+    } else {
+        0
+    };
+    let ai_percentage = if total_additions > 0 {
+        ((stats.ai_additions as f64 / total_additions as f64) * 100.0).round() as u32
+    } else {
+        0
+    };
+
+    // Print the stats
+    output.push_str(&progress_bar);
+    output.push('\n');
+    // Print percentage line with proper spacing
+    // Block characters render much wider in markdown, so we need lots of spacing
+    if mixed_percentage > 0 {
+        // Show all three: human, mixed, ai
+        // Human% at left edge, mixed% in middle, AI% at right edge
+        let percentage_line = format!(
+            "{}{}{}mixed&nbsp;{}%{}{}%",
+            "&nbsp;".repeat(6),
+            format!("{}%", pure_human_percentage),
+            "&nbsp;".repeat(40),
+            mixed_percentage,
+            "&nbsp;".repeat(40),
+            ai_percentage
+        );
+        output.push_str(&percentage_line);
+        output.push('\n');
+    } else {
+        // No mixed, just show human and ai at bar edges
+        let percentage_line = format!(
+            "{}{}{}{}%",
+            "&nbsp;".repeat(6),
+            format!("{}%", pure_human_percentage),
+            "&nbsp;".repeat(105),
+            ai_percentage
+        );
+        output.push_str(&percentage_line);
+        output.push('\n');
+    }
+
+    return output;
+}
+
 pub fn stats_for_commit_stats(
     repo: &Repository,
     commit_sha: &str,
@@ -547,6 +710,79 @@ mod tests {
         };
 
         let deletion_only_output = write_stats_to_terminal(&deletion_only_stats, true);
+        assert_debug_snapshot!(deletion_only_output);
+    }
+
+    #[test]
+    fn test_markdown_stats_display() {
+        // Test with mixed human/AI stats
+        let stats = CommitStats {
+            human_additions: 50,
+            mixed_additions: 40,
+            ai_additions: 100,
+            ai_accepted: 25,
+            time_waiting_for_ai: 72009, // 1 minute 30 seconds
+            git_diff_deleted_lines: 15,
+            git_diff_added_lines: 80,
+        };
+
+        let mixed_output = write_stats_to_markdown(&stats);
+        assert_debug_snapshot!(mixed_output);
+
+        // Test with AI-only stats
+        let ai_stats = CommitStats {
+            human_additions: 0,
+            mixed_additions: 0,
+            ai_additions: 100,
+            ai_accepted: 95,
+            time_waiting_for_ai: 45,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 100,
+        };
+
+        let ai_only_output = write_stats_to_markdown(&ai_stats);
+        assert_debug_snapshot!(ai_only_output);
+
+        // Test with human-only stats
+        let human_stats = CommitStats {
+            human_additions: 75,
+            mixed_additions: 0,
+            ai_additions: 0,
+            ai_accepted: 0,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 10,
+            git_diff_added_lines: 75,
+        };
+
+        let human_only_output = write_stats_to_markdown(&human_stats);
+        assert_debug_snapshot!(human_only_output);
+
+        // Test with minimal human contribution (should get at least 2 blocks)
+        let minimal_human_stats = CommitStats {
+            human_additions: 2,
+            mixed_additions: 0,
+            ai_additions: 100,
+            ai_accepted: 95,
+            time_waiting_for_ai: 30,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 102,
+        };
+
+        let minimal_human_output = write_stats_to_markdown(&minimal_human_stats);
+        assert_debug_snapshot!(minimal_human_output);
+
+        // Test with deletion-only commit (no additions)
+        let deletion_only_stats = CommitStats {
+            human_additions: 0,
+            mixed_additions: 0,
+            ai_additions: 0,
+            ai_accepted: 0,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 25,
+            git_diff_added_lines: 0,
+        };
+
+        let deletion_only_output = write_stats_to_markdown(&deletion_only_stats);
         assert_debug_snapshot!(deletion_only_output);
     }
 
