@@ -39,18 +39,18 @@ jobs:
 
       - name: Authenticate GitHub CLI
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_INTEGRATION_TEST_TOKEN }}
+          GH_INTEGRATION_TEST_TOKEN: ${{ secrets.GH_INTEGRATION_TEST_TOKEN }}
         run: |
-          if [ -z "$GITHUB_TOKEN" ]; then
-            echo "❌ GITHUB_INTEGRATION_TEST_TOKEN secret is not set"
+          if [ -z "$GH_INTEGRATION_TEST_TOKEN" ]; then
+            echo "❌ GH_INTEGRATION_TEST_TOKEN secret is not set"
             echo "Please add a Personal Access Token with 'repo' and 'delete_repo' scopes"
             exit 1
           fi
-          echo "$GITHUB_TOKEN" | gh auth login --with-token
+          echo "$GH_INTEGRATION_TEST_TOKEN" | gh auth login --with-token
           gh auth status
 
       - name: Run GitHub integration tests
         run: cargo test --test github_integration -- --ignored --nocapture
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_INTEGRATION_TEST_TOKEN }}
+          GH_INTEGRATION_TEST_TOKEN: ${{ secrets.GH_INTEGRATION_TEST_TOKEN }}
           GIT_AI_TEST_NO_CLEANUP: ${{ inputs.no-cleanup && '1' || '' }}
