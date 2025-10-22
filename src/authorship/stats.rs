@@ -8,12 +8,19 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitStats {
+    #[serde(default)]
     pub human_additions: u32, // Lines written only by humans
+    #[serde(default)]
     pub mixed_additions: u32, // AI-generated lines that were edited by humans
+    #[serde(default)]
     pub ai_additions: u32,    // AI-generated lines with no human editingso
+    #[serde(default)]
     pub ai_accepted: u32,
+    #[serde(default)]
     pub time_waiting_for_ai: u64, // seconds
+    #[serde(default)]
     pub git_diff_deleted_lines: u32,
+    #[serde(default)]
     pub git_diff_added_lines: u32,
 }
 
