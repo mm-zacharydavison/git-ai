@@ -127,17 +127,31 @@ function Set-PathPrependBeforeGit {
         return ($list -join $sep)
     }
 
+    $userStatus = 'Skipped'
+    try {
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        $newUserPath = BuildPathWithInsert -existingPath $userPath -toInsert $PathToAdd
+        if ($newUserPath -ne $userPath) {
+            [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+            $userStatus = 'Updated'
+        } else {
+            $userStatus = 'AlreadyPresent'
+        }
+    } catch {
+        $userStatus = 'Error'
+    }
+
     # Try to update Machine PATH
-    $updatedScope = $null
+    $machineStatus = 'Skipped'
     try {
         $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         $newMachinePath = BuildPathWithInsert -existingPath $machinePath -toInsert $PathToAdd
         if ($newMachinePath -ne $machinePath) {
             [Environment]::SetEnvironmentVariable('Path', $newMachinePath, 'Machine')
-            $updatedScope = 'Machine'
+            $machineStatus = 'Updated'
         } else {
             # Nothing changed at Machine scope; still treat as Machine for reporting
-            $updatedScope = 'Machine'
+            $machineStatus = 'AlreadyPresent'
         }
     } catch {
         # Access denied or not elevated; do NOT modify User PATH. Print big red error with instructions.
@@ -152,7 +166,10 @@ function Set-PathPrependBeforeGit {
         Write-Host "     Steps: Start → type 'Environment Variables' → 'Edit the system environment variables' → Environment Variables →" -ForegroundColor Red
         Write-Host "            Under 'System variables', select 'Path' → Edit → Move '{0}' to the top (before Git) → OK." -f $PathToAdd -ForegroundColor Red
         Write-Host ''
-        $updatedScope = 'Error'
+        if ($userStatus -eq 'Updated' -or $userStatus -eq 'AlreadyPresent') {
+            Write-Host 'User PATH was updated successfully, so git-ai will still take precedence for this account.' -ForegroundColor Yellow
+        }
+        $machineStatus = 'Error'
     }
 
     # Update current process PATH immediately for this session
@@ -162,7 +179,10 @@ function Set-PathPrependBeforeGit {
         if ($newProcPath -ne $procPath) { $env:PATH = $newProcPath }
     } catch { }
 
-    return $updatedScope
+    return [PSCustomObject]@{
+        UserStatus    = $userStatus
+        MachineStatus = $machineStatus
+    }
 }
 
 # Detect standard Git early and validate (fail-fast behavior)
@@ -241,10 +261,20 @@ try {
 }
 
 # Update PATH so our shim takes precedence over any Git entries
-$scope = Set-PathPrependBeforeGit -PathToAdd $installDir
-if ($scope -eq 'Machine') {
+$pathUpdate = Set-PathPrependBeforeGit -PathToAdd $installDir
+if ($pathUpdate.UserStatus -eq 'Updated') {
+    Write-Success 'Successfully added git-ai to the user PATH.'
+} elseif ($pathUpdate.UserStatus -eq 'AlreadyPresent') {
+    Write-Success 'git-ai already present in the user PATH.'
+} elseif ($pathUpdate.UserStatus -eq 'Error') {
+    Write-Host 'Failed to update the user PATH.' -ForegroundColor Red
+}
+
+if ($pathUpdate.MachineStatus -eq 'Updated') {
     Write-Success 'Successfully added git-ai to the system PATH.'
-} elseif ($scope -eq 'Error') {
+} elseif ($pathUpdate.MachineStatus -eq 'AlreadyPresent') {
+    Write-Success 'git-ai already present in the system PATH.'
+} elseif ($pathUpdate.MachineStatus -eq 'Error') {
     Write-Host 'PATH update failed: system PATH unchanged.' -ForegroundColor Red
 }
 
