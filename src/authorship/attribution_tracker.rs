@@ -1864,6 +1864,130 @@ fn foo() {
     }
 
     #[test]
+    fn test_update_attributions_mixed_language_sequence() {
+        let tracker = AttributionTracker::new();
+
+        let alice = "Alice";
+        let bob = "Bob";
+        let carol = "Carol";
+        let dave = "Dave";
+
+        let initial = "English: Hello | 日本語: こんにちは | العربية: مرحبا";
+        let mut attributions =
+            vec![Attribution::new(0, initial.len(), alice.to_string(), TEST_TS)];
+
+        let find_range = |haystack: &str, needle: &str| -> (usize, usize) {
+            let start = haystack
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` not found in `{haystack}`"));
+            (start, start + needle.len())
+        };
+
+        let step_one = "English: Hello y hola | 日本語: こんにちは | العربية: مرحبا";
+        attributions = tracker
+            .update_attributions(initial, step_one, &attributions, bob, TEST_TS + 1)
+            .unwrap();
+        let (hola_start, hola_end) = find_range(step_one, "y hola");
+        assert_range_owned_by(&attributions, hola_start, hola_end, bob);
+
+        let step_two =
+            "English: Hello y hola | 日本語: こんにちは🌸 と 中文: 你好 | العربية: مرحبا";
+        attributions = tracker
+            .update_attributions(step_one, step_two, &attributions, carol, TEST_TS + 2)
+            .unwrap();
+        let (japanese_base_start, japanese_base_end) =
+            find_range(step_two, "日本語: こんにちは");
+        let (japanese_extension_start, japanese_extension_end) =
+            find_range(step_two, "🌸 と 中文: 你好");
+        assert_range_owned_by(
+            &attributions,
+            japanese_base_start,
+            japanese_base_end,
+            alice,
+        );
+        assert_range_owned_by(
+            &attributions,
+            japanese_extension_start,
+            japanese_extension_end,
+            carol,
+        );
+        assert_range_owned_by(&attributions, hola_start, hola_end, bob);
+
+        let final_content = "Prelude ✨ | English: Hello y hola | 日本語: こんにちは🌸 と 中文: 你好 | العربية: مرحبا وسهلاً | Coda ✅";
+        attributions = tracker
+            .update_attributions(step_two, final_content, &attributions, dave, TEST_TS + 3)
+            .unwrap();
+
+        let (prefix_start, prefix_end) = find_range(final_content, "Prelude ✨ | ");
+        let (suffix_start, suffix_end) = find_range(final_content, " | Coda ✅");
+        let (arabic_extension_start, arabic_extension_end) =
+            find_range(final_content, " وسهلاً");
+        let (final_hola_start, final_hola_end) = find_range(final_content, "y hola");
+        let (final_japanese_base_start, final_japanese_base_end) =
+            find_range(final_content, "日本語: こんにちは");
+        let (final_japanese_extension_start, final_japanese_extension_end) =
+            find_range(final_content, "🌸 と 中文: 你好");
+        let (english_core_start, english_core_end) =
+            find_range(final_content, "English: Hello");
+        let (arabic_core_start, arabic_core_end) =
+            find_range(final_content, "العربية: مرحبا");
+
+        assert_range_owned_by(&attributions, prefix_start, prefix_end, dave);
+        assert_range_owned_by(&attributions, suffix_start, suffix_end, dave);
+        assert_range_owned_by(
+            &attributions,
+            arabic_extension_start,
+            arabic_extension_end,
+            dave,
+        );
+        assert_range_owned_by(
+            &attributions,
+            final_japanese_base_start,
+            final_japanese_base_end,
+            alice,
+        );
+        assert_range_owned_by(
+            &attributions,
+            final_japanese_extension_start,
+            final_japanese_extension_end,
+            carol,
+        );
+        assert_range_owned_by(
+            &attributions,
+            final_hola_start,
+            final_hola_end,
+            bob,
+        );
+        assert_range_owned_by(
+            &attributions,
+            english_core_start,
+            english_core_end,
+            alice,
+        );
+        assert_range_owned_by(
+            &attributions,
+            arabic_core_start,
+            arabic_core_end,
+            alice,
+        );
+
+        let unique_authors: std::collections::HashSet<&str> = attributions
+            .iter()
+            .map(|attr| attr.author_id.as_str())
+            .collect();
+        assert_eq!(
+            unique_authors.len(),
+            4,
+            "Expected exactly four unique authors, got {:?}",
+            unique_authors
+        );
+        assert!(unique_authors.contains(alice));
+        assert!(unique_authors.contains(bob));
+        assert!(unique_authors.contains(carol));
+        assert!(unique_authors.contains(dave));
+    }
+
+    #[test]
     fn test_line_to_char_attribution_empty_content() {
         let content = "";
         let line_attrs = vec![LineAttribution::new(1, 1, "Alice".to_string())];
