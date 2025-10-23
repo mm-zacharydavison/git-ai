@@ -721,10 +721,20 @@ fn compute_line_stats(
         for change in diff.iter_all_changes() {
             match change.tag() {
                 ChangeTag::Insert => {
-                    total_additions += change.value().lines().count() as u32;
+                    let non_whitespace_lines = change
+                        .value()
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .count() as u32;
+                    total_additions += non_whitespace_lines;
                 }
                 ChangeTag::Delete => {
-                    total_deletions += change.value().lines().count() as u32;
+                    let non_whitespace_lines = change
+                        .value()
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .count() as u32;
+                    total_deletions += non_whitespace_lines;
                 }
                 ChangeTag::Equal => {}
             }
@@ -1100,6 +1110,96 @@ mod tests {
         assert_eq!(
             entries_len_after, 1,
             "Should create 1 entry for new changes after conflict resolution"
+        );
+    }
+
+    #[test]
+    fn test_compute_line_stats_ignores_whitespace_only_lines() {
+        let (tmp_repo, _lines_file, _alphabet_file) =
+            TmpRepo::new_with_base_commit().unwrap();
+
+        let repo = crate::git::repository::find_repository_in_path(
+            tmp_repo.path().to_str().unwrap(),
+        )
+        .expect("Repository should exist");
+
+        let base_commit = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target().ok())
+            .unwrap_or_else(|| "initial".to_string());
+        let working_log = repo.storage.working_log_for_base_commit(&base_commit);
+
+        let mut test_file = tmp_repo
+            .write_file("whitespace.txt", "Seed line\n", true)
+            .unwrap();
+
+        tmp_repo
+            .trigger_checkpoint_with_author("Setup")
+            .expect("Setup checkpoint should succeed");
+
+        let baseline_stats = working_log
+            .read_all_checkpoints()
+            .expect("Should read checkpoints")
+            .last()
+            .map(|cp| cp.line_stats.clone())
+            .unwrap_or_default();
+
+        test_file
+            .append("\n\n   \nVisible line one\n\n\t\nVisible line two\n  \n")
+            .unwrap();
+
+        tmp_repo
+            .trigger_checkpoint_with_author("Aidan")
+            .expect("First checkpoint should succeed");
+
+        let after_add_stats = working_log
+            .read_all_checkpoints()
+            .expect("Should read checkpoints after addition");
+        let after_add_last = after_add_stats
+            .last()
+            .expect("At least one checkpoint expected")
+            .line_stats
+            .clone();
+
+        assert_eq!(
+            after_add_last.human_additions - baseline_stats.human_additions,
+            2,
+            "Only non-whitespace additions should be counted"
+        );
+
+        let additions_after_first = after_add_last.human_additions;
+        let deletions_after_first = after_add_last.human_deletions;
+
+        let cleaned_content = std::fs::read_to_string(test_file.path()).unwrap();
+        let cleaned_lines: Vec<&str> = cleaned_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let cleaned_body = format!("{}\n", cleaned_lines.join("\n"));
+        test_file.update(&cleaned_body).unwrap();
+
+        tmp_repo
+            .trigger_checkpoint_with_author("Aidan")
+            .expect("Second checkpoint should succeed");
+
+        let after_delete_stats = working_log
+            .read_all_checkpoints()
+            .expect("Should read checkpoints after deletion");
+        let latest_stats = after_delete_stats
+            .last()
+            .expect("At least one checkpoint expected")
+            .line_stats
+            .clone();
+
+        assert_eq!(
+            latest_stats.human_additions, additions_after_first,
+            "Removing whitespace-only lines should not alter additions"
+        );
+        assert_eq!(
+            latest_stats.human_deletions - deletions_after_first,
+            0,
+            "Deleting whitespace-only lines should not be counted"
         );
     }
 }
