@@ -7,7 +7,7 @@ use crate::authorship::move_detection::{DeletedLine, InsertedLine, detect_moves}
 use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
 use diff_match_patch_rs::dmp::Diff;
-use diff_match_patch_rs::traits::Efficient;
+use diff_match_patch_rs::traits::{Compat, Efficient};
 use diff_match_patch_rs::{DiffMatchPatch, Ops};
 use std::collections::HashMap;
 
@@ -123,8 +123,8 @@ pub(crate) struct Deletion {
     pub(crate) start: usize,
     /// End position in old content
     pub(crate) end: usize,
-    /// The deleted text
-    pub(crate) text: String,
+    /// The deleted bytes (may not be valid UTF-8)
+    pub(crate) bytes: Vec<u8>,
 }
 
 /// Represents an insertion operation from the diff
@@ -134,8 +134,8 @@ pub(crate) struct Insertion {
     pub(crate) start: usize,
     /// End position in new content
     pub(crate) end: usize,
-    /// The inserted text
-    pub(crate) text: String,
+    /// The inserted bytes (may not be valid UTF-8)
+    pub(crate) bytes: Vec<u8>,
 }
 
 /// Information about a detected move operation
@@ -235,6 +235,92 @@ impl AttributionTracker {
         }
     }
 
+    fn compute_diffs(
+        &self,
+        old_content: &str,
+        new_content: &str,
+    ) -> Result<Vec<Diff<u8>>, GitAiError> {
+        let diffs = self
+            .dmp
+            .diff_main::<Efficient>(old_content, new_content)
+            .map_err(|e| GitAiError::Generic(format!("Diff computation failed: {:?}", e)))?;
+
+        if Self::diffs_are_char_aligned(&diffs, old_content, new_content) {
+            return Ok(diffs);
+        }
+
+        let char_diffs = self
+            .dmp
+            .diff_main::<Compat>(old_content, new_content)
+            .map_err(|e| GitAiError::Generic(format!("Diff computation failed: {:?}", e)))?;
+
+        Ok(Self::convert_char_diffs_to_bytes(char_diffs))
+    }
+
+    fn convert_char_diffs_to_bytes(char_diffs: Vec<Diff<char>>) -> Vec<Diff<u8>> {
+        let mut diffs = Vec::with_capacity(char_diffs.len());
+
+        for diff in char_diffs {
+            let op = diff.op();
+            let data = diff.data();
+            let mut bytes = Vec::with_capacity(data.len().saturating_mul(4));
+            for ch in data {
+                let mut buf = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut buf);
+                bytes.extend_from_slice(encoded.as_bytes());
+            }
+
+            diffs.push(Diff::<u8>::new(op, &bytes));
+        }
+
+        diffs
+    }
+
+    fn diffs_are_char_aligned(
+        diffs: &[Diff<u8>],
+        old_content: &str,
+        new_content: &str,
+    ) -> bool {
+        let mut old_pos = 0;
+        let mut new_pos = 0;
+
+        for diff in diffs {
+            let len = diff.data().len();
+            match diff.op() {
+                Ops::Equal => {
+                    if !Self::is_char_boundary_range(old_content, old_pos, old_pos + len)
+                        || !Self::is_char_boundary_range(new_content, new_pos, new_pos + len)
+                    {
+                        return false;
+                    }
+                    old_pos += len;
+                    new_pos += len;
+                }
+                Ops::Delete => {
+                    if !Self::is_char_boundary_range(old_content, old_pos, old_pos + len) {
+                        return false;
+                    }
+                    old_pos += len;
+                }
+                Ops::Insert => {
+                    if !Self::is_char_boundary_range(new_content, new_pos, new_pos + len) {
+                        return false;
+                    }
+                    new_pos += len;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn is_char_boundary_range(s: &str, start: usize, end: usize) -> bool {
+        if start > end || end > s.len() {
+            return false;
+        }
+        s.is_char_boundary(start) && s.is_char_boundary(end)
+    }
+
     /// Attribute all unattributed ranges to the given author
     pub fn attribute_unattributed_ranges(
         &self,
@@ -305,10 +391,7 @@ impl AttributionTracker {
         ts: u128,
     ) -> Result<Vec<Attribution>, GitAiError> {
         // Phase 1: Compute diff
-        let diffs = self
-            .dmp
-            .diff_main::<Efficient>(old_content, new_content)
-            .map_err(|e| GitAiError::Generic(format!("Diff computation failed: {:?}", e)))?;
+        let diffs = self.compute_diffs(old_content, new_content)?;
 
         // Phase 2: Build deletion and insertion catalogs
         let (deletions, insertions) = self.build_diff_catalog(&diffs);
@@ -349,24 +432,20 @@ impl AttributionTracker {
                 Ops::Delete => {
                     let bytes = diff.data();
                     let len = bytes.len();
-                    let text = String::from_utf8(bytes.to_vec())
-                        .expect("Diff segments should always be valid UTF-8");
                     deletions.push(Deletion {
                         start: old_pos,
                         end: old_pos + len,
-                        text,
+                        bytes: bytes.to_vec(),
                     });
                     old_pos += len;
                 }
                 Ops::Insert => {
                     let bytes = diff.data();
                     let len = bytes.len();
-                    let text = String::from_utf8(bytes.to_vec())
-                        .expect("Diff segments should always be valid UTF-8");
                     insertions.push(Insertion {
                         start: new_pos,
                         end: new_pos + len,
-                        text,
+                        bytes: bytes.to_vec(),
                     });
                     new_pos += len;
                 }
@@ -962,6 +1041,43 @@ mod tests {
 
     // Test timestamp constant for consistent testing
     const TEST_TS: u128 = 1234567890000;
+
+    fn assert_range_owned_by(
+        attributions: &[Attribution],
+        range_start: usize,
+        range_end: usize,
+        expected_author: &str,
+    ) {
+        assert!(
+            range_start < range_end,
+            "Expected non-empty range, got {}..{}",
+            range_start,
+            range_end
+        );
+
+        assert!(
+            attributions.iter().any(|attr| {
+                attr.author_id == expected_author
+                    && attr.start <= range_start
+                    && attr.end >= range_end
+            }),
+            "Expected author {} to cover {}..{}, but attributions were {:?}",
+            expected_author,
+            range_start,
+            range_end,
+            attributions
+        );
+
+        for attr in attributions {
+            if attr.overlaps(range_start, range_end) {
+                assert_eq!(
+                    attr.author_id, expected_author,
+                    "Range {}..{} overlaps attribution {:?} owned by {}",
+                    range_start, range_end, attr, attr.author_id
+                );
+            }
+        }
+    }
 
     fn module_move_old_content() -> &'static str {
         r#"module.exports =
@@ -1585,6 +1701,290 @@ fn foo() {
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
 
         assert_eq!(char_attrs.len(), 0);
+    }
+
+    #[test]
+    fn test_update_attributions_replacing_multibyte_emoji_succeeds() {
+        let tracker = AttributionTracker::new();
+
+        let old_content = "❌";
+        let new_content = "✅";
+
+        let old_attributions = vec![Attribution::new(
+            0,
+            old_content.len(),
+            "Alice".to_string(),
+            TEST_TS,
+        )];
+
+        let new_attributions = tracker
+            .update_attributions(old_content, new_content, &old_attributions, "Bob", TEST_TS)
+            .unwrap();
+
+        assert!(
+            new_attributions
+                .iter()
+                .all(|attr| attr.author_id != "Alice"),
+            "Old author attribution should be removed after replacement: {:?}",
+            new_attributions
+        );
+
+        let bob_attr = new_attributions
+            .iter()
+            .find(|attr| attr.author_id == "Bob")
+            .expect("New content should be attributed to Bob");
+
+        assert_eq!(bob_attr.start, 0, "New attribution should start at 0");
+        assert_eq!(
+            bob_attr.end,
+            new_content.len(),
+            "New attribution should cover entire replacement"
+        );
+    }
+
+    #[test]
+    fn test_update_attributions_plain_then_emoji_then_plain_suffix() {
+        let tracker = AttributionTracker::new();
+
+        let alice = "Alice";
+        let bob = "Bob";
+        let carol = "Carol";
+        let dave = "Dave";
+
+        let initial = "Start middle end";
+        let mut attributions =
+            vec![Attribution::new(0, initial.len(), alice.to_string(), TEST_TS)];
+
+        let plain_suffix = "Start changed middle end";
+        attributions = tracker
+            .update_attributions(initial, plain_suffix, &attributions, bob, TEST_TS + 1)
+            .unwrap();
+        let inserted_slice = "changed ";
+        let inserted_start = plain_suffix
+            .find(inserted_slice)
+            .expect("expected inserted slice to exist");
+        let inserted_end = inserted_start + inserted_slice.len();
+        assert_range_owned_by(&attributions, inserted_start, inserted_end, bob);
+
+        let with_emoji = "Start changed ✅ middle end";
+        attributions = tracker
+            .update_attributions(plain_suffix, with_emoji, &attributions, carol, TEST_TS + 2)
+            .unwrap();
+        let emoji_slice = "✅ ";
+        let emoji_start = with_emoji
+            .find(emoji_slice)
+            .expect("expected emoji slice to exist");
+        let emoji_end = emoji_start + emoji_slice.len();
+        assert_range_owned_by(&attributions, emoji_start, emoji_end, carol);
+
+        let final_content = "Start changed ✅ middle end updated";
+        attributions = tracker
+            .update_attributions(with_emoji, final_content, &attributions, dave, TEST_TS + 3)
+            .unwrap();
+        let suffix_slice = " updated";
+        let suffix_start = final_content
+            .rfind(suffix_slice)
+            .expect("expected suffix slice to exist");
+        let suffix_end = suffix_start + suffix_slice.len();
+
+        assert_range_owned_by(&attributions, suffix_start, suffix_end, dave);
+        assert_range_owned_by(&attributions, emoji_start, emoji_end, carol);
+        assert_range_owned_by(&attributions, inserted_start, inserted_end, bob);
+
+        let unique_authors: std::collections::HashSet<&str> = attributions
+            .iter()
+            .map(|attr| attr.author_id.as_str())
+            .collect();
+        assert!(unique_authors.contains(alice));
+        assert!(unique_authors.contains(bob));
+        assert!(unique_authors.contains(carol));
+        assert!(unique_authors.contains(dave));
+    }
+
+    #[test]
+    fn test_update_attributions_plain_then_emoji_then_plain_prefix() {
+        let tracker = AttributionTracker::new();
+
+        let alice = "Alice";
+        let bob = "Bob";
+        let carol = "Carol";
+        let dave = "Dave";
+
+        let initial = "Alpha middle tail";
+        let mut attributions =
+            vec![Attribution::new(0, initial.len(), alice.to_string(), TEST_TS)];
+
+        let with_suffix = "Alpha middle tail!";
+        attributions = tracker
+            .update_attributions(initial, with_suffix, &attributions, bob, TEST_TS + 1)
+            .unwrap();
+        let exclamation_start = with_suffix.len() - 1;
+        let exclamation_end = with_suffix.len();
+        assert_range_owned_by(&attributions, exclamation_start, exclamation_end, bob);
+
+        let with_emoji = "Alpha middle ✅ tail!";
+        attributions = tracker
+            .update_attributions(with_suffix, with_emoji, &attributions, carol, TEST_TS + 2)
+            .unwrap();
+        let emoji_slice = "✅ ";
+        let emoji_start = with_emoji
+            .find(emoji_slice)
+            .expect("expected emoji slice to exist");
+        let emoji_end = emoji_start + emoji_slice.len();
+        assert_range_owned_by(&attributions, emoji_start, emoji_end, carol);
+
+        let final_content = "Updated Alpha middle ✅ tail!";
+        attributions = tracker
+            .update_attributions(with_emoji, final_content, &attributions, dave, TEST_TS + 3)
+            .unwrap();
+        let prefix_slice = "Updated ";
+        let prefix_start = final_content
+            .find(prefix_slice)
+            .expect("expected prefix slice to exist");
+        let prefix_end = prefix_start + prefix_slice.len();
+        let final_emoji_start = final_content
+            .find(emoji_slice)
+            .expect("expected emoji slice to exist");
+        let final_emoji_end = final_emoji_start + emoji_slice.len();
+        let final_exclamation_start = final_content.len() - 1;
+        let final_exclamation_end = final_content.len();
+
+        assert_range_owned_by(&attributions, prefix_start, prefix_end, dave);
+        assert_range_owned_by(&attributions, final_emoji_start, final_emoji_end, carol);
+        assert_range_owned_by(&attributions, final_exclamation_start, final_exclamation_end, bob);
+
+        let unique_authors: std::collections::HashSet<&str> = attributions
+            .iter()
+            .map(|attr| attr.author_id.as_str())
+            .collect();
+        assert!(unique_authors.contains(alice));
+        assert!(unique_authors.contains(bob));
+        assert!(unique_authors.contains(carol));
+        assert!(unique_authors.contains(dave));
+    }
+
+    #[test]
+    fn test_update_attributions_mixed_language_sequence() {
+        let tracker = AttributionTracker::new();
+
+        let alice = "Alice";
+        let bob = "Bob";
+        let carol = "Carol";
+        let dave = "Dave";
+
+        let initial = "English: Hello | 日本語: こんにちは | العربية: مرحبا";
+        let mut attributions =
+            vec![Attribution::new(0, initial.len(), alice.to_string(), TEST_TS)];
+
+        let find_range = |haystack: &str, needle: &str| -> (usize, usize) {
+            let start = haystack
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` not found in `{haystack}`"));
+            (start, start + needle.len())
+        };
+
+        let step_one = "English: Hello y hola | 日本語: こんにちは | العربية: مرحبا";
+        attributions = tracker
+            .update_attributions(initial, step_one, &attributions, bob, TEST_TS + 1)
+            .unwrap();
+        let (hola_start, hola_end) = find_range(step_one, "y hola");
+        assert_range_owned_by(&attributions, hola_start, hola_end, bob);
+
+        let step_two =
+            "English: Hello y hola | 日本語: こんにちは🌸 と 中文: 你好 | العربية: مرحبا";
+        attributions = tracker
+            .update_attributions(step_one, step_two, &attributions, carol, TEST_TS + 2)
+            .unwrap();
+        let (japanese_base_start, japanese_base_end) =
+            find_range(step_two, "日本語: こんにちは");
+        let (japanese_extension_start, japanese_extension_end) =
+            find_range(step_two, "🌸 と 中文: 你好");
+        assert_range_owned_by(
+            &attributions,
+            japanese_base_start,
+            japanese_base_end,
+            alice,
+        );
+        assert_range_owned_by(
+            &attributions,
+            japanese_extension_start,
+            japanese_extension_end,
+            carol,
+        );
+        assert_range_owned_by(&attributions, hola_start, hola_end, bob);
+
+        let final_content = "Prelude ✨ | English: Hello y hola | 日本語: こんにちは🌸 と 中文: 你好 | العربية: مرحبا وسهلاً | Coda ✅";
+        attributions = tracker
+            .update_attributions(step_two, final_content, &attributions, dave, TEST_TS + 3)
+            .unwrap();
+
+        let (prefix_start, prefix_end) = find_range(final_content, "Prelude ✨ | ");
+        let (suffix_start, suffix_end) = find_range(final_content, " | Coda ✅");
+        let (arabic_extension_start, arabic_extension_end) =
+            find_range(final_content, " وسهلاً");
+        let (final_hola_start, final_hola_end) = find_range(final_content, "y hola");
+        let (final_japanese_base_start, final_japanese_base_end) =
+            find_range(final_content, "日本語: こんにちは");
+        let (final_japanese_extension_start, final_japanese_extension_end) =
+            find_range(final_content, "🌸 と 中文: 你好");
+        let (english_core_start, english_core_end) =
+            find_range(final_content, "English: Hello");
+        let (arabic_core_start, arabic_core_end) =
+            find_range(final_content, "العربية: مرحبا");
+
+        assert_range_owned_by(&attributions, prefix_start, prefix_end, dave);
+        assert_range_owned_by(&attributions, suffix_start, suffix_end, dave);
+        assert_range_owned_by(
+            &attributions,
+            arabic_extension_start,
+            arabic_extension_end,
+            dave,
+        );
+        assert_range_owned_by(
+            &attributions,
+            final_japanese_base_start,
+            final_japanese_base_end,
+            alice,
+        );
+        assert_range_owned_by(
+            &attributions,
+            final_japanese_extension_start,
+            final_japanese_extension_end,
+            carol,
+        );
+        assert_range_owned_by(
+            &attributions,
+            final_hola_start,
+            final_hola_end,
+            bob,
+        );
+        assert_range_owned_by(
+            &attributions,
+            english_core_start,
+            english_core_end,
+            alice,
+        );
+        assert_range_owned_by(
+            &attributions,
+            arabic_core_start,
+            arabic_core_end,
+            alice,
+        );
+
+        let unique_authors: std::collections::HashSet<&str> = attributions
+            .iter()
+            .map(|attr| attr.author_id.as_str())
+            .collect();
+        assert_eq!(
+            unique_authors.len(),
+            4,
+            "Expected exactly four unique authors, got {:?}",
+            unique_authors
+        );
+        assert!(unique_authors.contains(alice));
+        assert!(unique_authors.contains(bob));
+        assert!(unique_authors.contains(carol));
+        assert!(unique_authors.contains(dave));
     }
 
     #[test]
