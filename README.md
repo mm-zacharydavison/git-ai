@@ -16,7 +16,7 @@
 curl -sSL https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh | bash
 ```
 
-#### Windows (non-WSL - experimental)
+#### Windows (non-WSL)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/acunniffe/git-ai/main/install.ps1 | iex"
