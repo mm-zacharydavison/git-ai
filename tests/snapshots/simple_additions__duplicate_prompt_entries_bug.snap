@@ -29,7 +29,7 @@ AuthorshipLogV3 {
         prompts: {
             "d6f9ad9": PromptRecord {
                 agent_id: AgentId {
-                    tool: "some-ai",
+                    tool: "mock_ai",
                     id: "test_session_fixed",
                     model: "claude-3-sonnet",
                 },

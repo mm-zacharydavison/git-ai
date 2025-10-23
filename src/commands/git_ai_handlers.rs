@@ -224,7 +224,7 @@ fn handle_checkpoint(args: &[String]) {
                 );
                 agent_run_result = Some(AgentRunResult {
                     agent_id: AgentId {
-                        tool: "some-ai".to_string(),
+                        tool: "mock_ai".to_string(),
                         id: mock_agent_id,
                         model: "unknown".to_string(),
                     },
