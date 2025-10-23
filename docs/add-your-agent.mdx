@@ -72,7 +72,7 @@ Right before your agent edits a file use the `agent-v1` preset to mark any chang
 ```bash
 echo '{
   "type": "human",
-  "repo_working_dir": "<git-project-working-dir>",
+  "repo_working_dir": "<git-project-working-dir>"
 }' | git-ai checkpoint agent-v1 --hook-input stdin
 
 ```
