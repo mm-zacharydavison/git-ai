@@ -72,7 +72,7 @@ fn test_cursor_database_has_bubble_data() {
 
 #[test]
 fn test_fetch_composer_payload_from_test_db() {
-    use git_ai::commands::checkpoint_agent::agent_preset::CursorPreset;
+    use git_ai::commands::checkpoint_agent::agent_presets::CursorPreset;
 
     let db_path = fixture_path("cursor_test.vscdb");
 
@@ -109,7 +109,7 @@ fn test_fetch_composer_payload_from_test_db() {
 
 #[test]
 fn test_fetch_bubble_content_from_test_db() {
-    use git_ai::commands::checkpoint_agent::agent_preset::CursorPreset;
+    use git_ai::commands::checkpoint_agent::agent_presets::CursorPreset;
 
     let db_path = fixture_path("cursor_test.vscdb");
 
@@ -142,7 +142,7 @@ fn test_fetch_bubble_content_from_test_db() {
 
 #[test]
 fn test_extract_transcript_from_test_conversation() {
-    use git_ai::commands::checkpoint_agent::agent_preset::CursorPreset;
+    use git_ai::commands::checkpoint_agent::agent_presets::CursorPreset;
 
     let db_path = fixture_path("cursor_test.vscdb");
 
@@ -173,7 +173,7 @@ fn test_extract_transcript_from_test_conversation() {
 
 #[test]
 fn test_cursor_preset_extracts_edited_filepath() {
-    use git_ai::commands::checkpoint_agent::agent_preset::{
+    use git_ai::commands::checkpoint_agent::agent_presets::{
         AgentCheckpointFlags, AgentCheckpointPreset, CursorPreset,
     };
 
@@ -199,7 +199,7 @@ fn test_cursor_preset_extracts_edited_filepath() {
 
 #[test]
 fn test_cursor_preset_no_filepath_when_missing() {
-    use git_ai::commands::checkpoint_agent::agent_preset::{
+    use git_ai::commands::checkpoint_agent::agent_presets::{
         AgentCheckpointFlags, AgentCheckpointPreset, CursorPreset,
     };
 
@@ -224,7 +224,7 @@ fn test_cursor_preset_no_filepath_when_missing() {
 #[test]
 fn test_cursor_preset_human_checkpoint_no_filepath() {
     use git_ai::authorship::working_log::CheckpointKind;
-    use git_ai::commands::checkpoint_agent::agent_preset::{
+    use git_ai::commands::checkpoint_agent::agent_presets::{
         AgentCheckpointFlags, AgentCheckpointPreset, CursorPreset,
     };
 

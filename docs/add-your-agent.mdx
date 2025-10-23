@@ -3,43 +3,44 @@ title: Add your Agent
 description: A guide to building Git AI support into your agent
 ---
 
-# Measuring your Agent's AI Authorship with Git AI
+# Measuring your Agent's Code Contributions with Git AI
 
-Developers will choose their own coding agents, just like they choose their favorite IDE. That's why one of [Git AI's goals](https://github.com/acunniffe/git-ai?tab=readme-ov-file#goals-of-git-ai-project) is to become the vendor-agnostic standard for tracking AI code and prompts.
+Developers will choose their own coding agents, just like they choose their favorite IDE. That's why one of [Git AI's goals](https://github.com/acunniffe/git-ai?tab=readme-ov-file#goals-of-git-ai-project) is to become the vendor-agnostic standard for tracking AI code and prompts. 
 
 If you're building a coding agent, integrating Git AI is straightforward and helps your customers track the code your agent generates from their laptop to production. 
 
 ## Before you start 
 
-Read the [How Git AI Works](https://usegitai.com/docs/how-git-ai-works) guide. Your agent will call `git-ai checkpoint` twice: once before editing a file, and once immediately after. 
+Read the [How Git AI Works](https://usegitai.com/docs/how-git-ai-works) guide. 
+
+Your agent will be calling `git-ai checkpoint` twice: once before editing a file, and once immediately after. 
 
 ![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/add-your-agent.jpg)
 
-## Hooks or Direct Integration?
+## Direct Integrations (recommended)
 
-Your agent can call `git-ai` in one of two ways: 
-- **Hooks**: If your agent supports `BeforeEdit` and `AfterEdit` hooks, users can add Git AI checkpoint hooks to their configuration. This is how [Claude Code](https://usegitai.com/docs/claude-code) and [Cursor](https://usegitai.com/docs/cursor) integrate with Git AI
-- **Direct Integration**: Call `git-ai` directly from your agent's code
+Your agent calls `git-ai` directly from the agent loop. 
+
+
+`pseudocode`
 
 ```typescript
 // On startup, check if git-ai is installed
 export const GIT_AI_INSTALLED = execSync(`${process.platform === "win32" ? "where" : "which"} git-ai`)
 
-// When your agent edits a file
+/// ... In your agent loop, where files are edited  ///
 if (GIT_AI_INSTALLED) await exec(`git-ai checkpoint`)
 applyFilePatch(editTool.path, editTool.patch)
 if (GIT_AI_INSTALLED) await exec(`git-ai checkpoint <your-agent-name> <...metadata>`)
 ```
 
-If your agent already supports hooks, that's the recommended integration path. However, since building a hook system requires significant design and engineering work, invoking `git-ai` directly is a good starting point if you want to get something working quickly for your users. 
-
 ### Mock Integration
 
-You can quickly simulate your agent's integration using the `mockai` preset:
+You can quickly simulate your agent's integration using the `mock_ai` preset:
 
 1. Write some code manually in a git-tracked file, then mark it as AI:
 ```bash
-git-ai checkpoint mockai
+git-ai checkpoint mock_ai
 ```
 
 2. Edit a single line of that code without marking it as AI. Calling `checkpoint` without a preset marks the changes as human:
@@ -52,37 +53,133 @@ git-ai checkpoint
 git commit -a -m "Testing Git AI"
 ```
 
-4. Run `git-ai blame` to see AI authorship. Notice that the line you edited is attributed to you, not `mockai`:
+4. Run `git-ai blame` to see AI authorship. Notice that the line you edited is attributed to you, not `mock_ai`:
 
 ```rust
-be4f6cc (mockai         2025-07-11 19:00:20 -0400    1) mod utils;
-be4f6cc (Aidan Cunniffe 2025-7-11 19:00:20 -0400     2) // Human overwrote this line
-be4f6cc (mockai         2025-07-11 19:00:20 -0400    3) use clap::Parser;
+be4f6cc (mock_ai         2025-07-11 19:00:20 -0400    1) mod utils;
+be4f6cc (Aidan Cunniffe 2025-7-11 19:00:20 -0400      2) // Human overwrote this line
+be4f6cc (mock_ai         2025-07-11 19:00:20 -0400    3) use clap::Parser;
 ```
 
-Now you just need to get your agent to call `git-ai checkpoint` the same way to mark its edits. Before building your own checkpoint preset, you can wire everything up with the `mockai` preset for testing. 
+Now you just need to get your agent to call `git-ai checkpoint` the same way to mark its edits. 
+
+## Using the `agent-v1` preset
+
+Git AI checkpoint has versioned presets designed for generic agent integrations. The `agent-v1` preset shape is strictly enforced and expected to be passed via stdin.
+
+Right before your agent edits a file use the `agent-v1` preset to mark any changes since the last AI insertion as human: 
+
+```bash
+echo '{
+  "type": "human",
+  "repo_working_dir": "<git-project-working-dir>",
+}' | git-ai checkpoint agent-v1 --hook-input stdin
+
+```
+
+While not required, it's recommended that you pass in the paths of the files your agent will edit. This will speed up the checkpoint process by ~50-100x in large repos by allowing Git AI to narrow its diff to only files AI has edited since the last commit. 
+
+```bash
+echo '{
+  "type": "human",
+  "repo_working_dir": "<git-project-working-dir>",
+  "will_edit_filepaths": ["<file1>", "<file2>", "<file3>"]
+}' | git-ai checkpoint agent-v1 --hook-input stdin
+
+```
+
+After your agent edits a file you need to call `checkpoint` again to mark the edits as AI. You'll need to pass in the transcript of the AI conversation, the agent name, model, and conversation id.
+
+- `transcript` - This is the transcript for the AI thread. Send `user`, `assistant`, and `tool_use` messages (calling the tool, not the results). We strongly suggest filtering out tool results from the transcript on your side, before invoking `git-ai checkpoint`. Git AI will not accept them due to size, likely staleness of the data, and security concerns. 
+  - For a multi-turn conversation, you must also continue sending the full transcript to Git AI, not just new messages. 
+  - See the full [Struct defined here](https://github.com/acunniffe/git-ai/blob/main/src/authorship/transcript.rs). 
+- `agent_name` - The name of the agent. This is used to identify the agent in the Authorship log.
+- `model` - The model used for the AI conversation.
+- `conversation_id` - The id (probably a UUID) for the AI thread. Should not change between messages in the transcript. 
+- edited_filepaths - The paths of the files that the agent edited. It's probably just one file, but things move fast, maybe soon we'll have agents writing multiple files at once so we future-proofed. 
 
 
-## First-class Support 
+```bash
+echo '{
+  "type": "ai_agent",
+  "repo_working_dir": "<git-project-working-dir>",
+  "transcript": {
+    "messages": [
+      {
+        "type": "user",
+        "text": "Please add error handling to this function",
+        "timestamp": "2024-01-15T10:30:00Z"
+      },
+      {
+        "type": "assistant", 
+        "text": "I will add proper error handling using Result types",
+        "timestamp": "2024-01-15T10:30:15Z"
+      },
+      {
+        "type": "tool_use",
+        "name": "grep_search",
+        "input": {
+          "query": "Result *.rs"
+        },
+        "timestamp": "2024-01-15T10:30:20Z"
+      }
+    ]
+  },
+  "agent_name": "claude-3-sonnet",
+  "edited_filepaths": ["<file1>"],
+  "model": "claude-3-sonnet-20240229",
+  "conversation_id": "conv_12345"
+}' | git-ai checkpoint agent-v1 --hook-input stdin
+```
 
-Git AI only mainlines integrations that are turn-key for end-users. Companies are rolling out `git-ai` to large engineering teams, and we don't want to ship integrations that require manual steps. Let's work together upfront to save everyone downstream effort. 
+That's it. Get your agent calling `git-ai checkpoint` with the `agent-v1` preset and we take care of the rest. 
 
-### Adding an Agent Preset 
+If you need something more advanced you might want to build your own preset (see the [Advanced - Hooks and Presets](#advanced---hooks-and-custom-presets) section below). 
 
-All agents are required to implement their own agent preset: `git-ai checkpoint <your-agent-name>`
+
+## Checklist for opening a PR for Hooks + Preset Integration 
+
+- [ ] You've implemented the `agent-v1` preset and send the prompt, model, and edited filepaths into Git AI
+
+- [ ] Your agent only tries to invoke `git-ai checkpoint` if it's installed and available on the system path.
+
+- [ ] Your agent calls `git-ai checkpoint` before editing a file and `git-ai checkpoint <your-agent>` after editing a file
+
+- [ ] You have tested the integration across the shells and operating systems your Agent has official support for. 
+
+- [ ] No dependencies on other toolchains when invoking `git-ai`. You can make no assumptions about any other CLI tools being installed on host machines (e.g., `jq` or `node`). Build input JSON in your code. 
+
+
+Once you're ready, open a PR adding your agent to the Agent Support section of the [README](https://github.com/acunniffe/git-ai?tab=readme-ov-file#agent-support). We'll give a try, ask any questions and get it merged fast! 
+
+## Getting help
+
+The core maintainers are available for help and feedback, and we'd love to meet you. Set up a call and we can help you get your agent integrated. [Schedule a call](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
+
+
+---
+
+
+# Advanced - Hooks and Custom Presets
+
+
+If your agent supports `BeforeEdit` and `AfterEdit` hooks, users can add Git AI checkpoint hooks to their configuration. This is how [Claude Code](https://usegitai.com/docs/claude-code) and [Cursor](https://usegitai.com/docs/cursor) integrate with Git AI.
+
+If your agent already supports hooks, that's could be a good integration path. However, since building a hook system requires significant design and engineering work, invoking `git-ai` directly with the `agent-v1` preset is a good starting point if you want to get something working quickly for your users. 
+
+### Hook Requirements
+
+All agents that integrate with Hooks are required to implement and contribute their own agent preset: `git-ai checkpoint <your-agent-name>`
 
 Here are examples for Cursor and Claude:
 - [Cursor](https://github.com/acunniffe/git-ai/blob/6981449ec47212f885ad1917a5e9283639e07fa8/src/commands/checkpoint_agent/agent_preset.rs#L120) - takes their hook system's JSON as stdin and queries the local SQLite database inside Cursor to get AI transcripts
 - [Claude Code](https://github.com/acunniffe/git-ai/blob/6981449ec47212f885ad1917a5e9283639e07fa8/src/commands/checkpoint_agent/agent_preset.rs#L33) - takes their hook system's JSON as stdin and reads the transcript from a JSONL file included in the stdin
 
-These integrations are complex because they read from the agent's local state directly. Your agent preset could theoretically send the entire prompt and all other required data over stdin or with additional flags/arguments for a much simpler implementation. Both patterns are acceptable. 
+These examples are complex because they read from the agent's local state directly. Your agent preset could theoretically send the entire prompt and all other required data over stdin or with additional flags/arguments for a much simpler implementation. Both patterns are acceptable. 
 
-#### Sending Required Data 
+## First-class Support 
 
-- **Edited filepaths** (absolute or relative to git root). This makes checkpoints ~50-100x faster in large repos by allowing Git AI to narrow its searches for AI changes to files that AI has edited since the last commit
-- **[Transcript of AI Thread](https://github.com/acunniffe/git-ai/blob/main/src/authorship/transcript.rs)**. Include user prompts and agent responses, exclude tool use
-- **The AI model used**. We don't standardize this yet. However your agent represents different models/versions is acceptable 
-
+Git AI only mainlines integrations that are turn-key for end-users. Companies are rolling out `git-ai` to large engineering teams, and we don't want to ship integrations that require manual steps. Let's work together upfront to save everyone downstream effort. 
 
 ### Supporting `git-ai install-hooks` (skip if you're doing direct integration)
 
@@ -94,13 +191,14 @@ If your integration requires adding hooks or installing an IDE extension, that w
 
 [Install hooks source code](https://github.com/acunniffe/git-ai/blob/main/src/commands/install_hooks.rs)
 
+**Important to keep in mind**
+- Expect any generated hooks/bash scripts to work cross-platform and cross-shell
+- Avoid additional adding dependencies to Git AI unless absolutely necessary. We're trying to keep the binary small and our SBOM secure and auditable 
 
-## Checklist before opening a PR
+
+## Checklist for opening a PR for Hooks + Preset Integration 
 
 - [ ] You've implemented an Agent Preset that gets the prompt, model, and edited filepaths into Git AI
-
-**If direct integration:**
-- [ ] Your agent calls `git-ai checkpoint` before editing a file and `git-ai checkpoint <your-agent>` after editing a file
 
 **If hooks:**
 - [ ] You've added support for your agent's hook system to `git-ai install-hooks`
@@ -117,10 +215,4 @@ If your integration requires adding hooks or installing an IDE extension, that w
 
 ## Getting help
 
-The core maintainers are available for help and feedback, and we'd love to meet you. Set up a call and we can help you get your agent integrated. [Schedule a call](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
-
-### Miscellaneous
-
-- Make no assumptions about any CLI tools being installed (e.g., `jq` or `node`)
-- Expect any generated hooks/bash scripts to work cross-platform and cross-shell
-- Avoid additional dependencies unless absolutely necessary. We're trying to keep the binary small and our SBOM secure and auditable 
+Hooks and Custom Preset integrations are more complex. We suggest reaching out to the core maintainers for help and feedback. Set up a call and we can help you get your agent integrated. [Schedule a call](https://calendly.com/acunniffe/meeting-with-git-ai-authors)

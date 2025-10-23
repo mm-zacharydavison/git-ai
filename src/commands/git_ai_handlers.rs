@@ -2,10 +2,11 @@ use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::{AgentId, CheckpointKind};
 use crate::commands;
-use crate::commands::checkpoint_agent::agent_preset::{
+use crate::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
     GithubCopilotPreset,
 };
+use crate::commands::checkpoint_agent::agent_v1_preset::AgentV1Preset;
 use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
@@ -196,6 +197,19 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Github Copilot preset error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "agent-v1" => {
+                match AgentV1Preset.run(AgentCheckpointFlags {
+                    hook_input: hook_input.clone(),
+                }) {
+                    Ok(agent_run) => {
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Agent V1 preset error: {}", e);
                         std::process::exit(1);
                     }
                 }
