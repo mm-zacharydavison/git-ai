@@ -994,11 +994,71 @@ impl Repository {
     }
 
     pub fn commit_range_on_branch(&self, branch_refname: &str) -> Result<CommitRange, GitAiError> {
+        // Normalize the provided branch ref to fully qualified using rev-parse
+        let fq_branch = {
+            let mut rp_args = self.global_args_for_exec();
+            rp_args.push("rev-parse".to_string());
+            rp_args.push("--verify".to_string());
+            rp_args.push("--symbolic-full-name".to_string());
+            rp_args.push(branch_refname.to_string());
+
+            match exec_git(&rp_args) {
+                Ok(output) => {
+                    let s = String::from_utf8(output.stdout).unwrap_or_default();
+                    let s = s.trim();
+                    if s.is_empty() {
+                        if branch_refname.starts_with("refs/") {
+                            branch_refname.to_string()
+                        } else {
+                            format!("refs/heads/{}", branch_refname)
+                        }
+                    } else {
+                        s.to_string()
+                    }
+                }
+                Err(_) => {
+                    if branch_refname.starts_with("refs/") {
+                        branch_refname.to_string()
+                    } else {
+                        format!("refs/heads/{}", branch_refname)
+                    }
+                }
+            }
+        };
+
+        // List all local branches
+        let mut refs_args = self.global_args_for_exec();
+        refs_args.push("for-each-ref".to_string());
+        refs_args.push("--format=%(refname)".to_string());
+        refs_args.push("refs/heads".to_string());
+        let refs_output = exec_git(&refs_args)?;
+        let refs_str = String::from_utf8(refs_output.stdout)?;
+        let mut other_branches: Vec<String> = Vec::new();
+
+        for line in refs_str.lines() {
+            let refname = line.trim();
+            if refname.is_empty() {
+                continue;
+            }
+            if refname == fq_branch {
+                continue;
+            }
+            other_branches.push(refname.to_string());
+        }
+
+        // Build: git log --format=%H --reverse --ancestry-path <branch> --not <other branches>
         let mut log_args = self.global_args_for_exec();
         log_args.push("log".to_string());
-        log_args.push("--format=%H".to_string()); // Just the commit hash
-        log_args.push("--reverse".to_string()); // Oldest first
+        log_args.push("--format=%H".to_string());
+        log_args.push("--reverse".to_string());
+        log_args.push("--ancestry-path".to_string());
         log_args.push(branch_refname.to_string());
+        if !other_branches.is_empty() {
+            log_args.push("--not".to_string());
+            for ob in other_branches {
+                log_args.push(ob);
+            }
+        }
 
         let log_output = exec_git(&log_args).map_err(|e| {
             GitAiError::Generic(format!(
@@ -1010,18 +1070,16 @@ impl Repository {
         let log_str = String::from_utf8(log_output.stdout)
             .map_err(|e| GitAiError::Generic(format!("Failed to parse log output: {:?}", e)))?;
 
-        let commits: Vec<&str> = log_str.lines().collect();
+        let commits: Vec<&str> = log_str.lines().filter(|line| !line.is_empty()).collect();
 
         if commits.is_empty() {
             return Err(GitAiError::Generic(format!(
-                "No commits found on branch {}",
+                "No commits found on branch {} unique to this branch",
                 branch_refname
             )));
         }
 
-        // First commit is the oldest (beginning of branch)
         let first_commit = commits.first().unwrap().to_string();
-        // Last commit is the newest (tip of branch)
         let last_commit = commits.last().unwrap().to_string();
 
         Ok(CommitRange::new(
