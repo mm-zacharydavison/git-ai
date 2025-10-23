@@ -40,7 +40,9 @@ Use this when you can add a new directory to each user's PATH (mirrors the offic
 
 ### Option B: Overwrite an Existing Git Symlink
 
-Use this when your fleet already exposes `git` from a shared directory that is locked into PATH (for example `/usr/bin/git`).
+Use this when your fleet already exposes `git` from a shared directory that is locked into PATH (for example `/usr/local/bin/git`). Pick a writable directory—macOS SIP prevents modifying `/usr/bin`.
+
+**Unix/Linux/macOS**
 
 1. Locate the distributed git entry and its directory:
    ```bash
@@ -50,9 +52,40 @@ Use this when your fleet already exposes `git` from a shared directory that is l
 2. Preserve the original git binary:
    - If `git_path` is a symlink: `sudo ln -sf "$(readlink "$git_path")" "$git_dir/git-og"`
    - If it's a regular file: `sudo mv "$git_path" "$git_dir/git-og"`
-3. Place the `git-ai` binary in the same directory as your original git executable.
+3. Install the wrapper alongside it: `sudo install -m 0755 /path/to/git-ai "$git_dir/git-ai"`
 4. Point `git` at the wrapper: `sudo ln -sf "$git_dir/git-ai" "$git_path"`
 5. Confirm that `"$git_dir/git-og"` remains executable—Git AI will delegate to it.
+
+**Windows**
+
+1. Resolve the shim exposed on PATH (Git for Windows usually surfaces `C:\Program Files\Git\cmd\git.exe`):
+   ```powershell
+   $gitPath = (Get-Command git).Source
+   $gitDir = Split-Path $gitPath
+   ```
+2. Preserve the original git executable:
+   ```powershell
+   if ((Get-Item $gitPath).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+       $target = (Get-Item $gitPath).Target
+       New-Item -ItemType SymbolicLink -Path (Join-Path $gitDir 'git-og.exe') -Target $target | Out-Null
+       Remove-Item $gitPath
+   } else {
+       Rename-Item -Path $gitPath -NewName 'git-og.exe'
+   }
+   ```
+3. Copy the wrapper into the same directory:
+   ```powershell
+   Copy-Item -Path 'C:\path\to\git-ai.exe' -Destination (Join-Path $gitDir 'git-ai.exe')
+   ```
+4. Replace `git.exe` with a link to the wrapper (requires Developer Mode or elevated privileges to create file symlinks). If symlinks are disabled, copy `git-ai.exe` to `git.exe` instead.
+   ```powershell
+   New-Item -ItemType SymbolicLink -Path (Join-Path $gitDir 'git.exe') -Target (Join-Path $gitDir 'git-ai.exe')
+   ```
+   ```powershell
+   # Fallback when symlinks are unavailable
+   Copy-Item -Path (Join-Path $gitDir 'git-ai.exe') -Destination (Join-Path $gitDir 'git.exe')
+   ```
+5. Verify that `git-og.exe` is still runnable: `& (Join-Path $gitDir 'git-og.exe') --version`
 
 This method keeps the rest of PATH untouched and ensures existing automation continues to call `git` while Git AI intercepts the command.
 
@@ -82,7 +115,7 @@ Example:
 }
 ```
 
-For Option A, the `git_path` value should typically point to `$HOME/.git-ai/bin/git-og`. For Option B, it would depend on the location of your `git-og` symlink.
+For Option A, the `git_path` value should typically point to `$HOME/.git-ai/bin/git-og`. For Option B, use the absolute path where you stored the preserved binary (for example `/usr/local/bin/git-og` on macOS/Linux or `C:\\Program Files\\Git\\cmd\\git-og.exe` on Windows).
 
 ### IDE/Agent Hook Installation
 
