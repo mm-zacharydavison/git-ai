@@ -1588,6 +1588,45 @@ fn foo() {
     }
 
     #[test]
+    fn test_update_attributions_replacing_multibyte_emoji_succeeds() {
+        let tracker = AttributionTracker::new();
+
+        let old_content = "❌";
+        let new_content = "✅";
+
+        let old_attributions = vec![Attribution::new(
+            0,
+            old_content.len(),
+            "Alice".to_string(),
+            TEST_TS,
+        )];
+
+        let new_attributions = tracker
+            .update_attributions(old_content, new_content, &old_attributions, "Bob", TEST_TS)
+            .unwrap();
+
+        assert!(
+            new_attributions
+                .iter()
+                .all(|attr| attr.author_id != "Alice"),
+            "Old author attribution should be removed after replacement: {:?}",
+            new_attributions
+        );
+
+        let bob_attr = new_attributions
+            .iter()
+            .find(|attr| attr.author_id == "Bob")
+            .expect("New content should be attributed to Bob");
+
+        assert_eq!(bob_attr.start, 0, "New attribution should start at 0");
+        assert_eq!(
+            bob_attr.end,
+            new_content.len(),
+            "New attribution should cover entire replacement"
+        );
+    }
+
+    #[test]
     fn test_line_to_char_attribution_empty_content() {
         let content = "";
         let line_attrs = vec![LineAttribution::new(1, 1, "Alice".to_string())];
