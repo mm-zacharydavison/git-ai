@@ -1,11 +1,17 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { exec, spawn } from "child_process";
+import { isVersionSatisfied } from "./utils/semver";
+
+const MIN_GIT_AI_VERSION = "1.0.3";
+
+// Use GitHub URL to avoid VS Code open URL safety prompt
+const GIT_AI_INSTALL_DOCS_URL = "https://github.com/acunniffe/git-ai?tab=readme-ov-file#quick-start";
 
 class AIEditManager {
   private workspaceBaseStoragePath: string | null = null;
   private gitAiVersion: string | null = null;
-  private hasShownGitAiMissingMessage = false;
+  private hasShownGitAiErrorMessage = false;
   private lastHumanCheckpointAt: Date | null = null;
   private pendingSaves = new Map<string, {
     timestamp: number;
@@ -220,34 +226,65 @@ class AIEditManager {
     });
   }
 
+  async showGitAiUpdateRequiredMsg(detectedVersion: string) {
+    const url = vscode.Uri.parse(GIT_AI_INSTALL_DOCS_URL);
+
+    const choice = await vscode.window.showErrorMessage(
+      `git-ai version ${detectedVersion} is no longer supported.`,
+      'Update git-ai'
+    );
+
+    if (choice === 'Update git-ai') {
+      await vscode.env.openExternal(url);
+    }
+  }
+
+  async showGitAiNotInstalledMsg() {
+    const url = vscode.Uri.parse(GIT_AI_INSTALL_DOCS_URL);
+
+    const choice = await vscode.window.showInformationMessage(
+      'git-ai is not installed.',
+      'Install git-ai'
+    );
+
+    if (choice === 'Install git-ai') {
+      await vscode.env.openExternal(url);
+    }
+  }
+
   async checkGitAi(): Promise<boolean> {
     if (this.gitAiVersion) {
       return true;
     }
     // TODO Consider only re-checking every X attempts
-
-
-
     return new Promise((resolve) => {
       exec("git-ai --version", (error, stdout, stderr) => {
         if (error) {
-          if (!this.hasShownGitAiMissingMessage) {
+          if (!this.hasShownGitAiErrorMessage) {
             // Show startup notification
             vscode.window.showInformationMessage(
               "git-ai not installed. Visit https://github.com/acunniffe/git-ai to install it."
             );
-            this.hasShownGitAiMissingMessage = true;
+            this.hasShownGitAiErrorMessage = true;
           }
           // not installed. do nothing
           resolve(false);
         } else {
-          // Save the version for later use
-          this.gitAiVersion = stdout.trim();
+          const stdoutTrimmed = stdout.trim();
+          const versionMatch = stdoutTrimmed.match(/\d+(?:\.\d+)*/);
+          const detectedVersion = versionMatch ? versionMatch[0] : stdoutTrimmed;
 
-          // Show startup notification
-          vscode.window.showInformationMessage(
-            `🤖 AI Code Detector is now active! (git-ai v${this.gitAiVersion})`
-          );
+          if (!isVersionSatisfied(detectedVersion, MIN_GIT_AI_VERSION)) {
+            if (!this.hasShownGitAiErrorMessage) {
+              this.showGitAiUpdateRequiredMsg(detectedVersion);
+              this.hasShownGitAiErrorMessage = true;
+            }
+            resolve(false);
+            return;
+          }
+
+          // Save the version for later use
+          this.gitAiVersion = detectedVersion;
           resolve(true);
         }
       });
