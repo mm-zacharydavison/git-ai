@@ -31,11 +31,11 @@ if (GIT_AI_INSTALLED) await exec(`git-ai checkpoint <your-agent-name> <...metada
 
 ### Mock Integration
 
-You can quickly simulate your agent's integration using the `mockai` preset:
+You can quickly simulate your agent's integration using the `mock_ai` preset:
 
 1. Write some code manually in a git-tracked file, then mark it as AI:
 ```bash
-git-ai checkpoint mockai
+git-ai checkpoint mock_ai
 ```
 
 2. Edit a single line of that code without marking it as AI. Calling `checkpoint` without a preset marks the changes as human:
@@ -48,15 +48,15 @@ git-ai checkpoint
 git commit -a -m "Testing Git AI"
 ```
 
-4. Run `git-ai blame` to see AI authorship. Notice that the line you edited is attributed to you, not `mockai`:
+4. Run `git-ai blame` to see AI authorship. Notice that the line you edited is attributed to you, not `mock_ai`:
 
 ```rust
-be4f6cc (mockai         2025-07-11 19:00:20 -0400    1) mod utils;
+be4f6cc (mock_ai         2025-07-11 19:00:20 -0400    1) mod utils;
 be4f6cc (Aidan Cunniffe 2025-7-11 19:00:20 -0400     2) // Human overwrote this line
-be4f6cc (mockai         2025-07-11 19:00:20 -0400    3) use clap::Parser;
+be4f6cc (mock_ai         2025-07-11 19:00:20 -0400    3) use clap::Parser;
 ```
 
-Now you just need to get your agent to call `git-ai checkpoint` the same way to mark its edits. Before building your own checkpoint preset, you can wire everything up with the `mockai` preset for testing. 
+Now you just need to get your agent to call `git-ai checkpoint` the same way to mark its edits. Before building your own checkpoint preset, you can wire everything up with the `mock_ai` preset for testing. 
 
 ## Using the `agent-v1` preset
 
