@@ -228,3 +228,5 @@ if [[ ":$PATH:" != *"$INSTALL_DIR"* ]]; then
         echo "$PATH_CMD"
     fi
 fi
+
+echo -e "${YELLOW}Close and reopen your terminal and IDE sessions to use git-ai.${NC}"
