@@ -651,7 +651,7 @@ fn test_blame_with_ai_authorship() {
     assert!(
         git_ai_authors
             .iter()
-            .any(|a| a.contains("some-ai") || a.contains("mock_ai")),
+            .any(|a| a.contains("mock_ai") || a.contains("mock_ai")),
         "Should show AI as author. Got: {:?}",
         git_ai_authors
     );

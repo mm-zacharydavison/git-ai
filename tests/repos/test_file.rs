@@ -189,7 +189,7 @@ impl<'a> TestFile<'a> {
     fn is_ai_author_static(author: &str) -> bool {
         let author_lower = author.to_lowercase();
         author_lower.contains("mock_ai")
-            || author_lower.contains("some-ai")
+            || author_lower.contains("mock_ai")
             || author_lower.contains("claude")
             || author_lower.contains("gpt")
             || author_lower.contains("copilot")
@@ -521,7 +521,7 @@ impl<'a> TestFile<'a> {
     fn is_ai_author(&self, author: &str) -> bool {
         let author_lower = author.to_lowercase();
         author_lower.contains("mock_ai")
-            || author_lower.contains("some-ai")
+            || author_lower.contains("mock_ai")
             || author_lower.contains("claude")
             || author_lower.contains("gpt")
             || author_lower.contains("copilot")
