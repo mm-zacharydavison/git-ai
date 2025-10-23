@@ -23,7 +23,8 @@ keywords: git ai compatibility, supported agents, cursor support, claude code su
 | **Editing** | Adding code before or after AI Hunks does not break attribution (line shifting works) | ✅ |
 | **Editing** | Undo / Redo operations correctly preserve attribution | ❌ |
 | **Editing** | Restoring to a local checkpoint in your IDE restores that file's attribution to its old state | ❌ |
-| **Editing** | Copy / Pasting AI LOC keeps them attributed to AI | ❌ |
+| **Editing** | Copy / Pasting AI LOC within the same file keeps them attributed to AI | ✅ |
+| **Editing** | Copy / Pasting AI LOC across files keeps them attributed to AI | ❌ |
 | **Editing** | Code Formatting tools do not break attribution | ❌ |
 
 ## Supported Git Workflows
