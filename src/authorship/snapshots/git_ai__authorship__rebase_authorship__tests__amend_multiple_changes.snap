@@ -90,7 +90,7 @@ AuthorshipLogV3 {
                     "Test User <test@example.com>",
                 ),
                 messages: [],
-                total_additions: 4,
+                total_additions: 3,
                 total_deletions: 0,
                 accepted_lines: 1,
                 overriden_lines: 0,
