@@ -13,7 +13,6 @@ jobs:
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     outputs:
       version: ${{ steps.get-version.outputs.version }}
     strategy:
@@ -56,7 +55,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.target }}-
@@ -66,6 +64,18 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_INCREMENTAL: 0
+
+      - name: Verify binary architecture (Linux)
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          file target/${{ matrix.target }}/release/git-ai
+          ldd target/${{ matrix.target }}/release/git-ai || true
+
+      - name: Verify binary architecture (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          file target/${{ matrix.target }}/release/git-ai.exe
 
       - name: Strip binary (Linux)
         if: contains(matrix.os, 'ubuntu')
@@ -109,8 +119,7 @@ jobs:
 
   build-macos-intel:
     name: Build for macOS Intel
-    runs-on: macos-latest
-    continue-on-error: true
+    runs-on: macos-13
     outputs:
       version: ${{ steps.get-version.outputs.version }}
 
@@ -129,6 +138,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          target: x86_64-apple-darwin
           override: true
 
       - name: Cache dependencies
@@ -137,20 +147,24 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: ${{ runner.os }}-cargo-x86_64-apple-darwin-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-x86_64-apple-darwin-
 
-      - name: Build release binary (native)
+      - name: Build release binary
         run: |
-          cargo build --release
+          cargo build --release --target x86_64-apple-darwin
         env:
           CARGO_INCREMENTAL: 0
 
-      - name: Strip binary (macOS)
+      - name: Verify binary architecture
         run: |
-          strip target/release/git-ai
+          file target/x86_64-apple-darwin/release/git-ai
+          lipo -info target/x86_64-apple-darwin/release/git-ai
+
+      - name: Strip binary
+        run: |
+          strip target/x86_64-apple-darwin/release/git-ai
 
       - name: Create release directory
         run: |
@@ -158,7 +172,7 @@ jobs:
 
       - name: Copy binary to release directory
         run: |
-          cp target/release/git-ai release/git-ai-macos-x64
+          cp target/x86_64-apple-darwin/release/git-ai release/git-ai-macos-x64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -171,7 +185,7 @@ jobs:
     name: Create Release
     needs: [build, build-macos-intel]
     runs-on: ubuntu-latest
-    if: always() && inputs.dry_run != true
+    if: success() && inputs.dry_run != true
 
     steps:
       - name: Download all artifacts
