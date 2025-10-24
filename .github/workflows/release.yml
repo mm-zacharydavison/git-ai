@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Skip the actual release creation (dry run)'
+        description: 'Dry Run (uncheck to create a release)'
         required: false
         default: true
         type: boolean
