@@ -483,34 +483,37 @@ fn get_initial_checkpoint_entries(
         }
 
         // Get the previous line attributions from ai blame
-        let mut ai_blame_opts = GitAiBlameOptions::default();
-        ai_blame_opts.no_output = true;
-        ai_blame_opts.return_human_authors_as_human = true;
-        ai_blame_opts.use_prompt_hashes_as_names = true;
-        ai_blame_opts.newest_commit = head_commit_sha.clone();
-        let ai_blame = repo.blame(file_path, &ai_blame_opts);
-        let mut prev_line_attributions = Vec::new();
-        if let Ok((blames, _)) = ai_blame {
-            for (line, author) in blames {
-                if author == CheckpointKind::Human.to_str() {
-                    continue;
-                }
-                prev_line_attributions.push(
-                    crate::authorship::attribution_tracker::LineAttribution {
-                        start_line: line,
-                        end_line: line,
-                        author_id: author.clone(),
-                    },
-                );
-            }
-        }
+        // let mut ai_blame_opts = GitAiBlameOptions::default();
+        // ai_blame_opts.no_output = true;
+        // ai_blame_opts.return_human_authors_as_human = true;
+        // ai_blame_opts.use_prompt_hashes_as_names = true;
+        // ai_blame_opts.newest_commit = head_commit_sha.clone();
+        // let ai_blame = repo.blame(file_path, &ai_blame_opts);
+        // let mut prev_line_attributions = Vec::new();
+        // if let Ok((blames, _)) = ai_blame {
+        //     for (line, author) in blames {
+        //         if author == CheckpointKind::Human.to_str() {
+        //             continue;
+        //         }
+        //         prev_line_attributions.push(
+        //             crate::authorship::attribution_tracker::LineAttribution {
+        //                 start_line: line,
+        //                 end_line: line,
+        //                 author_id: author.clone(),
+        //             },
+        //         );
+        //     }
+        // }
         // Convert any line attributions to character attributions
-        let prev_attributions =
-            crate::authorship::attribution_tracker::line_attributions_to_attributions(
-                &prev_line_attributions,
-                &previous_content,
-                ts,
-            );
+        // let prev_attributions =
+        //     crate::authorship::attribution_tracker::line_attributions_to_attributions(
+        //         &prev_line_attributions,
+        //         &previous_content,
+        //         ts,
+        //     );
+
+        // TODO Bring back AI blame when we have a good way to ensure performance is acceptable on large repos.
+        let prev_attributions = Vec::new();
 
         // Get the blob SHA for this file from the pre-computed hashes
         let blob_sha = file_content_hashes
