@@ -54,6 +54,7 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
             ${{ matrix.docker_image }} \
             bash -c "
               apt-get update && \
