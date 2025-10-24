@@ -2,6 +2,12 @@ name: Release Build
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Skip the actual release creation (dry run)'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
@@ -16,7 +22,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: git-ai-linux-x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: git-ai-linux-arm64
           - os: windows-latest
@@ -62,7 +68,7 @@ jobs:
           CARGO_INCREMENTAL: 0
 
       - name: Strip binary (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: contains(matrix.os, 'ubuntu')
         run: |
           strip target/${{ matrix.target }}/release/git-ai
 
@@ -165,7 +171,7 @@ jobs:
     name: Create Release
     needs: [build, build-macos-intel]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && inputs.dry_run != true
 
     steps:
       - name: Download all artifacts
