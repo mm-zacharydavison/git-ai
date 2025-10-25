@@ -465,7 +465,6 @@ async fn get_initial_checkpoint_entries(
     // Process files concurrently with a limit on parallelism
     // Using 20 concurrent tasks - can be adjusted for more aggressive parallelization
     const MAX_CONCURRENT: usize = 30;
-    println!("MAX_CONCURRENT: {}", MAX_CONCURRENT);
 
     // Create a semaphore to limit concurrent tasks
     let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
