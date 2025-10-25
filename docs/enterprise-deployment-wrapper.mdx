@@ -4,7 +4,7 @@ description: Deploy Git AI as a Git wrapper across your organization using MDM o
 keywords: git ai wrapper, git proxy, enterprise deployment, mdm installation, git ai rollout, install script
 ---
 
-The recommended way to distribute Git AI to developer machines is as a Git wrapper. This approach intercepts git commands and allows Git AI to track AI-assisted changes without modifying git's core behavior.
+The recommended way to distribute Git AI to developer machines is as a Git wrapper. This approach intercepts git commands and allows Git AI to track AI-assisted changes without modifying git's core behavior. You can either deploy the wrapper in a dedicated directory (as our install scripts do) or drop it directly in front of the existing `git` entry by overwriting its symlink. Pick the option that best matches how your fleet manages PATH.
 
 ## Overview
 
@@ -18,26 +18,83 @@ This is the same method used by the [`install.sh`](https://github.com/acunniffe/
 
 ## Installation Requirements
 
-### Directory Structure
+Choose a wrapper layout that matches how your environment manages the `git` binary.
 
-**Unix/Linux/macOS:**
-- Install the `git-ai` binary to: `$HOME/.git-ai/bin/git-ai`
-- Create a symlink: `$HOME/.git-ai/bin/git` → `$HOME/.git-ai/bin/git-ai`
-- Create a symlink: `$HOME/.git-ai/bin/git-og` → `/path/to/original/git`
-- Make the binary executable: `chmod +x $HOME/.git-ai/bin/git-ai`
-- On macOS only: Remove quarantine attribute: `xattr -d com.apple.quarantine $HOME/.git-ai/bin/git-ai`
+### Option A: User-Scoped Wrapper Directory
 
-**Windows:**
-- Install the binary to: `%USERPROFILE%\.git-ai\bin\git-ai.exe`
-- Create a copy: `%USERPROFILE%\.git-ai\bin\git.exe` (copy of `git-ai.exe`)
-- Create a batch file: `%USERPROFILE%\.git-ai\bin\git-og.cmd` that calls the original git executable
+Use this when you can add a new directory to each user's PATH (mirrors the official install scripts).
+
+**Unix/Linux/macOS**
+- Install the `git-ai` binary to `$HOME/.git-ai/bin/git-ai`
+- Create symlinks in that directory:
+  - `git` → `git-ai`
+  - `git-og` → `/path/to/original/git`
+- Ensure executability: `chmod +x $HOME/.git-ai/bin/git-ai`
+- macOS only: remove the quarantine attribute (`xattr -d com.apple.quarantine $HOME/.git-ai/bin/git-ai`)
+
+**Windows**
+- Install the binary to `%USERPROFILE%\.git-ai\bin\git-ai.exe`
+- Create a copy `%USERPROFILE%\.git-ai\bin\git.exe` (copy of `git-ai.exe`)
+- Create a batch file `%USERPROFILE%\.git-ai\bin\git-og.cmd` that calls the original git executable
 - Unblock the downloaded files (PowerShell: `Unblock-File`)
+
+### Option B: Overwrite an Existing Git Symlink
+
+Use this when your fleet already exposes `git` from a shared directory that is locked into PATH (for example `/usr/local/bin/git`). Pick a writable directory—macOS SIP prevents modifying `/usr/bin`.
+
+**Unix/Linux/macOS**
+
+1. Locate the distributed git entry and its directory:
+   ```bash
+   git_path="$(command -v git)"
+   git_dir="$(dirname "$git_path")"
+   ```
+2. Preserve the original git binary:
+   - If `git_path` is a symlink: `sudo ln -sf "$(readlink "$git_path")" "$git_dir/git-og"`
+   - If it's a regular file: `sudo mv "$git_path" "$git_dir/git-og"`
+3. Install the wrapper alongside it: `sudo install -m 0755 /path/to/git-ai "$git_dir/git-ai"`
+4. Point `git` at the wrapper: `sudo ln -sf "$git_dir/git-ai" "$git_path"`
+5. Confirm that `"$git_dir/git-og"` remains executable—Git AI will delegate to it.
+
+**Windows**
+
+1. Resolve the shim exposed on PATH (Git for Windows usually surfaces `C:\Program Files\Git\cmd\git.exe`):
+   ```powershell
+   $gitPath = (Get-Command git).Source
+   $gitDir = Split-Path $gitPath
+   ```
+2. Preserve the original git executable:
+   ```powershell
+   if ((Get-Item $gitPath).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+       $target = (Get-Item $gitPath).Target
+       New-Item -ItemType SymbolicLink -Path (Join-Path $gitDir 'git-og.exe') -Target $target | Out-Null
+       Remove-Item $gitPath
+   } else {
+       Rename-Item -Path $gitPath -NewName 'git-og.exe'
+   }
+   ```
+3. Copy the wrapper into the same directory:
+   ```powershell
+   Copy-Item -Path 'C:\path\to\git-ai.exe' -Destination (Join-Path $gitDir 'git-ai.exe')
+   ```
+4. Replace `git.exe` with a link to the wrapper (requires Developer Mode or elevated privileges to create file symlinks). If symlinks are disabled, copy `git-ai.exe` to `git.exe` instead.
+   ```powershell
+   New-Item -ItemType SymbolicLink -Path (Join-Path $gitDir 'git.exe') -Target (Join-Path $gitDir 'git-ai.exe')
+   ```
+   ```powershell
+   # Fallback when symlinks are unavailable
+   Copy-Item -Path (Join-Path $gitDir 'git-ai.exe') -Destination (Join-Path $gitDir 'git.exe')
+   ```
+5. Verify that `git-og.exe` is still runnable: `& (Join-Path $gitDir 'git-og.exe') --version`
+
+This method keeps the rest of PATH untouched and ensures existing automation continues to call `git` while Git AI intercepts the command.
 
 ### PATH Configuration
 
 **Unix/Linux/macOS:**
-- Add `$HOME/.git-ai/bin` to the beginning of the user's PATH
-- Update the appropriate shell config file (`.zshrc`, `.bashrc`, etc.)
+- Add `$HOME/.git-ai/bin` to the beginning of the user's PATH (Option A)
+- For Option B, confirm the directory containing `git` already precedes other Git installations so the new symlink wins
+- Update the appropriate shell config file (`.zshrc`, `.bashrc`, etc.) when PATH changes are required
 
 **Windows:**
 - Add `%USERPROFILE%\.git-ai\bin` to the System PATH
@@ -45,18 +102,20 @@ This is the same method used by the [`install.sh`](https://github.com/acunniffe/
 
 ### Configuration File
 
-Create `$HOME/.git-ai/config.json` (or `%USERPROFILE%\.git-ai\config.json` on Windows) with your organization's settings. See [Enterprise Configuration](/enterprise-configuration) for details.
+Create `$HOME/.git-ai/config.json` (or `%USERPROFILE%\.git-ai\config.json` on Windows) with your organization's settings. Always set `git_path` to the location of the preserved original binary (`git-og`). See [Enterprise Configuration](/enterprise-configuration) for details.
 
 Example:
 ```json
 {
-    "git_path": "/usr/bin/git",
+    "git_path": "/path/to/git-og",
     "ignore_prompts": false,
     "allow_repositories": [
         "https://github.com/yourorg/*"
     ]
 }
 ```
+
+For Option A, the `git_path` value should typically point to `$HOME/.git-ai/bin/git-og`. For Option B, use the absolute path where you stored the preserved binary (for example `/usr/local/bin/git-og` on macOS/Linux or `C:\\Program Files\\Git\\cmd\\git-og.exe` on Windows).
 
 ### IDE/Agent Hook Installation
 
@@ -115,4 +174,3 @@ git-og --version
 ## Alternative Deployment
 
 If you prefer not to wrap git, see [Enterprise Deployment: Git Hooks](/enterprise-deployment-hooks) for the core.hooksPath approach.
-
