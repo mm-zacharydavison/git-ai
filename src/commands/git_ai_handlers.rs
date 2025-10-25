@@ -79,6 +79,7 @@ fn print_help() {
     );
     eprintln!("    --show-working-log          Display current working log");
     eprintln!("    --reset                     Reset working log");
+    eprintln!("    mock_ai [pathspecs...]      Test preset accepting optional file pathspecs");
     eprintln!("  blame <file>       Git blame with AI authorship overlay");
     eprintln!("  stats [commit]     Show AI authorship statistics for a commit");
     eprintln!("    --json                 Output in JSON format");
@@ -222,6 +223,21 @@ fn handle_checkpoint(args: &[String]) {
                         .map(|d| d.as_nanos())
                         .unwrap_or_else(|_| 0)
                 );
+
+                // Collect all remaining args (after mock_ai and flags) as pathspecs
+                let edited_filepaths = if args.len() > 1 {
+                    let mut paths = Vec::new();
+                    for arg in &args[1..] {
+                        // Skip flags
+                        if !arg.starts_with("--") {
+                            paths.push(arg.clone());
+                        }
+                    }
+                    if paths.is_empty() { None } else { Some(paths) }
+                } else {
+                    None
+                };
+
                 agent_run_result = Some(AgentRunResult {
                     agent_id: AgentId {
                         tool: "mock_ai".to_string(),
@@ -231,7 +247,7 @@ fn handle_checkpoint(args: &[String]) {
                     checkpoint_kind: CheckpointKind::AiAgent,
                     transcript: None,
                     repo_working_dir: None,
-                    edited_filepaths: None,
+                    edited_filepaths,
                     will_edit_filepaths: None,
                 });
             }
