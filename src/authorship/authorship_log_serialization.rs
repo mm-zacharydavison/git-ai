@@ -757,10 +757,11 @@ impl AuthorshipLog {
 
                 // IMPORTANT: Use the session_hash that will be regenerated from agent_id when applying checkpoint
                 // This ensures line attributions match the prompts in metadata after apply_checkpoint
-                let regenerated_session_hash =
+                let prompt_hash =
                     generate_short_hash(&prompt_record.agent_id.id, &prompt_record.agent_id.tool);
+                // TODO Update authorship to store overridden state for line ranges
                 let line_attributions =
-                    compress_lines_to_working_log_format(&all_lines, &regenerated_session_hash);
+                    compress_lines_to_working_log_format(&all_lines, &prompt_hash, false);
 
                 combined_line_attributions.extend(line_attributions);
                 session_prompt_records.push(prompt_record);
@@ -820,6 +821,7 @@ impl AuthorshipLog {
 fn compress_lines_to_working_log_format(
     lines: &[u32],
     author_id: &str,
+    overridden: bool,
 ) -> Vec<crate::authorship::attribution_tracker::LineAttribution> {
     use crate::authorship::attribution_tracker::LineAttribution;
 
@@ -837,14 +839,14 @@ fn compress_lines_to_working_log_format(
             end = line;
         } else {
             // Gap found, save current range and start new one
-            result.push(LineAttribution::new(start, end, author_id.to_string()));
+            result.push(LineAttribution::new(start, end, author_id.to_string(), overridden));
             start = line;
             end = line;
         }
     }
 
     // Add the final range
-    result.push(LineAttribution::new(start, end, author_id.to_string()));
+    result.push(LineAttribution::new(start, end, author_id.to_string(), overridden));
 
     result
 }
@@ -1326,7 +1328,8 @@ mod tests {
 
         // Create working log entries
         // First checkpoint: add 10 lines
-        let line_attributions1 = vec![LineAttribution::new(1, 10, session_hash.clone())];
+        let line_attributions1 =
+            vec![LineAttribution::new(1, 10, session_hash.clone(), false)];
         let attributions1 = vec![Attribution::new(0, 100, session_hash.clone(), ts)];
         let entry1 = WorkingLogEntry::new(
             "src/test.rs".to_string(),
@@ -1349,8 +1352,8 @@ mod tests {
         // Second checkpoint: modify lines (delete 3, add 5)
         // This represents the final state after both checkpoints
         let line_attributions2 = vec![
-            LineAttribution::new(1, 4, session_hash.clone()),
-            LineAttribution::new(5, 9, session_hash.clone()),
+            LineAttribution::new(1, 4, session_hash.clone(), false),
+            LineAttribution::new(5, 9, session_hash.clone(), false),
         ];
         let attributions2 = vec![
             Attribution::new(0, 50, session_hash.clone(), ts),
@@ -1495,7 +1498,8 @@ mod tests {
             .as_millis();
 
         // First checkpoint: AI adds lines 1-5
-        let line_attributions1 = vec![LineAttribution::new(1, 5, session_hash.clone())];
+        let line_attributions1 =
+            vec![LineAttribution::new(1, 5, session_hash.clone(), false)];
         let attributions1 = vec![Attribution::new(0, 50, session_hash.clone(), ts)];
         let entry1 = WorkingLogEntry::new(
             "src/main.rs".to_string(),
@@ -1522,8 +1526,8 @@ mod tests {
         // Create a human checkpoint that removes lines 2-3 (overriding AI lines)
         // After deletion, AI owns lines 1, 4->2, 5->3 (lines shift up)
         let line_attributions2 = vec![
-            LineAttribution::new(1, 1, session_hash.clone()),
-            LineAttribution::new(2, 3, session_hash.clone()),
+            LineAttribution::new(1, 1, session_hash.clone(), true),
+            LineAttribution::new(2, 3, session_hash.clone(), true),
         ];
         let attributions2 = vec![
             Attribution::new(0, 10, session_hash.clone(), ts),

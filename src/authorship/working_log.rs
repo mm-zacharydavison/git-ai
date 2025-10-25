@@ -83,6 +83,7 @@ impl CheckpointKind {
 
 /// Line-level statistics tracked per checkpoint kind
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct CheckpointLineStats {
     pub human_additions: u32,
     pub human_deletions: u32,
@@ -90,6 +91,7 @@ pub struct CheckpointLineStats {
     pub ai_agent_deletions: u32,
     pub ai_tab_additions: u32,
     pub ai_tab_deletions: u32,
+    pub overrides: u32,
 }
 
 impl CheckpointLineStats {
