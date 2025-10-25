@@ -466,40 +466,6 @@ impl AuthorshipLog {
         authorship_log
     }
 
-    /// Detect lines that were originally authored by AI but are now being modified by humans
-    fn detect_overridden_lines(&mut self, file: &str, deleted_lines: &[u32]) {
-        // Find the file attestation and check for overridden lines
-        if let Some(file_attestation) = self.attestations.iter().find(|f| f.file_path == file) {
-            // For each session, count how many of its lines were overridden
-            let mut session_overridden_counts: std::collections::HashMap<String, u32> =
-                std::collections::HashMap::new();
-
-            // For each deleted line, check if it was previously attributed to AI
-            for &line in deleted_lines {
-                for attestation_entry in &file_attestation.entries {
-                    // Check if this line was attributed to AI
-                    if attestation_entry
-                        .line_ranges
-                        .iter()
-                        .any(|range| range.contains(line))
-                    {
-                        // This line was AI-authored and is now being deleted by a human
-                        *session_overridden_counts
-                            .entry(attestation_entry.hash.clone())
-                            .or_insert(0) += 1;
-                    }
-                }
-            }
-
-            // Update the overriden_lines count for each affected session
-            for (session_hash, overridden_count) in session_overridden_counts {
-                if let Some(prompt_record) = self.metadata.prompts.get_mut(&session_hash) {
-                    prompt_record.overriden_lines += overridden_count;
-                }
-            }
-        }
-    }
-
     pub fn get_or_create_file(&mut self, file: &str) -> &mut FileAttestation {
         // Check if file already exists
         let exists = self.attestations.iter().any(|f| f.file_path == file);
@@ -839,14 +805,24 @@ fn compress_lines_to_working_log_format(
             end = line;
         } else {
             // Gap found, save current range and start new one
-            result.push(LineAttribution::new(start, end, author_id.to_string(), overridden));
+            result.push(LineAttribution::new(
+                start,
+                end,
+                author_id.to_string(),
+                overridden,
+            ));
             start = line;
             end = line;
         }
     }
 
     // Add the final range
-    result.push(LineAttribution::new(start, end, author_id.to_string(), overridden));
+    result.push(LineAttribution::new(
+        start,
+        end,
+        author_id.to_string(),
+        overridden,
+    ));
 
     result
 }
@@ -1328,8 +1304,7 @@ mod tests {
 
         // Create working log entries
         // First checkpoint: add 10 lines
-        let line_attributions1 =
-            vec![LineAttribution::new(1, 10, session_hash.clone(), false)];
+        let line_attributions1 = vec![LineAttribution::new(1, 10, session_hash.clone(), false)];
         let attributions1 = vec![Attribution::new(0, 100, session_hash.clone(), ts)];
         let entry1 = WorkingLogEntry::new(
             "src/test.rs".to_string(),
@@ -1498,8 +1473,7 @@ mod tests {
             .as_millis();
 
         // First checkpoint: AI adds lines 1-5
-        let line_attributions1 =
-            vec![LineAttribution::new(1, 5, session_hash.clone(), false)];
+        let line_attributions1 = vec![LineAttribution::new(1, 5, session_hash.clone(), false)];
         let attributions1 = vec![Attribution::new(0, 50, session_hash.clone(), ts)];
         let entry1 = WorkingLogEntry::new(
             "src/main.rs".to_string(),

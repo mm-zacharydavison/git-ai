@@ -618,46 +618,6 @@ fn overlay_ai_authorship(
     Ok((line_authors, prompt_records))
 }
 
-#[allow(unused_variables)]
-#[allow(dead_code)]
-fn print_blame_summary(line_authors: &HashMap<u32, String>, start_line: u32, end_line: u32) {
-    println!("{}", "=".repeat(80));
-
-    let mut author_stats: HashMap<String, u32> = HashMap::new();
-    let mut total_lines = 0;
-
-    for line_num in start_line..=end_line {
-        let author = line_authors
-            .get(&line_num)
-            .map(|s| s.as_str())
-            .unwrap_or("unknown");
-        *author_stats.entry(author.to_string()).or_insert(0) += 1;
-        total_lines += 1;
-    }
-
-    // Find the longest author name for column width
-    let max_author_len = author_stats
-        .keys()
-        .map(|name| name.len())
-        .max()
-        .unwrap_or(0);
-
-    // Sort authors by line count (descending)
-    let mut sorted_authors: Vec<_> = author_stats.iter().collect();
-    sorted_authors.sort_by(|a, b| b.1.cmp(a.1));
-
-    for (author, count) in sorted_authors {
-        let percentage = (*count as f64 / total_lines as f64) * 100.0;
-        println!(
-            "{:>width$} {:>5} {:>8.1}%",
-            author,
-            count,
-            percentage,
-            width = max_author_len
-        );
-    }
-}
-
 fn output_porcelain_format(
     repo: &Repository,
     _line_authors: &HashMap<u32, String>,
@@ -875,6 +835,29 @@ fn output_default_format(
         }
     }
 
+    // Calculate the maximum line number width for proper padding
+    let max_line_num = lines.len() as u32;
+    let line_num_width = max_line_num.to_string().len();
+
+    // Calculate the maximum author name width for proper padding
+    let mut max_author_width = 0;
+    for (start_line, end_line) in line_ranges {
+        let h = repo.blame_hunks(file_path, *start_line, *end_line, options)?;
+        for hunk in h {
+            let author = line_authors
+                .get(&hunk.range.0)
+                .unwrap_or(&hunk.original_author);
+            let author_display = if options.suppress_author {
+                "".to_string()
+            } else if options.show_email {
+                format!("{} <{}>", author, &hunk.author_email)
+            } else {
+                author.to_string()
+            };
+            max_author_width = max_author_width.max(author_display.len());
+        }
+    }
+
     for (start_line, end_line) in line_ranges {
         for line_num in *start_line..=*end_line {
             let line_index = (line_num - 1) as usize;
@@ -926,6 +909,13 @@ fn output_default_format(
                     author.to_string()
                 };
 
+                // Pad author name to consistent width
+                let padded_author = if max_author_width > 0 {
+                    format!("{:<width$}", author_display, width = max_author_width)
+                } else {
+                    author_display
+                };
+
                 let _filename_display = if options.show_name {
                     format!("{} ", file_path)
                 } else {
@@ -947,28 +937,48 @@ fn output_default_format(
                     if options.show_name {
                         // Show filename format: sha filename (author date line) code
                         output.push_str(&format!(
-                            "{} {} ({} {} {:>4}) {}\n",
-                            full_sha, file_path, author_display, date_str, line_num, line_content
+                            "{} {} ({} {} {:>width$}) {}\n",
+                            full_sha,
+                            file_path,
+                            padded_author,
+                            date_str,
+                            line_num,
+                            line_content,
+                            width = line_num_width
                         ));
                     } else if options.show_number {
                         // Show number format: sha line_number (author date line) code (matches git's -n output)
                         output.push_str(&format!(
-                            "{} {} ({} {} {:>4}) {}\n",
-                            full_sha, line_num, author_display, date_str, line_num, line_content
+                            "{} {} ({} {} {:>width$}) {}\n",
+                            full_sha,
+                            line_num,
+                            padded_author,
+                            date_str,
+                            line_num,
+                            line_content,
+                            width = line_num_width
                         ));
                     } else {
                         // Normal format: sha (author date line) code
                         output.push_str(&format!(
-                            "{} ({} {} {:>4}) {}\n",
-                            full_sha, author_display, date_str, line_num, line_content
+                            "{} ({} {} {:>width$}) {}\n",
+                            full_sha,
+                            padded_author,
+                            date_str,
+                            line_num,
+                            line_content,
+                            width = line_num_width
                         ));
                     }
                 }
             } else {
                 // Fallback for lines without blame info
                 output.push_str(&format!(
-                    "{:<8} (unknown        1970-01-01 00:00:00 +0000    {:>4}) {}\n",
-                    "????????", line_num, line_content
+                    "{:<8} (unknown        1970-01-01 00:00:00 +0000    {:>width$}) {}\n",
+                    "????????",
+                    line_num,
+                    line_content,
+                    width = line_num_width
                 ));
             }
         }

@@ -1,7 +1,9 @@
+use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
 use crate::error::GitAiError;
 use crate::git::cli_parser::ParsedGitInvocation;
+use crate::git::refs::{get_authorship, show_authorship_note};
 use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
@@ -31,6 +33,7 @@ impl<'a> Object<'a> {
         Ok(Commit {
             repo: self.repo,
             oid: String::from_utf8(output.stdout)?.trim().to_string(),
+            authorship_log: std::cell::OnceCell::new(),
         })
     }
 }
@@ -240,6 +243,7 @@ impl<'a> Iterator for CommitRangeIterator<'a> {
         Some(Commit {
             repo: self.repo,
             oid,
+            authorship_log: std::cell::OnceCell::new(),
         })
     }
 }
@@ -306,48 +310,12 @@ impl<'a> Signature<'a> {
 pub struct Commit<'a> {
     repo: &'a Repository,
     oid: String,
-}
-
-/// Owned version of Commit that can be sent across async boundaries
-#[derive(Clone)]
-pub struct OwnedCommit {
-    repo: Repository,
-    oid: String,
-}
-
-impl OwnedCommit {
-    pub fn id(&self) -> String {
-        self.oid.clone()
-    }
-
-    pub fn repo(&self) -> &Repository {
-        &self.repo
-    }
-
-    pub fn summary(&self) -> Result<String, GitAiError> {
-        let mut args = self.repo.global_args_for_exec();
-        args.push("show".to_string());
-        args.push("-s".to_string());
-        args.push("--format=%s".to_string());
-        args.push(self.oid.clone());
-
-        let output = exec_git(&args)?;
-        let summary = String::from_utf8(output.stdout)?;
-        Ok(summary.trim().to_string())
-    }
+    authorship_log: std::cell::OnceCell<AuthorshipLog>,
 }
 
 impl<'a> Commit<'a> {
     pub fn id(&self) -> String {
         self.oid.clone()
-    }
-
-    /// Create an owned commit with a cloned repository for async processing
-    pub fn to_owned_commit(&self) -> OwnedCommit {
-        OwnedCommit {
-            repo: self.repo.clone(),
-            oid: self.oid.clone(),
-        }
     }
 
     pub fn tree(&self) -> Result<Tree<'a>, GitAiError> {
@@ -374,6 +342,7 @@ impl<'a> Commit<'a> {
         Ok(Commit {
             repo: self.repo,
             oid: String::from_utf8(output.stdout)?.trim().to_string(),
+            authorship_log: std::cell::OnceCell::new(),
         })
     }
 
@@ -472,6 +441,16 @@ impl<'a> Commit<'a> {
     pub fn time(&self) -> Result<Time, GitAiError> {
         let signature = self.committer()?;
         Ok(signature.when())
+    }
+
+    // lazy load the authorship log
+    pub fn authorship(&self) -> &AuthorshipLog {
+        self.authorship_log.get_or_init(|| {
+            get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
+        })
+    }
+    pub fn authorship_uncached(&self) -> AuthorshipLog {
+        get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
     }
 }
 
@@ -663,6 +642,7 @@ impl<'a> Reference<'a> {
         Ok(Commit {
             repo: self.repo,
             oid: String::from_utf8(output.stdout)?.trim().to_string(),
+            authorship_log: std::cell::OnceCell::new(),
         })
     }
 }
@@ -685,6 +665,7 @@ impl<'a> Iterator for Parents<'a> {
         Some(Commit {
             repo: self.repo,
             oid,
+            authorship_log: std::cell::OnceCell::new(),
         })
     }
 }
@@ -1330,7 +1311,11 @@ impl Repository {
                 oid, typ
             )));
         }
-        Ok(Commit { repo: self, oid })
+        Ok(Commit {
+            repo: self,
+            oid,
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 
     // Lookup a reference to one of the objects in a repository.
