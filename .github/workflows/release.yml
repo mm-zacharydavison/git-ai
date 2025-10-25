@@ -2,29 +2,40 @@ name: Release Build
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry Run (uncheck to create a release)'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     outputs:
       version: ${{ steps.get-version.outputs.version }}
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact_name: git-ai-linux-x64
-          - os: ubuntu-latest
+            use_docker: true
+            docker_image: ubuntu:20.04
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: git-ai-linux-arm64
+            use_docker: true
+            docker_image: ubuntu:20.04
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: git-ai-windows-x64
+            use_docker: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: git-ai-macos-arm64
+            use_docker: false
 
     steps:
       - name: Checkout code
@@ -37,34 +48,67 @@ jobs:
           VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
           echo "version=v$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Install Rust toolchain
+      - name: Build in Docker (Linux)
+        if: matrix.use_docker == true
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
+            ${{ matrix.docker_image }} \
+            bash -c "
+              apt-get update && \
+              apt-get install -y curl build-essential pkg-config libssl-dev && \
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target ${{ matrix.target }} && \
+              . \$HOME/.cargo/env && \
+              cargo build --release --target ${{ matrix.target }} && \
+              strip target/${{ matrix.target }}/release/git-ai
+            "
+
+      - name: Install Rust toolchain (non-Docker)
+        if: matrix.use_docker == false
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: ${{ matrix.target }}
           override: true
 
-      - name: Cache dependencies
+      - name: Cache dependencies (non-Docker)
+        if: matrix.use_docker == false
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
 
-      - name: Build release binary
+      - name: Build release binary (non-Docker)
+        if: matrix.use_docker == false
         run: |
           cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_INCREMENTAL: 0
 
-      - name: Strip binary (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Verify binary architecture (Linux)
+        if: contains(matrix.os, 'ubuntu')
         run: |
-          strip target/${{ matrix.target }}/release/git-ai
+          file target/${{ matrix.target }}/release/git-ai
+          ldd target/${{ matrix.target }}/release/git-ai || true
+          echo "Required GLIBC version:"
+          objdump -T target/${{ matrix.target }}/release/git-ai | grep GLIBC | sed 's/.*GLIBC_/GLIBC_/' | sort -V | uniq | tail -1
+
+      - name: Verify binary architecture (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          file target/${{ matrix.target }}/release/git-ai.exe
+
+      - name: Strip binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          strip target/${{ matrix.target }}/release/git-ai.exe
 
       - name: Strip binary (macOS)
         if: matrix.os == 'macos-latest'
@@ -103,8 +147,7 @@ jobs:
 
   build-macos-intel:
     name: Build for macOS Intel
-    runs-on: macos-latest
-    continue-on-error: true
+    runs-on: macos-13
     outputs:
       version: ${{ steps.get-version.outputs.version }}
 
@@ -123,6 +166,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          target: x86_64-apple-darwin
           override: true
 
       - name: Cache dependencies
@@ -131,20 +175,24 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-x86_64-apple-darwin-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-x86_64-apple-darwin-
 
-      - name: Build release binary (native)
+      - name: Build release binary
         run: |
-          cargo build --release
+          cargo build --release --target x86_64-apple-darwin
         env:
           CARGO_INCREMENTAL: 0
 
-      - name: Strip binary (macOS)
+      - name: Verify binary architecture
         run: |
-          strip target/release/git-ai
+          file target/x86_64-apple-darwin/release/git-ai
+          lipo -info target/x86_64-apple-darwin/release/git-ai
+
+      - name: Strip binary
+        run: |
+          strip target/x86_64-apple-darwin/release/git-ai
 
       - name: Create release directory
         run: |
@@ -152,7 +200,7 @@ jobs:
 
       - name: Copy binary to release directory
         run: |
-          cp target/release/git-ai release/git-ai-macos-x64
+          cp target/x86_64-apple-darwin/release/git-ai release/git-ai-macos-x64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -165,7 +213,7 @@ jobs:
     name: Create Release
     needs: [build, build-macos-intel]
     runs-on: ubuntu-latest
-    if: always()
+    if: success() && inputs.dry_run != true
 
     steps:
       - name: Download all artifacts

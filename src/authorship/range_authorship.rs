@@ -248,6 +248,9 @@ fn calculate_range_stats_direct(
         time_waiting_for_ai: 0,
         git_diff_deleted_lines,
         git_diff_added_lines,
+        human_deletions: git_diff_deleted_lines,
+        ai_deletions: 0,
+        tool_model_breakdown: std::collections::BTreeMap::new(),
     })
 }
 
