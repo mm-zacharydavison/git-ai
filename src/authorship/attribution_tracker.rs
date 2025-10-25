@@ -923,7 +923,7 @@ pub fn attributions_to_line_attributions(
     let mut line_authors: Vec<Option<String>> = Vec::with_capacity(line_count as usize);
 
     for line_num in 1..=line_count {
-        let author = find_dominant_author_for_line(line_num, &boundaries, attributions, content);
+        let (author, _) = find_dominant_author_for_line(line_num, &boundaries, attributions, content);
         line_authors.push(Some(author));
     }
 
@@ -941,7 +941,7 @@ fn find_dominant_author_for_line(
     boundaries: &LineBoundaries,
     attributions: &Vec<Attribution>,
     full_content: &str,
-) -> String {
+) -> (String, bool) {
     let (line_start, line_end) = boundaries.get_line_range(line_num).unwrap();
 
     let mut candidate_attrs = Vec::new();
@@ -963,7 +963,7 @@ fn find_dominant_author_for_line(
     }
 
     if candidate_attrs.is_empty() {
-        return CheckpointKind::Human.to_str();
+        return (CheckpointKind::Human.to_str(), false);
     }
 
     // Choose the author with the latest timestamp
@@ -973,7 +973,18 @@ fn find_dominant_author_for_line(
         .filter(|a| a.ts == latest_timestamp)
         .map(|a| a.author_id.clone())
         .collect::<Vec<String>>();
-    return latest_author[0].clone();
+    let last_ai_edit_ts = candidate_attrs
+        .iter()
+        .filter(|a | a.author_id != CheckpointKind::Human.to_str())
+        .map(|a| a.ts)
+        .last();
+    let last_human_edit_ts = candidate_attrs
+        .iter()
+        .filter(|a | a.author_id == CheckpointKind::Human.to_str())
+        .map(|a| a.ts)
+        .last();
+    let overridden = last_ai_edit_ts != None && last_human_edit_ts != None && last_human_edit_ts.unwrap() > last_ai_edit_ts.unwrap();
+    return (latest_author[0].clone(), overridden);
 }
 
 /// Merge consecutive lines with the same author into LineAttribution ranges
