@@ -539,3 +539,40 @@ fn test_new_file_partial_staging_two_commits() {
         "Pluto (dwarf)".ai(),
     ]);
 }
+
+#[test]
+fn test_mock_ai_with_pathspecs() {
+    let repo = TestRepo::new();
+    let mut file1 = repo.filename("file1.txt");
+    let mut file2 = repo.filename("file2.txt");
+
+    // Create initial state
+    file1.set_contents(lines!["File1 Line 1", "File1 Line 2"]);
+    file2.set_contents(lines!["File2 Line 1", "File2 Line 2"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // Make changes to both files
+    file1.insert_at(2, lines!["File1 AI Line".ai()]);
+    file2.insert_at(2, lines!["File2 Human Line"]);
+
+    // Use mock_ai with pathspec to only checkpoint file1.txt
+    repo.git_ai(&["checkpoint", "mock_ai", "file1.txt"])
+        .unwrap();
+
+    // Commit the changes
+    repo.stage_all_and_commit("Second commit").unwrap();
+
+    // file1 should have AI attribution for the new line
+    file1.assert_lines_and_blame(lines![
+        "File1 Line 1".human(),
+        "File1 Line 2".human(),
+        "File1 AI Line".ai(),
+    ]);
+
+    // file2 should be all human since we didn't checkpoint it with mock_ai
+    file2.assert_lines_and_blame(lines![
+        "File2 Line 1".human(),
+        "File2 Line 2".human(),
+        "File2 Human Line".human(),
+    ]);
+}
