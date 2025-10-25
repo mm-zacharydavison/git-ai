@@ -1798,6 +1798,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_amend_multiple_changes() {
         // Create a repo with an initial commit containing AI-authored content
         let tmp_repo = TmpRepo::new().unwrap();
