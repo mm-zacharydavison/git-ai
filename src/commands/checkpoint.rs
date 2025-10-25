@@ -1,4 +1,4 @@
-use crate::authorship::attribution_tracker::{Attribution, AttributionTracker};
+use crate::authorship::attribution_tracker::{Attribution, AttributionTracker, LineAttribution};
 use crate::authorship::working_log::CheckpointKind;
 use crate::authorship::working_log::{Checkpoint, WorkingLogEntry};
 use crate::commands::blame::GitAiBlameOptions;
@@ -10,7 +10,7 @@ use crate::git::status::{EntryKind, StatusCode};
 use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn run(
@@ -239,7 +239,8 @@ pub fn run(
 
         // Compute and set line stats
         let end_stats_clock = Timer::default().start_quiet("checkpoint: compute line stats");
-        checkpoint.line_stats = compute_line_stats(repo, &working_log, &files, &checkpoints, kind)?;
+        checkpoint.line_stats =
+            compute_line_stats(repo, &working_log, &files, &entries, &checkpoints, kind)?;
         let stats_duration = end_stats_clock();
         Timer::default().print_duration("checkpoint: compute line stats", stats_duration);
 
@@ -662,6 +663,7 @@ fn compute_line_stats(
     repo: &Repository,
     working_log: &PersistedWorkingLog,
     files: &[String],
+    entries: &[WorkingLogEntry],
     previous_checkpoints: &[Checkpoint],
     kind: CheckpointKind,
 ) -> Result<crate::authorship::working_log::CheckpointLineStats, GitAiError> {
@@ -671,11 +673,14 @@ fn compute_line_stats(
         .map(|cp| cp.line_stats.clone())
         .unwrap_or_default();
 
-    // Build a map of file path -> most recent blob_sha
-    let mut previous_file_hashes: HashMap<String, String> = HashMap::new();
+    // Build a map of file path -> most recent (blob_sha, line_attributions)
+    let mut previous_file_state: HashMap<String, (String, Vec<LineAttribution>)> = HashMap::new();
     for checkpoint in previous_checkpoints {
         for entry in &checkpoint.entries {
-            previous_file_hashes.insert(entry.file.clone(), entry.blob_sha.clone());
+            previous_file_state.insert(
+                entry.file.clone(),
+                (entry.blob_sha.clone(), entry.line_attributions.clone()),
+            );
         }
     }
 
@@ -688,7 +693,7 @@ fn compute_line_stats(
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
 
         // Get previous content
-        let previous_content = if let Some(prev_hash) = previous_file_hashes.get(file_path) {
+        let previous_content = if let Some((prev_hash, _)) = previous_file_state.get(file_path) {
             working_log.get_file_version(prev_hash).unwrap_or_default()
         } else {
             // No previous version, try to get from HEAD
@@ -742,6 +747,20 @@ fn compute_line_stats(
         }
     }
 
+    // Count newly overridden lines by comparing current entries with previous state
+    let mut new_overrides = 0u32;
+    for entry in entries {
+        let current_overrides = collect_overridden_lines(&entry.line_attributions);
+        let previous_overrides = previous_file_state
+            .get(&entry.file)
+            .map(|(_, attrs)| collect_overridden_lines(attrs))
+            .unwrap_or_else(HashSet::new);
+
+        new_overrides += current_overrides
+            .difference(&previous_overrides)
+            .count() as u32;
+    }
+
     // Accumulate based on checkpoint kind
     match kind {
         CheckpointKind::Human => {
@@ -758,7 +777,25 @@ fn compute_line_stats(
         }
     }
 
+    stats.overrides += new_overrides;
+
     Ok(stats)
+}
+
+fn collect_overridden_lines(line_attributions: &[LineAttribution]) -> HashSet<u32> {
+    let mut overridden_lines = HashSet::new();
+
+    for attr in line_attributions.iter().filter(|attr| attr.overridden) {
+        if attr.start_line > attr.end_line {
+            continue;
+        }
+
+        for line in attr.start_line..=attr.end_line {
+            overridden_lines.insert(line);
+        }
+    }
+
+    overridden_lines
 }
 
 #[cfg(test)]
