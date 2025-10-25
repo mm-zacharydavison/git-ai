@@ -5,6 +5,32 @@ use crate::error::GitAiError;
 use crate::git::refs::get_authorship;
 use crate::git::repository::Repository;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ToolModelHeadlineStats {
+    #[serde(default)]
+    pub ai_additions: u32,
+    #[serde(default)]
+    pub mixed_additions: u32,
+    #[serde(default)]
+    pub ai_accepted: u32,
+    #[serde(default)]
+    pub ai_deletions: u32,
+    #[serde(default)]
+    pub time_waiting_for_ai: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AuthorshipAnalysis {
+    pub human_additions: u32,
+    pub mixed_additions: u32,
+    pub ai_additions: u32,
+    pub ai_accepted: u32,
+    pub time_waiting_for_ai: u64,
+    pub ai_deletions: u32,
+    pub tool_model_breakdown: BTreeMap<String, ToolModelHeadlineStats>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitStats {
@@ -22,6 +48,12 @@ pub struct CommitStats {
     pub git_diff_deleted_lines: u32,
     #[serde(default)]
     pub git_diff_added_lines: u32,
+    #[serde(default)]
+    pub human_deletions: u32,
+    #[serde(default)]
+    pub ai_deletions: u32,
+    #[serde(default)]
+    pub tool_model_breakdown: BTreeMap<String, ToolModelHeadlineStats>,
 }
 
 pub fn stats_command(
@@ -448,35 +480,33 @@ pub fn stats_for_commit_stats(
 
     // Step 3: For prompts with > 1 messages, sum all the time between user messages and AI messages.
     // if the last message is a human message, don't count anything
-    let (
-        authorship_human_additions,
-        mixed_additions,
-        ai_additions,
-        ai_accepted,
-        time_waiting_for_ai,
-    ) = if let Some(log) = &authorship_log {
+    let analysis = if let Some(log) = &authorship_log {
         analyze_authorship_log(log)?
     } else {
-        // No authorship log means no AI-authored lines
-        (0, 0, 0, 0, 0)
+        AuthorshipAnalysis::default()
     };
 
     // Calculate human additions as the difference between total git diff and AI additions
     // This handles cases where there are no AI-authored lines (authorship log is empty)
-    let human_additions = if git_diff_added_lines >= ai_additions {
-        git_diff_added_lines - ai_additions
+    let human_additions = if git_diff_added_lines >= analysis.ai_additions {
+        git_diff_added_lines - analysis.ai_additions
     } else {
-        authorship_human_additions
+        analysis.human_additions
     };
+
+    let human_deletions = git_diff_deleted_lines.saturating_sub(analysis.ai_deletions);
 
     Ok(CommitStats {
         human_additions,
-        mixed_additions,
-        ai_additions,
-        ai_accepted,
-        time_waiting_for_ai,
+        mixed_additions: analysis.mixed_additions,
+        ai_additions: analysis.ai_additions,
+        ai_accepted: analysis.ai_accepted,
+        time_waiting_for_ai: analysis.time_waiting_for_ai,
         git_diff_deleted_lines,
         git_diff_added_lines,
+        human_deletions,
+        ai_deletions: analysis.ai_deletions,
+        tool_model_breakdown: analysis.tool_model_breakdown,
     })
 }
 
@@ -529,12 +559,8 @@ fn get_git_diff_stats(repo: &Repository, commit_sha: &str) -> Result<(u32, u32),
 /// Analyze authorship log to extract statistics
 pub fn analyze_authorship_log(
     authorship_log: &AuthorshipLog,
-) -> Result<(u32, u32, u32, u32, u64), GitAiError> {
-    let mut human_additions = 0u32;
-    let mut mixed_additions = 0u32;
-    let mut ai_additions = 0u32;
-    let mut ai_accepted = 0u32;
-    let mut time_waiting_for_ai = 0u64;
+) -> Result<AuthorshipAnalysis, GitAiError> {
+    let mut analysis = AuthorshipAnalysis::default();
 
     // Count lines by author type
     for file_attestation in &authorship_log.attestations {
@@ -558,37 +584,59 @@ pub fn analyze_authorship_log(
                     // Ensure we don't have more overridden lines than total lines
                     let overriden_lines =
                         std::cmp::min(prompt_record.overriden_lines, lines_in_entry);
-                    mixed_additions += overriden_lines;
-                    ai_additions += lines_in_entry - overriden_lines;
+                    analysis.mixed_additions += overriden_lines;
+                    analysis.ai_additions += lines_in_entry - overriden_lines;
                 } else {
                     // Pure AI: no human editing
-                    ai_additions += lines_in_entry;
+                    analysis.ai_additions += lines_in_entry;
                 }
 
                 // Count accepted lines (this is a simplified approach)
                 // In a real implementation, you might want to track acceptance more precisely
-                ai_accepted += lines_in_entry; // For now, assume all AI lines are accepted
+                analysis.ai_accepted += lines_in_entry; // For now, assume all AI lines are accepted
+
+                let key = format!(
+                    "{}::{}",
+                    prompt_record.agent_id.tool, prompt_record.agent_id.model
+                );
+                let tool_stats = analysis.tool_model_breakdown.entry(key).or_default();
+
+                if prompt_record.overriden_lines > 0 {
+                    let overriden_lines =
+                        std::cmp::min(prompt_record.overriden_lines, lines_in_entry);
+                    tool_stats.mixed_additions += overriden_lines;
+                    tool_stats.ai_additions += lines_in_entry - overriden_lines;
+                } else {
+                    tool_stats.ai_additions += lines_in_entry;
+                }
+                tool_stats.ai_accepted += lines_in_entry;
 
                 // Calculate time waiting for AI from transcript
                 // Create a transcript from the messages
                 let transcript = crate::authorship::transcript::AiTranscript {
                     messages: prompt_record.messages.clone(),
                 };
-                time_waiting_for_ai += calculate_waiting_time(&transcript);
+                let waiting = calculate_waiting_time(&transcript);
+                analysis.time_waiting_for_ai += waiting;
+                tool_stats.time_waiting_for_ai += waiting;
             } else {
                 // Human-authored lines
-                human_additions += lines_in_entry;
+                analysis.human_additions += lines_in_entry;
             }
         }
     }
 
-    Ok((
-        human_additions,
-        mixed_additions,
-        ai_additions,
-        ai_accepted,
-        time_waiting_for_ai,
-    ))
+    for prompt_record in authorship_log.metadata.prompts.values() {
+        let key = format!(
+            "{}::{}",
+            prompt_record.agent_id.tool, prompt_record.agent_id.model
+        );
+        let tool_stats = analysis.tool_model_breakdown.entry(key).or_default();
+        tool_stats.ai_deletions += prompt_record.total_deletions;
+        analysis.ai_deletions += prompt_record.total_deletions;
+    }
+
+    Ok(analysis)
 }
 
 /// Calculate time waiting for AI from transcript messages
@@ -658,6 +706,9 @@ mod tests {
             time_waiting_for_ai: 72009, // 1 minute 30 seconds
             git_diff_deleted_lines: 15,
             git_diff_added_lines: 80,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let mixed_output = write_stats_to_terminal(&stats, true);
@@ -672,6 +723,9 @@ mod tests {
             time_waiting_for_ai: 45,
             git_diff_deleted_lines: 0,
             git_diff_added_lines: 100,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let ai_only_output = write_stats_to_terminal(&ai_stats, true);
@@ -686,6 +740,9 @@ mod tests {
             time_waiting_for_ai: 0,
             git_diff_deleted_lines: 10,
             git_diff_added_lines: 75,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let human_only_output = write_stats_to_terminal(&human_stats, true);
@@ -700,6 +757,9 @@ mod tests {
             time_waiting_for_ai: 30,
             git_diff_deleted_lines: 0,
             git_diff_added_lines: 102,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let minimal_human_output = write_stats_to_terminal(&minimal_human_stats, true);
@@ -714,6 +774,9 @@ mod tests {
             time_waiting_for_ai: 0,
             git_diff_deleted_lines: 25,
             git_diff_added_lines: 0,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let deletion_only_output = write_stats_to_terminal(&deletion_only_stats, true);
@@ -731,6 +794,9 @@ mod tests {
             time_waiting_for_ai: 72009, // 1 minute 30 seconds
             git_diff_deleted_lines: 15,
             git_diff_added_lines: 80,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let mixed_output = write_stats_to_markdown(&stats);
@@ -745,6 +811,9 @@ mod tests {
             time_waiting_for_ai: 45,
             git_diff_deleted_lines: 0,
             git_diff_added_lines: 100,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let ai_only_output = write_stats_to_markdown(&ai_stats);
@@ -759,6 +828,9 @@ mod tests {
             time_waiting_for_ai: 0,
             git_diff_deleted_lines: 10,
             git_diff_added_lines: 75,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let human_only_output = write_stats_to_markdown(&human_stats);
@@ -773,6 +845,9 @@ mod tests {
             time_waiting_for_ai: 30,
             git_diff_deleted_lines: 0,
             git_diff_added_lines: 102,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let minimal_human_output = write_stats_to_markdown(&minimal_human_stats);
@@ -787,6 +862,9 @@ mod tests {
             time_waiting_for_ai: 0,
             git_diff_deleted_lines: 25,
             git_diff_added_lines: 0,
+            human_deletions: 0,
+            ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
         };
 
         let deletion_only_output = write_stats_to_markdown(&deletion_only_stats);

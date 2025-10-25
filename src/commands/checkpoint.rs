@@ -1115,13 +1115,11 @@ mod tests {
 
     #[test]
     fn test_compute_line_stats_ignores_whitespace_only_lines() {
-        let (tmp_repo, _lines_file, _alphabet_file) =
-            TmpRepo::new_with_base_commit().unwrap();
+        let (tmp_repo, _lines_file, _alphabet_file) = TmpRepo::new_with_base_commit().unwrap();
 
-        let repo = crate::git::repository::find_repository_in_path(
-            tmp_repo.path().to_str().unwrap(),
-        )
-        .expect("Repository should exist");
+        let repo =
+            crate::git::repository::find_repository_in_path(tmp_repo.path().to_str().unwrap())
+                .expect("Repository should exist");
 
         let base_commit = repo
             .head()
