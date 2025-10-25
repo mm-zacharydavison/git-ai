@@ -500,6 +500,7 @@ fn get_initial_checkpoint_entries(
                         start_line: line,
                         end_line: line,
                         author_id: author.clone(),
+                        overridden: false, // TODO Update authorship to store overridden state for line ranges
                     },
                 );
             }
