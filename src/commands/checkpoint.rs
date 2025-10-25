@@ -462,8 +462,6 @@ async fn get_initial_checkpoint_entries(
         .and_then(|c| c.tree().ok())
         .map(|t| t.id());
 
-    // Process files concurrently with a limit on parallelism
-    // Using 20 concurrent tasks - can be adjusted for more aggressive parallelization
     const MAX_CONCURRENT: usize = 30;
 
     // Create a semaphore to limit concurrent tasks
