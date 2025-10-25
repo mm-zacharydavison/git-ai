@@ -484,35 +484,35 @@ fn get_initial_checkpoint_entries(
         }
 
         // Get the previous line attributions from ai blame
-//         let mut ai_blame_opts = GitAiBlameOptions::default();
-//         ai_blame_opts.no_output = true;
-//         ai_blame_opts.return_human_authors_as_human = true;
-//         ai_blame_opts.use_prompt_hashes_as_names = true;
-//         ai_blame_opts.newest_commit = head_commit_sha.clone();
-//         let ai_blame = repo.blame(file_path, &ai_blame_opts);
-//         let mut prev_line_attributions = Vec::new();
-//         if let Ok((blames, _)) = ai_blame {
-//             for (line, author) in blames {
-//                 if author == CheckpointKind::Human.to_str() {
-//                     continue;
-//                 }
-//                 prev_line_attributions.push(
-//                     crate::authorship::attribution_tracker::LineAttribution {
-//                         start_line: line,
-//                         end_line: line,
-//                         author_id: author.clone(),
-//                         overridden: false, // TODO Update authorship to store overridden state for line ranges
-//                     },
-//                 );
-//             }
-//         }
+        let mut ai_blame_opts = GitAiBlameOptions::default();
+        ai_blame_opts.no_output = true;
+        ai_blame_opts.return_human_authors_as_human = true;
+        ai_blame_opts.use_prompt_hashes_as_names = true;
+        ai_blame_opts.newest_commit = head_commit_sha.clone();
+        let ai_blame = repo.blame(file_path, &ai_blame_opts);
+        let mut prev_line_attributions = Vec::new();
+        if let Ok((blames, _)) = ai_blame {
+            for (line, author) in blames {
+                if author == CheckpointKind::Human.to_str() {
+                    continue;
+                }
+                prev_line_attributions.push(
+                    crate::authorship::attribution_tracker::LineAttribution {
+                        start_line: line,
+                        end_line: line,
+                        author_id: author.clone(),
+                        overridden: false, // TODO Update authorship to store overridden state for line ranges
+                    },
+                );
+            }
+        }
         // Convert any line attributions to character attributions
-        // let prev_attributions =
-        //     crate::authorship::attribution_tracker::line_attributions_to_attributions(
-        //         &prev_line_attributions,
-        //         &previous_content,
-        //         ts,
-        //     );
+        let prev_attributions =
+            crate::authorship::attribution_tracker::line_attributions_to_attributions(
+                &prev_line_attributions,
+                &previous_content,
+                ts,
+            );
 
         // TODO Bring back AI blame when we have a good way to ensure performance is acceptable on large repos.
         let prev_attributions = Vec::new();
@@ -759,9 +759,7 @@ fn compute_line_stats(
             .map(|(_, attrs)| collect_overridden_lines(attrs))
             .unwrap_or_else(HashSet::new);
 
-        new_overrides += current_overrides
-            .difference(&previous_overrides)
-            .count() as u32;
+        new_overrides += current_overrides.difference(&previous_overrides).count() as u32;
     }
 
     // Accumulate based on checkpoint kind
@@ -1270,10 +1268,8 @@ mod tests {
         std::fs::write(tmp_repo.path().join(file_name), human_content)
             .expect("Writing human content should succeed");
 
-        let ai_line_attr =
-            LineAttribution::new(1, 1, "ai_session".to_string(), false);
-        let overridden_line_attr =
-            LineAttribution::new(1, 1, "ai_session".to_string(), true);
+        let ai_line_attr = LineAttribution::new(1, 1, "ai_session".to_string(), false);
+        let overridden_line_attr = LineAttribution::new(1, 1, "ai_session".to_string(), true);
 
         let ai_entry = WorkingLogEntry::new(
             file_name.to_string(),
@@ -1369,14 +1365,12 @@ mod tests {
         std::fs::write(tmp_repo.path().join(file_name), human_content_first)
             .expect("Writing first human content should succeed");
 
-        let ai_line_attr =
-            LineAttribution::new(1, 2, "ai_session".to_string(), false);
+        let ai_line_attr = LineAttribution::new(1, 2, "ai_session".to_string(), false);
         let first_human_attrs = vec![
             LineAttribution::new(1, 1, "ai_session".to_string(), true),
             LineAttribution::new(2, 2, "ai_session".to_string(), false),
         ];
-        let second_human_attr =
-            LineAttribution::new(1, 2, "ai_session".to_string(), true);
+        let second_human_attr = LineAttribution::new(1, 2, "ai_session".to_string(), true);
 
         let ai_entry = WorkingLogEntry::new(
             file_name.to_string(),
