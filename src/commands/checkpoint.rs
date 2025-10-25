@@ -11,6 +11,7 @@ use crate::utils::{Timer, debug_log};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn run(
@@ -200,11 +201,14 @@ pub fn run(
     }
     let combined_hash = format!("{:x}", combined_hasher.finalize());
 
+    let timer = Timer::default();
     // If this is not the first checkpoint, diff against the last saved state
     let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-        get_initial_checkpoint_entries(
+
+        let end = timer.start("checkpoint: get initial checkpoint entries");
+        let result = smol::block_on(get_initial_checkpoint_entries(
             kind,
             repo,
             &files,
@@ -212,7 +216,10 @@ pub fn run(
             &file_content_hashes,
             agent_run_result.as_ref(),
             ts,
-        )?
+        ))?;
+
+        end();
+        result
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
@@ -418,7 +425,7 @@ fn save_current_file_states(
     Ok(file_content_hashes)
 }
 
-fn get_initial_checkpoint_entries(
+async fn get_initial_checkpoint_entries(
     kind: CheckpointKind,
     repo: &Repository,
     files: &[String],
@@ -427,8 +434,6 @@ fn get_initial_checkpoint_entries(
     agent_run_result: Option<&AgentRunResult>,
     ts: u128,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
-    let mut entries = Vec::new();
-
     // Determine author_id based on checkpoint kind and agent_id
     let author_id = if kind != CheckpointKind::Human {
         // For AI checkpoints, use session hash
@@ -452,87 +457,134 @@ fn get_initial_checkpoint_entries(
         .and_then(|h| h.target().ok())
         .and_then(|oid| repo.find_commit(oid).ok());
     let head_commit_sha = head_commit.as_ref().map(|c| c.id().to_string());
-    let head_tree = head_commit.as_ref().and_then(|c| c.tree().ok());
+    let head_tree_id = head_commit
+        .as_ref()
+        .and_then(|c| c.tree().ok())
+        .map(|t| t.id());
+
+    // Process files concurrently with a limit on parallelism
+    // Using 20 concurrent tasks - can be adjusted for more aggressive parallelization
+    const MAX_CONCURRENT: usize = 30;
+    println!("MAX_CONCURRENT: {}", MAX_CONCURRENT);
+
+    // Create a semaphore to limit concurrent tasks
+    let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
+
+    // Spawn tasks for each file
+    let mut tasks = Vec::new();
 
     for file_path in files {
-        let repo_workdir = repo.workdir().unwrap();
-        let abs_path = repo_workdir.join(file_path);
+        let file_path = file_path.clone();
+        let repo = repo.clone();
+        let author_id = author_id.clone();
+        let head_commit_sha = head_commit_sha.clone();
+        let head_tree_id = head_tree_id.clone();
+        let blob_sha = file_content_hashes
+            .get(&file_path)
+            .cloned()
+            .unwrap_or_default();
+        let semaphore = Arc::clone(&semaphore);
 
-        // Previous content from HEAD tree if present, otherwise empty
-        let previous_content = if let Some(tree) = &head_tree {
-            match tree.get_path(std::path::Path::new(file_path)) {
-                Ok(entry) => {
-                    if let Ok(blob) = repo.find_blob(entry.id()) {
-                        let blob_content = blob.content()?;
-                        String::from_utf8_lossy(&blob_content).to_string()
+        let task = smol::spawn(async move {
+            // Acquire semaphore permit to limit concurrency
+            let _permit = semaphore.acquire().await;
+
+            // Wrap all the blocking git operations in smol::unblock
+            smol::unblock(move || {
+                let repo_workdir = repo.workdir().unwrap();
+                let abs_path = repo_workdir.join(&file_path);
+
+                // Previous content from HEAD tree if present, otherwise empty
+                let previous_content = if let Some(tree_id) = &head_tree_id {
+                    let head_tree = repo.find_tree(tree_id.clone()).ok();
+                    if let Some(tree) = head_tree {
+                        match tree.get_path(std::path::Path::new(&file_path)) {
+                            Ok(entry) => {
+                                if let Ok(blob) = repo.find_blob(entry.id()) {
+                                    let blob_content = blob.content().unwrap_or_default();
+                                    String::from_utf8_lossy(&blob_content).to_string()
+                                } else {
+                                    String::new()
+                                }
+                            }
+                            Err(_) => String::new(),
+                        }
                     } else {
                         String::new()
                     }
+                } else {
+                    String::new()
+                };
+
+                // Current content from filesystem
+                let current_content =
+                    std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+                if current_content == previous_content {
+                    // No changes, no need to add entries
+                    return Ok(None);
                 }
-                Err(_) => String::new(),
-            }
-        } else {
-            String::new()
-        };
 
-        // Current content from filesystem
-        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
-
-        if current_content == previous_content {
-            // No changes, no need to add entries
-            continue;
-        }
-
-        // Get the previous line attributions from ai blame
-        let mut ai_blame_opts = GitAiBlameOptions::default();
-        ai_blame_opts.no_output = true;
-        ai_blame_opts.return_human_authors_as_human = true;
-        ai_blame_opts.use_prompt_hashes_as_names = true;
-        ai_blame_opts.newest_commit = head_commit_sha.clone();
-        let ai_blame = repo.blame(file_path, &ai_blame_opts);
-        let mut prev_line_attributions = Vec::new();
-        if let Ok((blames, _)) = ai_blame {
-            for (line, author) in blames {
-                if author == CheckpointKind::Human.to_str() {
-                    continue;
+                // Get the previous line attributions from ai blame
+                let mut ai_blame_opts = GitAiBlameOptions::default();
+                ai_blame_opts.no_output = true;
+                ai_blame_opts.return_human_authors_as_human = true;
+                ai_blame_opts.use_prompt_hashes_as_names = true;
+                ai_blame_opts.newest_commit = head_commit_sha.clone();
+                let ai_blame = repo.blame(&file_path, &ai_blame_opts);
+                let mut prev_line_attributions = Vec::new();
+                if let Ok((blames, _)) = ai_blame {
+                    for (line, author) in blames {
+                        if author == CheckpointKind::Human.to_str() {
+                            continue;
+                        }
+                        prev_line_attributions.push(
+                            crate::authorship::attribution_tracker::LineAttribution {
+                                start_line: line,
+                                end_line: line,
+                                author_id: author.clone(),
+                                overridden: false, // TODO Update authorship to store overridden state for line ranges
+                            },
+                        );
+                    }
                 }
-                prev_line_attributions.push(
-                    crate::authorship::attribution_tracker::LineAttribution {
-                        start_line: line,
-                        end_line: line,
-                        author_id: author.clone(),
-                        overridden: false, // TODO Update authorship to store overridden state for line ranges
-                    },
-                );
-            }
+                // Convert any line attributions to character attributions
+                let prev_attributions =
+                    crate::authorship::attribution_tracker::line_attributions_to_attributions(
+                        &prev_line_attributions,
+                        &previous_content,
+                        ts,
+                    );
+
+                let entry = make_entry_for_file(
+                    &file_path,
+                    &blob_sha,
+                    &author_id,
+                    &previous_content,
+                    &prev_attributions,
+                    &current_content,
+                    ts,
+                )?;
+
+                Ok(Some(entry))
+            })
+            .await
+        });
+
+        tasks.push(task);
+    }
+
+    // Await all tasks concurrently (Promise.all() behavior)
+    let results = futures::future::join_all(tasks).await;
+
+    // Process results
+    let mut entries = Vec::new();
+    for result in results {
+        match result {
+            Ok(Some(entry)) => entries.push(entry),
+            Ok(None) => {} // File had no changes
+            Err(e) => return Err(e),
         }
-        // Convert any line attributions to character attributions
-        let prev_attributions =
-            crate::authorship::attribution_tracker::line_attributions_to_attributions(
-                &prev_line_attributions,
-                &previous_content,
-                ts,
-            );
-
-        // TODO Bring back AI blame when we have a good way to ensure performance is acceptable on large repos.
-        let prev_attributions = Vec::new();
-
-        // Get the blob SHA for this file from the pre-computed hashes
-        let blob_sha = file_content_hashes
-            .get(file_path)
-            .cloned()
-            .unwrap_or_default();
-
-        let entry = make_entry_for_file(
-            file_path,
-            &blob_sha,
-            &author_id,
-            &previous_content,
-            &prev_attributions,
-            &current_content,
-            ts,
-        )?;
-        entries.push(entry);
     }
 
     Ok(entries)
@@ -691,6 +743,7 @@ fn compute_line_stats(
     let mut total_additions = 0u32;
     let mut total_deletions = 0u32;
 
+    // good candidate for parallelization
     for file_path in files {
         let abs_path = working_log.repo_root.join(file_path);
         let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
