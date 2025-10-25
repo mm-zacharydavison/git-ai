@@ -1238,6 +1238,214 @@ mod tests {
             "Deleting whitespace-only lines should not be counted"
         );
     }
+
+    #[test]
+    fn test_compute_line_stats_counts_overrides_once() {
+        let tmp_repo = TmpRepo::new().unwrap();
+        let repo =
+            crate::git::repository::find_repository_in_path(tmp_repo.path().to_str().unwrap())
+                .expect("Repository should exist");
+
+        let base_commit = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target().ok())
+            .unwrap_or_else(|| "initial".to_string());
+        let working_log = repo.storage.working_log_for_base_commit(&base_commit);
+
+        let file_name = "override.txt";
+        let ai_content = "AI generated line\n";
+        let human_content = "Human modified AI generated line\n";
+
+        let ai_blob_sha = working_log
+            .persist_file_version(ai_content)
+            .expect("Persisting AI content should succeed");
+        let human_blob_sha = working_log
+            .persist_file_version(human_content)
+            .expect("Persisting human content should succeed");
+
+        std::fs::write(tmp_repo.path().join(file_name), human_content)
+            .expect("Writing human content should succeed");
+
+        let ai_line_attr =
+            LineAttribution::new(1, 1, "ai_session".to_string(), false);
+        let overridden_line_attr =
+            LineAttribution::new(1, 1, "ai_session".to_string(), true);
+
+        let ai_entry = WorkingLogEntry::new(
+            file_name.to_string(),
+            ai_blob_sha.clone(),
+            Vec::new(),
+            vec![ai_line_attr],
+        );
+        let ai_checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "AI".to_string(),
+            vec![ai_entry],
+        );
+
+        let human_entry = WorkingLogEntry::new(
+            file_name.to_string(),
+            human_blob_sha.clone(),
+            Vec::new(),
+            vec![overridden_line_attr.clone()],
+        );
+        let files = vec![file_name.to_string()];
+        let entries = vec![human_entry.clone()];
+
+        let stats = compute_line_stats(
+            &repo,
+            &working_log,
+            &files,
+            &entries,
+            &[ai_checkpoint.clone()],
+            CheckpointKind::Human,
+        )
+        .expect("compute_line_stats should succeed");
+
+        assert_eq!(
+            stats.overrides, 1,
+            "Exactly one overridden line should be counted"
+        );
+
+        let mut human_checkpoint = Checkpoint::new(
+            CheckpointKind::Human,
+            "".to_string(),
+            "Human".to_string(),
+            vec![human_entry.clone()],
+        );
+        human_checkpoint.line_stats = stats.clone();
+
+        let previous_checkpoints = vec![ai_checkpoint, human_checkpoint];
+        let stats_second = compute_line_stats(
+            &repo,
+            &working_log,
+            &files,
+            &entries,
+            &previous_checkpoints,
+            CheckpointKind::Human,
+        )
+        .expect("compute_line_stats should succeed when overrides already recorded");
+
+        assert_eq!(
+            stats_second.overrides, stats.overrides,
+            "Existing overrides should not be double-counted"
+        );
+    }
+
+    #[test]
+    fn test_compute_line_stats_counts_only_new_overrides() {
+        let tmp_repo = TmpRepo::new().unwrap();
+        let repo =
+            crate::git::repository::find_repository_in_path(tmp_repo.path().to_str().unwrap())
+                .expect("Repository should exist");
+
+        let base_commit = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target().ok())
+            .unwrap_or_else(|| "initial".to_string());
+        let working_log = repo.storage.working_log_for_base_commit(&base_commit);
+
+        let file_name = "override_progress.txt";
+        let ai_content = "AI line one\nAI line two\n";
+        let human_content_first = "Human edit line one\nAI line two\n";
+        let human_content_second = "Human edit line one\nHuman edit line two\n";
+
+        let ai_blob_sha = working_log
+            .persist_file_version(ai_content)
+            .expect("Persisting AI content should succeed");
+        let human_blob_sha_first = working_log
+            .persist_file_version(human_content_first)
+            .expect("Persisting first human content should succeed");
+        let human_blob_sha_second = working_log
+            .persist_file_version(human_content_second)
+            .expect("Persisting second human content should succeed");
+
+        std::fs::write(tmp_repo.path().join(file_name), human_content_first)
+            .expect("Writing first human content should succeed");
+
+        let ai_line_attr =
+            LineAttribution::new(1, 2, "ai_session".to_string(), false);
+        let first_human_attrs = vec![
+            LineAttribution::new(1, 1, "ai_session".to_string(), true),
+            LineAttribution::new(2, 2, "ai_session".to_string(), false),
+        ];
+        let second_human_attr =
+            LineAttribution::new(1, 2, "ai_session".to_string(), true);
+
+        let ai_entry = WorkingLogEntry::new(
+            file_name.to_string(),
+            ai_blob_sha.clone(),
+            Vec::new(),
+            vec![ai_line_attr],
+        );
+        let ai_checkpoint = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "".to_string(),
+            "AI".to_string(),
+            vec![ai_entry],
+        );
+
+        let human_entry_first = WorkingLogEntry::new(
+            file_name.to_string(),
+            human_blob_sha_first.clone(),
+            Vec::new(),
+            first_human_attrs.clone(),
+        );
+        let files = vec![file_name.to_string()];
+        let entries_first = vec![human_entry_first.clone()];
+
+        let stats_first = compute_line_stats(
+            &repo,
+            &working_log,
+            &files,
+            &entries_first,
+            &[ai_checkpoint.clone()],
+            CheckpointKind::Human,
+        )
+        .expect("compute_line_stats should succeed for first human edit");
+        assert_eq!(
+            stats_first.overrides, 1,
+            "Initial human edit should contribute one overridden line"
+        );
+
+        let mut first_human_checkpoint = Checkpoint::new(
+            CheckpointKind::Human,
+            "".to_string(),
+            "Human".to_string(),
+            vec![human_entry_first],
+        );
+        first_human_checkpoint.line_stats = stats_first.clone();
+
+        std::fs::write(tmp_repo.path().join(file_name), human_content_second)
+            .expect("Writing second human content should succeed");
+
+        let human_entry_second = WorkingLogEntry::new(
+            file_name.to_string(),
+            human_blob_sha_second.clone(),
+            Vec::new(),
+            vec![second_human_attr],
+        );
+        let entries_second = vec![human_entry_second];
+
+        let previous_checkpoints = vec![ai_checkpoint, first_human_checkpoint];
+        let stats_second = compute_line_stats(
+            &repo,
+            &working_log,
+            &files,
+            &entries_second,
+            &previous_checkpoints,
+            CheckpointKind::Human,
+        )
+        .expect("compute_line_stats should succeed for subsequent human edit");
+
+        assert_eq!(
+            stats_second.overrides, 2,
+            "Only the newly overridden line should increase the total"
+        );
+    }
 }
 
 fn is_text_file(repo: &Repository, path: &str) -> bool {
