@@ -6,7 +6,6 @@ pub mod post_commit;
 pub mod pre_commit;
 pub mod range_authorship;
 pub mod rebase_authorship;
-pub mod rewrites;
 pub mod stats;
 pub mod transcript;
 pub mod working_log;
