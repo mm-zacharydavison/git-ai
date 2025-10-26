@@ -93,34 +93,43 @@ class AIEditManager {
     const snapshotInfo = this.snapshotOpenEvents.get(filePath);
 
     // Check if we have 1+ valid snapshot open events within the debounce window
+    let checkpointTriggered = false;
+
     if (snapshotInfo && snapshotInfo.count >= 1 && snapshotInfo.uri?.query) {
-      try {
-        if (!this.workspaceBaseStoragePath) {
-          throw new Error('No workspace base storage path found');
+      const storagePath = this.workspaceBaseStoragePath;
+      if (!storagePath) {
+        console.warn('[git-ai] AIEditManager: Missing workspace storage path, skipping AI checkpoint for', filePath);
+      } else {
+        try {
+          const params = JSON.parse(snapshotInfo.uri.query);
+          const sessionId = params.sessionId;
+          const requestId = params.requestId;
+
+          if (!sessionId || !requestId) {
+            console.warn('[git-ai] AIEditManager: Snapshot URI missing session or request id, skipping AI checkpoint for', filePath);
+          } else {
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+            if (!workspaceFolder) {
+              console.warn('[git-ai] AIEditManager: No workspace folder found for', filePath, '- skipping AI checkpoint');
+            } else {
+              const chatSessionPath = path.join(storagePath, 'chatSessions', `${sessionId}.json`);
+              console.log('[git-ai] AIEditManager: AI edit detected for', filePath, '- triggering AI checkpoint (sessionId:', sessionId, ', requestId:', requestId, ', chatSessionPath:', chatSessionPath, ', workspaceFolder:', workspaceFolder.uri.fsPath, ')');
+              this.checkpoint("ai", JSON.stringify({
+                chatSessionPath,
+                sessionId,
+                requestId,
+                workspaceFolder: workspaceFolder.uri.fsPath,
+              }));
+              checkpointTriggered = true;
+            }
+          }
+        } catch (e) {
+          console.error('[git-ai] AIEditManager: Unable to trigger AI checkpoint for', filePath, e);
         }
-        const params = JSON.parse(snapshotInfo.uri.query);
-        if (!params.sessionId || !params.requestId) {
-          throw new Error('Missing required parameters in snapshot URI query');
-        }
-        let sessionId = params.sessionId || null;
-        let requestId = params.requestId || null;
-        let chatSessionPath = path.join(this.workspaceBaseStoragePath, 'chatSessions', sessionId+'.json');
-        // Get the workspace folder for the file, fallback to workspaceBaseStoragePath if not found
-        let workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
-        if (!workspaceFolder) {
-          throw new Error('No workspace folder found for file path: ' + filePath);
-        }
-        console.log('[git-ai] AIEditManager: AI edit detected for', filePath, '- triggering AI checkpoint (sessionId:', sessionId, ', requestId:', requestId, ', chatSessionPath:', chatSessionPath, ', workspaceFolder:', workspaceFolder.uri.fsPath, ')');
-        this.checkpoint("ai", JSON.stringify({
-          chatSessionPath,
-          sessionId,
-          requestId,
-          workspaceFolder: workspaceFolder.uri.fsPath,
-        }));
-      } catch (e) {
-        console.error('[git-ai] AIEditManager: Failed to parse snapshot URI query as JSON. Unable to trigger AI checkpoint', e);
       }
-    } else {
+    }
+
+    if (!checkpointTriggered) {
       console.log('[git-ai] AIEditManager: No AI pattern detected for', filePath, '- triggering human checkpoint');
       this.checkpoint("human");
     }
@@ -167,7 +176,7 @@ class AIEditManager {
       }
 
       if (!workspaceRoot) {
-        vscode.window.showErrorMessage("No workspace root found");
+        console.warn('[git-ai] AIEditManager: No workspace root found, skipping checkpoint');
         resolve(false);
         return;
       }
