@@ -4,6 +4,9 @@ use crate::git::repository::exec_git;
 use serde::{Deserialize, Serialize};
 use crate::git::repository::find_repository_in_path;
 use std::path::PathBuf;
+use std::fs;
+
+const GITHUB_CI_TEMPLATE_YAML: &str = include_str!("workflow_templates/github.yaml");
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 struct GithubCiEventPayload {
@@ -80,4 +83,24 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
         },
         temp_dir: PathBuf::from(clone_dir),
     }))
+}
+
+/// Install or update the GitHub Actions workflow in the current repository
+/// Writes the embedded template to .github/workflows/git-ai.yaml at the repo root
+pub fn install_github_ci_workflow() -> Result<PathBuf, GitAiError> {
+    // Discover repository at current working directory
+    let repo = find_repository_in_path(".")?;
+    let workdir = repo.workdir()?;
+
+    // Ensure destination directory exists
+    let workflows_dir = workdir.join(".github").join("workflows");
+    fs::create_dir_all(&workflows_dir)
+        .map_err(|e| GitAiError::Generic(format!("Failed to create workflows dir: {}", e)))?;
+
+    // Write template
+    let dest_path = workflows_dir.join("git-ai.yaml");
+    fs::write(&dest_path, GITHUB_CI_TEMPLATE_YAML)
+        .map_err(|e| GitAiError::Generic(format!("Failed to write workflow file: {}", e)))?;
+
+    Ok(dest_path)
 }
