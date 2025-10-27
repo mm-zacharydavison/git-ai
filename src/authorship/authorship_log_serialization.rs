@@ -170,29 +170,6 @@ impl AuthorshipLog {
 
         // Remove file attestations that have no entries left
         self.attestations.retain(|file| !file.entries.is_empty());
-
-        // Clean up prompt metadata for sessions that no longer have attributed lines
-        self.cleanup_unused_prompts();
-    }
-
-    /// Remove prompt records that are not referenced by any attestation entries
-    ///
-    /// After filtering the authorship log (e.g., to only committed lines), some AI sessions
-    /// may no longer have any attributed lines. This method removes their PromptRecords from
-    /// the metadata to keep it clean and accurate.
-    pub fn cleanup_unused_prompts(&mut self) {
-        // Collect all hashes that are still referenced in attestations
-        let mut referenced_hashes = std::collections::HashSet::new();
-        for file_attestation in &self.attestations {
-            for entry in &file_attestation.entries {
-                referenced_hashes.insert(entry.hash.clone());
-            }
-        }
-
-        // Remove prompts that are not referenced
-        self.metadata
-            .prompts
-            .retain(|hash, _| referenced_hashes.contains(hash));
     }
 
     /// Merge overlapping and adjacent line ranges
