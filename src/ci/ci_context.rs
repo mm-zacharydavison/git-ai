@@ -28,13 +28,22 @@ impl CiContext {
     pub fn run(&self) -> Result<(), GitAiError> {
         match &self.event {
             CiEvent::Merge { merge_commit_sha, head_ref, head_sha, base_ref, base_sha: _ } => {
-                // Only handle squash or rebase-like merges. Skip simple merge commits (2+ parents).
+                // Only handle squash or rebase-like merges.
+                // Skip simple merge commits (2+ parents) and fast-forward merges (merge commit == head).
                 let merge_commit = self.repo.find_commit(merge_commit_sha.clone())?;
                 let parent_count = merge_commit.parents().count();
                 if parent_count > 1 {
                     debug_log(&format!(
                         "Skipping merge handling: commit {} has {} parents (simple merge)",
                         merge_commit_sha, parent_count
+                    ));
+                    return Ok(());
+                }
+
+                if merge_commit_sha == head_sha {
+                    debug_log(&format!(
+                        "Skipping merge handling: commit {} equals head {} (fast-forward)",
+                        merge_commit_sha, head_sha
                     ));
                     return Ok(());
                 }
