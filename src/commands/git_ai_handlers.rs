@@ -59,6 +59,9 @@ pub fn handle_git_ai(args: &[String]) {
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
+        "ci" => {
+            commands::ci::handle_ci(&args[1..]);
+        }
         _ => {
             println!("Unknown git-ai command: {}", args[0]);
             std::process::exit(1);
@@ -88,6 +91,8 @@ fn print_help() {
     );
     eprintln!("    --json                 Output created notes as JSON");
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
+    eprintln!("  ci                 Continuous integration utilities");
+    eprintln!("    github                 GitHub CI helpers");
     eprintln!("  squash-authorship  Generate authorship from squashed commits");
     eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
