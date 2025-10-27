@@ -1461,6 +1461,15 @@ impl Repository {
 
         parse_diff_added_lines(&diff_output)
     }
+
+    pub fn fetch_branch(&self, branch_name: &str, remote_name: &str) -> Result<(), GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("fetch".to_string());
+        args.push(remote_name.to_string());
+        args.push(branch_name.to_string());
+        exec_git(&args)?;
+        Ok(())
+    }
 }
 
 pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiError> {
