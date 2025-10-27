@@ -47,6 +47,7 @@ pub struct CommitRange<'a> {
 }
 
 impl<'a> CommitRange<'a> {
+    #[allow(dead_code)]
     pub fn new(
         repo: &'a Repository,
         start_oid: String,
@@ -176,6 +177,7 @@ impl<'a> CommitRange<'a> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn length(&self) -> usize {
         // Use git rev-list --count to get the number of commits between start and end
         // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
@@ -260,13 +262,16 @@ impl<'a> Iterator for CommitRangeIterator<'a> {
 pub struct Signature<'a> {
     #[allow(dead_code)]
     repo: &'a Repository,
+    #[allow(dead_code)]
     name: String,
+    #[allow(dead_code)]
     email: String,
     time_iso8601: String,
 }
 
 pub struct Time {
     seconds: i64,
+    #[allow(dead_code)]
     offset_minutes: i32,
 }
 
@@ -275,12 +280,14 @@ impl Time {
         self.seconds
     }
 
+    #[allow(dead_code)]
     pub fn offset_minutes(&self) -> i32 {
         self.offset_minutes
     }
 }
 
 impl<'a> Signature<'a> {
+    #[allow(dead_code)]
     pub fn name(&self) -> Option<&str> {
         if self.name.is_empty() {
             None
@@ -289,6 +296,7 @@ impl<'a> Signature<'a> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn email(&self) -> Option<&str> {
         if self.email.is_empty() {
             None
@@ -319,6 +327,7 @@ impl<'a> Signature<'a> {
 pub struct Commit<'a> {
     repo: &'a Repository,
     oid: String,
+    #[allow(dead_code)]
     authorship_log: std::cell::OnceCell<AuthorshipLog>,
 }
 
@@ -400,6 +409,7 @@ impl<'a> Commit<'a> {
     }
 
     // Get the author of this commit.
+    #[allow(dead_code)]
     pub fn author(&self) -> Result<Signature<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("show".to_string());
@@ -453,11 +463,13 @@ impl<'a> Commit<'a> {
     }
 
     // lazy load the authorship log
+    #[allow(dead_code)]
     pub fn authorship(&self) -> &AuthorshipLog {
         self.authorship_log.get_or_init(|| {
             get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
         })
     }
+    #[allow(dead_code)]
     pub fn authorship_uncached(&self) -> AuthorshipLog {
         get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
     }
@@ -497,6 +509,7 @@ impl<'a> Tree<'a> {
         self.oid.clone()
     }
 
+    #[allow(dead_code)]
     pub fn clone(&self) -> Tree<'a> {
         Tree {
             repo: self.repo,
@@ -930,6 +943,7 @@ impl Repository {
         })
     }
 
+    #[allow(dead_code)]
     pub fn remote_head(&self, remote_name: &str) -> Result<String, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("symbolic-ref".to_string());
@@ -965,6 +979,7 @@ impl Repository {
     }
 
     // Merge two trees, producing an index that reflects the result of the merge. The index may be written as-is to the working directory or checked out. If the index is to be converted to a tree, the caller should resolve any conflicts that arose as part of the merge.
+    #[allow(dead_code)]
     pub fn merge_trees_favor_ours(
         &self,
         ancestor_tree: &Tree<'_>,
@@ -983,6 +998,7 @@ impl Repository {
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
+    #[allow(dead_code)]
     pub fn commit_range_on_branch(
         &self,
         branch_refname: &str,
@@ -1091,7 +1107,8 @@ impl Repository {
         )?)
     }
 
-    // Create new commit in the repository If the update_ref is not None, name of the reference that will be updated to point to this commit. If the reference is not direct, it will be resolved to a direct reference. Use “HEAD” to update the HEAD of the current branch and make it point to this commit. If the reference doesn’t exist yet, it will be created. If it does exist, the first parent must be the tip of this branch.
+    // Create new commit in the repository If the update_ref is not None, name of the reference that will be updated to point to this commit. If the reference is not direct, it will be resolved to a direct reference. Use "HEAD" to update the HEAD of the current branch and make it point to this commit. If the reference doesn't exist yet, it will be created. If it does exist, the first parent must be the tip of this branch.
+    #[allow(dead_code)]
     pub fn commit(
         &self,
         update_ref: Option<&str>,
@@ -1246,6 +1263,7 @@ impl Repository {
         fetch_authorship_notes(self, remote_name)
     }
 
+    #[allow(dead_code)]
     pub fn push_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
         push_authorship_notes(self, remote_name)
     }
@@ -1579,6 +1597,7 @@ pub fn exec_git_stdin(args: &[String], stdin_data: &[u8]) -> Result<Output, GitA
 }
 
 /// Helper to execute a git command with data provided on stdin and additional environment variables
+#[allow(dead_code)]
 pub fn exec_git_stdin_with_env(
     args: &[String],
     env: &Vec<(String, String)>,
