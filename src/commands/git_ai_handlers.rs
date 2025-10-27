@@ -60,7 +60,7 @@ pub fn handle_git_ai(args: &[String]) {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
         "ci" => {
-            commands::ci::handle_ci(&args[1..]);
+            commands::ci_handlers::handle_ci(&args[1..]);
         }
         _ => {
             println!("Unknown git-ai command: {}", args[0]);
