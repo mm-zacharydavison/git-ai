@@ -901,6 +901,7 @@ pub fn line_attributions_to_attributions(
 /// Convert character-based attributions to line-based attributions.
 /// For each line, selects the "dominant" author based on who contributed
 /// the most non-whitespace characters to that line.
+/// Finally, strip away all human-authored lines that aren't overrides.
 ///
 /// # Arguments
 /// * `attributions` - Character-based attributions
@@ -935,7 +936,7 @@ pub fn attributions_to_line_attributions(
     let mut merged_line_authors = merge_consecutive_line_attributions(line_authors);
 
     // Strip away all human lines (only AI lines need to be retained)
-    merged_line_authors.retain(|line_attr| line_attr.author_id != CheckpointKind::Human.to_str());
+    merged_line_authors.retain(|line_attr| line_attr.author_id != CheckpointKind::Human.to_str() || line_attr.overridden);
     merged_line_authors
 }
 
