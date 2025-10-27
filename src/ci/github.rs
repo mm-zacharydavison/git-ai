@@ -61,12 +61,20 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
 
     let clone_dir = "git-ai-ci-clone".to_string();
 
+    // Authenticate the clone URL with GITHUB_TOKEN if available
+    let authenticated_url = if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        // Replace https://github.com/ with https://x-access-token:TOKEN@github.com/
+        clone_url.replace("https://github.com/", &format!("https://x-access-token:{}@github.com/", token))
+    } else {
+        clone_url
+    };
+
     // Clone the repo
     exec_git(&[
         "clone".to_string(),
         "--branch".to_string(),
         base_ref.clone(),
-        clone_url,
+        authenticated_url,
         clone_dir.clone(),
     ])?;
 
