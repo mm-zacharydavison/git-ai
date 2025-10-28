@@ -11,7 +11,8 @@ use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
-use crate::utils::Timer;
+use crate::utils::{Timer, debug_log};
+use std::env;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,6 +22,14 @@ pub fn handle_git_ai(args: &[String]) {
         print_help();
         return;
     }
+
+    let current_dir = env::current_dir().unwrap().to_string_lossy().to_string();
+    let repository_option = find_repository_in_path(&current_dir).ok();
+
+    let config = config::Config::get();
+
+    let allowed_repository = config.is_allowed_repository(&repository_option);
+
     let timer = Timer::default();
 
     match args[0].as_str() {
@@ -38,6 +47,12 @@ pub fn handle_git_ai(args: &[String]) {
             handle_stats(&args[1..]);
         }
         "checkpoint" => {
+            if !allowed_repository {
+                eprintln!(
+                    "Skipping checkpoint because repository is excluded or not in allow_repositories list"
+                );
+                std::process::exit(1);
+            }
             let end = timer.start("git-ai checkpoint");
             handle_checkpoint(&args[1..]);
             end();
