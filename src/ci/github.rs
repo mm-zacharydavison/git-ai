@@ -16,6 +16,7 @@ struct GithubCiEventPayload {
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 struct GithubCiPullRequest {
+    number: u32,
     base: GithubCiPullRequestReference,
     head: GithubCiPullRequestReference,
     merged: bool,
@@ -54,6 +55,7 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
         return Ok(None);
     }
 
+    let pr_number = pull_request.number;
     let head_ref = pull_request.head.ref_name;
     let head_sha = pull_request.head.sha;
     let base_ref = pull_request.base.ref_name;
@@ -76,6 +78,17 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
         base_ref.clone(),
         authenticated_url,
         clone_dir.clone(),
+    ])?;
+
+    // Fetch PR commits using GitHub's special PR refs
+    // This is necessary because the PR branch may be deleted after merge
+    // but GitHub keeps the commits accessible via pull/{number}/head
+    exec_git(&[
+        "-C".to_string(),
+        clone_dir.clone(),
+        "fetch".to_string(),
+        "origin".to_string(),
+        format!("pull/{}/head", pr_number),
     ])?;
 
     let repo = find_repository_in_path(&clone_dir.clone())?;
