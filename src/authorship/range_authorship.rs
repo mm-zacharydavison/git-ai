@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::authorship::stats::CommitStats;
+use crate::authorship::stats::{CommitStats, stats_for_commit_stats};
 use crate::error::GitAiError;
 use crate::git::refs::{CommitAuthorship, get_commits_with_notes_from_list};
 use crate::git::repository::{CommitRange, Repository};
@@ -156,6 +156,12 @@ fn calculate_range_stats_direct(
     end_sha: &str,
     commit_authorship: &[CommitAuthorship],
 ) -> Result<CommitStats, GitAiError> {
+    // Special case: single commit range (start == end)
+    // Fall back to single-commit stats calculation
+    if start_sha == end_sha {
+        return stats_for_commit_stats(repo, end_sha, "");
+    }
+
     // Cache for foreign prompts to avoid repeated grepping
     let mut foreign_prompts_cache: HashMap<
         String,
