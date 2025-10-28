@@ -81,7 +81,6 @@ pub fn push_post_command_hook(
     // This ensures proper cleanup of the background thread.
     if let Some(handle) = command_hooks_context.push_authorship_handle.take() {
         let _ = handle.join();
-        debug_log("authorship push completed");
     }
 }
 
