@@ -199,6 +199,15 @@ impl<'a> IntoIterator for CommitRange<'a> {
     type IntoIter = CommitRangeIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
+        // ie for single commit branches
+        if self.start_oid == self.end_oid {
+            return CommitRangeIterator {
+                repo: self.repo,
+                commit_oids: vec![self.end_oid.clone()],
+                index: 0,
+            };
+        }
+
         // Use git rev-list to get all commits between start and end
         // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
         let mut args = self.repo.global_args_for_exec();
