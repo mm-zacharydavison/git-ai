@@ -20,6 +20,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::thread::Thread;
 use std::time::Duration;
 use std::time::Instant;
 

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{ops::Add, time::Duration};
 
 use serde_json::json;
 
@@ -12,19 +12,19 @@ pub fn log_performance_target_if_violated(
 ) {
     let total_duration = pre_command + git_duration + post_command;
     let within_target: bool = match command {
-        "commit" => git_duration.mul_f32(1.1) <= total_duration,
-        "rebase" => git_duration.mul_f32(1.1) <= total_duration,
-        "cherry-pick" => git_duration.mul_f32(1.1) <= total_duration,
-        "reset" => git_duration.mul_f32(1.1) <= total_duration,
-        "fetch" => git_duration.mul_f32(1.5) <= total_duration,
-        "pull" => git_duration.mul_f32(1.5) <= total_duration,
-        "push" => git_duration.mul_f32(1.5) <= total_duration,
-        _ => true,
+        "commit" => git_duration.mul_f32(1.1) >= total_duration,
+        "rebase" => git_duration.mul_f32(1.1) >= total_duration,
+        "cherry-pick" => git_duration.mul_f32(1.1) >= total_duration,
+        "reset" => git_duration.mul_f32(1.1) >= total_duration,
+        "fetch" => git_duration.mul_f32(1.5) >= total_duration,
+        "pull" => git_duration.mul_f32(1.5) >= total_duration,
+        "push" => git_duration.mul_f32(1.5) >= total_duration,
+        _ => git_duration.add(Duration::from_millis(100)) >= total_duration,
     };
 
     if !within_target {
         debug_log(&format!(
-            "Performance target violated for command: {}. Total duration: {}ms, Git duration: {}ms",
+            "ᕽ Performance target violated for command: {}. Total duration: {}ms, Git duration: {}ms",
             command,
             total_duration.as_millis(),
             git_duration.as_millis(),
@@ -43,7 +43,7 @@ pub fn log_performance_target_if_violated(
         );
     } else {
         debug_log(&format!(
-            "Performance target within for command: {}. Total duration: {}ms, Git duration: {}ms",
+            "✓ Performance target met for command: {}. Total duration: {}ms, Git duration: {}ms",
             command,
             total_duration.as_millis(),
             git_duration.as_millis(),

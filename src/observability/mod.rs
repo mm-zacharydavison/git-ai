@@ -113,7 +113,6 @@ pub fn set_repo_context(repo: &crate::git::repository::Repository) {
             }
         }
     }
-    println!("Flushed buffered events to disk: {}", n);
 }
 
 /// Append an envelope (buffer if no repo context, write to disk if context set)
