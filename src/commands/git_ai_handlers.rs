@@ -12,7 +12,6 @@ use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
 use crate::observability;
-use crate::utils::Timer;
 use std::env;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -35,8 +34,6 @@ pub fn handle_git_ai(args: &[String]) {
     let config = config::Config::get();
 
     let allowed_repository = config.is_allowed_repository(&repository_option);
-
-    let timer = Timer::default();
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => {
@@ -62,9 +59,7 @@ pub fn handle_git_ai(args: &[String]) {
                 );
                 std::process::exit(1);
             }
-            let end = timer.start("git-ai checkpoint");
             handle_checkpoint(&args[1..]);
-            end();
         }
         "blame" => {
             handle_ai_blame(&args[1..]);

@@ -1,0 +1,52 @@
+use std::time::Duration;
+
+use serde_json::json;
+
+use crate::{observability::log_performance, utils::debug_log};
+
+pub fn log_performance_target_if_violated(
+    command: &str,
+    pre_command: Duration,
+    git_duration: Duration,
+    post_command: Duration,
+) {
+    let total_duration = pre_command + git_duration + post_command;
+    let within_target: bool = match command {
+        "commit" => git_duration.mul_f32(1.1) <= total_duration,
+        "rebase" => git_duration.mul_f32(1.1) <= total_duration,
+        "cherry-pick" => git_duration.mul_f32(1.1) <= total_duration,
+        "reset" => git_duration.mul_f32(1.1) <= total_duration,
+        "fetch" => git_duration.mul_f32(1.5) <= total_duration,
+        "pull" => git_duration.mul_f32(1.5) <= total_duration,
+        "push" => git_duration.mul_f32(1.5) <= total_duration,
+        _ => true,
+    };
+
+    if !within_target {
+        debug_log(&format!(
+            "Performance target violated for command: {}. Total duration: {}ms, Git duration: {}ms",
+            command,
+            total_duration.as_millis(),
+            git_duration.as_millis(),
+        ));
+
+        log_performance(
+            "performance_target_violated",
+            total_duration,
+            Some(json!({
+                "command": command,
+                "total_duration": total_duration.as_millis(),
+                "git_duration": git_duration.as_millis(),
+                "pre_command": pre_command.as_millis(),
+                "post_command": post_command.as_millis(),
+            })),
+        );
+    } else {
+        debug_log(&format!(
+            "Performance target within for command: {}. Total duration: {}ms, Git duration: {}ms",
+            command,
+            total_duration.as_millis(),
+            git_duration.as_millis(),
+        ));
+    }
+}

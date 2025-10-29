@@ -7,7 +7,6 @@ mod git;
 mod observability;
 mod utils;
 
-use crate::utils::Timer;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -21,7 +20,6 @@ struct Cli {
 }
 
 fn main() {
-    _ = Timer::default();
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()

@@ -11,7 +11,7 @@ use crate::git::find_repository;
 use crate::git::repository::Repository;
 use crate::observability;
 
-use crate::utils::Timer;
+use crate::observability::wrapper_performance_targets::log_performance_target_if_violated;
 use crate::utils::debug_log;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -20,9 +20,23 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(unix)]
 static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
+
+/// Error type for hook panics
+#[derive(Debug)]
+struct HookPanicError(String);
+
+impl std::fmt::Display for HookPanicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for HookPanicError {}
 
 #[cfg(unix)]
 extern "C" fn forward_signal_handler(sig: libc::c_int) {
@@ -73,14 +87,6 @@ pub fn handle_git(args: &[String]) {
         return;
     }
 
-    let mut command_hooks_context = CommandHooksContext {
-        pre_commit_hook_result: None,
-        rebase_original_head: None,
-        _rebase_onto: None,
-        push_authorship_handle: None,
-        fetch_authorship_handle: None,
-    };
-
     let parsed_args = parse_git_cli_args(args);
 
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
@@ -102,35 +108,42 @@ pub fn handle_git(args: &[String]) {
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
-        Timer::default().print_duration("git-ai proxy overhead", Timer::default().epoch.elapsed());
+        let mut command_hooks_context = CommandHooksContext {
+            pre_commit_hook_result: None,
+            rebase_original_head: None,
+            _rebase_onto: None,
+            push_authorship_handle: None,
+            fetch_authorship_handle: None,
+        };
 
         let repository = repository_option.as_mut().unwrap();
 
-        let end_precommand_clock = Timer::default().start_quiet("pre-command-hooks");
-
+        let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &parsed_args, repository);
+        let pre_command_duration = pre_command_start.elapsed();
 
-        let pre_command_duration = end_precommand_clock();
-
+        let git_start = Instant::now();
         let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
+        let git_duration = git_start.elapsed();
 
-        let end_post_command_clock = Timer::default().start_quiet("post-command-hooks");
-
+        let post_command_start = Instant::now();
         run_post_command_hooks(
             &mut command_hooks_context,
             &parsed_args,
             exit_status,
             repository,
         );
+        let post_command_duration = post_command_start.elapsed();
 
-        let post_command_duration = end_post_command_clock();
-
-        Timer::default()
-            .print_duration("git-ai hooks", pre_command_duration + post_command_duration);
+        log_performance_target_if_violated(
+            &parsed_args.command.as_deref().unwrap_or("unknown"),
+            pre_command_duration,
+            git_duration,
+            post_command_duration,
+        );
 
         exit_status
     } else {
-        Timer::default().print_duration("git-ai proxy overhead", Timer::default().epoch.elapsed());
         // run without hooks
         proxy_to_git(&parsed_args.to_invocation_vec(), false)
     };
@@ -142,31 +155,57 @@ fn run_pre_command_hooks(
     parsed_args: &ParsedGitInvocation,
     repository: &mut Repository,
 ) {
-    // Pre-command hooks
-    match parsed_args.command.as_deref() {
-        Some("commit") => {
-            command_hooks_context.pre_commit_hook_result = Some(
-                commit_hooks::commit_pre_command_hook(parsed_args, repository),
-            );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Pre-command hooks
+        match parsed_args.command.as_deref() {
+            Some("commit") => {
+                command_hooks_context.pre_commit_hook_result = Some(
+                    commit_hooks::commit_pre_command_hook(parsed_args, repository),
+                );
+            }
+            Some("rebase") => {
+                rebase_hooks::pre_rebase_hook(parsed_args, repository, command_hooks_context);
+            }
+            Some("reset") => {
+                reset_hooks::pre_reset_hook(parsed_args, repository);
+            }
+            Some("cherry-pick") => {
+                cherry_pick_hooks::pre_cherry_pick_hook(
+                    parsed_args,
+                    repository,
+                    command_hooks_context,
+                );
+            }
+            Some("push") => {
+                command_hooks_context.push_authorship_handle =
+                    push_hooks::push_pre_command_hook(parsed_args, repository);
+            }
+            Some("fetch") | Some("pull") => {
+                command_hooks_context.fetch_authorship_handle =
+                    fetch_hooks::fetch_pull_pre_command_hook(parsed_args, repository);
+            }
+            _ => {}
         }
-        Some("rebase") => {
-            rebase_hooks::pre_rebase_hook(parsed_args, repository, command_hooks_context);
-        }
-        Some("reset") => {
-            reset_hooks::pre_reset_hook(parsed_args, repository);
-        }
-        Some("cherry-pick") => {
-            cherry_pick_hooks::pre_cherry_pick_hook(parsed_args, repository, command_hooks_context);
-        }
-        Some("push") => {
-            command_hooks_context.push_authorship_handle =
-                push_hooks::push_pre_command_hook(parsed_args, repository);
-        }
-        Some("fetch") | Some("pull") => {
-            command_hooks_context.fetch_authorship_handle =
-                fetch_hooks::fetch_pull_pre_command_hook(parsed_args, repository);
-        }
-        _ => {}
+    }));
+
+    if let Err(panic_payload) = result {
+        let error_message = if let Some(message) = panic_payload.downcast_ref::<&str>() {
+            format!("Panic in run_pre_command_hooks: {}", message)
+        } else if let Some(message) = panic_payload.downcast_ref::<String>() {
+            format!("Panic in run_pre_command_hooks: {}", message)
+        } else {
+            "Panic in run_pre_command_hooks: unknown panic".to_string()
+        };
+
+        let command_name = parsed_args.command.as_deref().unwrap_or("unknown");
+        let context = serde_json::json!({
+            "function": "run_pre_command_hooks",
+            "command": command_name,
+            "args": parsed_args.to_invocation_vec(),
+        });
+
+        debug_log(&error_message);
+        observability::log_error(&HookPanicError(error_message.clone()), Some(context));
     }
 }
 
@@ -176,41 +215,65 @@ fn run_post_command_hooks(
     exit_status: std::process::ExitStatus,
     repository: &mut Repository,
 ) {
-    // Post-command hooks
-    match parsed_args.command.as_deref() {
-        Some("commit") => commit_hooks::commit_post_command_hook(
-            parsed_args,
-            exit_status,
-            repository,
-            command_hooks_context,
-        ),
-        Some("fetch") | Some("pull") => fetch_hooks::fetch_pull_post_command_hook(
-            repository,
-            parsed_args,
-            exit_status,
-            command_hooks_context,
-        ),
-        Some("push") => push_hooks::push_post_command_hook(
-            repository,
-            parsed_args,
-            exit_status,
-            command_hooks_context,
-        ),
-        Some("reset") => reset_hooks::post_reset_hook(parsed_args, repository, exit_status),
-        Some("merge") => merge_hooks::post_merge_hook(parsed_args, exit_status, repository),
-        Some("rebase") => rebase_hooks::handle_rebase_post_command(
-            command_hooks_context,
-            parsed_args,
-            exit_status,
-            repository,
-        ),
-        Some("cherry-pick") => cherry_pick_hooks::post_cherry_pick_hook(
-            command_hooks_context,
-            parsed_args,
-            exit_status,
-            repository,
-        ),
-        _ => {}
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Post-command hooks
+        match parsed_args.command.as_deref() {
+            Some("commit") => commit_hooks::commit_post_command_hook(
+                parsed_args,
+                exit_status,
+                repository,
+                command_hooks_context,
+            ),
+            Some("fetch") | Some("pull") => fetch_hooks::fetch_pull_post_command_hook(
+                repository,
+                parsed_args,
+                exit_status,
+                command_hooks_context,
+            ),
+            Some("push") => push_hooks::push_post_command_hook(
+                repository,
+                parsed_args,
+                exit_status,
+                command_hooks_context,
+            ),
+            Some("reset") => reset_hooks::post_reset_hook(parsed_args, repository, exit_status),
+            Some("merge") => merge_hooks::post_merge_hook(parsed_args, exit_status, repository),
+            Some("rebase") => rebase_hooks::handle_rebase_post_command(
+                command_hooks_context,
+                parsed_args,
+                exit_status,
+                repository,
+            ),
+            Some("cherry-pick") => cherry_pick_hooks::post_cherry_pick_hook(
+                command_hooks_context,
+                parsed_args,
+                exit_status,
+                repository,
+            ),
+            _ => {}
+        }
+    }));
+
+    if let Err(panic_payload) = result {
+        let error_message = if let Some(message) = panic_payload.downcast_ref::<&str>() {
+            format!("Panic in run_post_command_hooks: {}", message)
+        } else if let Some(message) = panic_payload.downcast_ref::<String>() {
+            format!("Panic in run_post_command_hooks: {}", message)
+        } else {
+            "Panic in run_post_command_hooks: unknown panic".to_string()
+        };
+
+        let command_name = parsed_args.command.as_deref().unwrap_or("unknown");
+        let exit_code = exit_status.code().unwrap_or(-1);
+        let context = serde_json::json!({
+            "function": "run_post_command_hooks",
+            "command": command_name,
+            "exit_code": exit_code,
+            "args": parsed_args.to_invocation_vec(),
+        });
+
+        debug_log(&error_message);
+        observability::log_error(&HookPanicError(error_message.clone()), Some(context));
     }
 }
 

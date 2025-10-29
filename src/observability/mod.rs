@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 pub mod flush;
+pub mod wrapper_performance_targets;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ErrorEnvelope {
