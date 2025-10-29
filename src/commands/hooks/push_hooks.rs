@@ -1,22 +1,22 @@
+use crate::commands::git_handlers::CommandHooksContext;
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
-use crate::git::repository::Repository;
+use crate::git::repository::{Repository, find_repository};
 use crate::git::sync_authorship::push_authorship_notes;
 use crate::utils::debug_log;
 
-pub fn push_post_command_hook(
-    repository: &Repository,
+pub fn push_pre_command_hook(
     parsed_args: &ParsedGitInvocation,
-    exit_status: std::process::ExitStatus,
-) {
+    repository: &Repository,
+) -> Option<std::thread::JoinHandle<()>> {
+    // Early returns for cases where we shouldn't push authorship notes
     if is_dry_run(&parsed_args.command_args)
-        || !exit_status.success()
         || parsed_args
             .command_args
             .iter()
             .any(|a| a == "-d" || a == "--delete")
         || parsed_args.command_args.iter().any(|a| a == "--mirror")
     {
-        return;
+        return None;
     }
 
     let remotes = repository.remotes().ok();
@@ -29,7 +29,7 @@ pub fn push_post_command_hook(
         })
         .unwrap_or_default();
 
-    // 2) Push authorship refs to the appropriate remote
+    // Push authorship refs to the appropriate remote
     let positional_remote = extract_remote_from_push_args(&parsed_args.command_args, &remote_names);
 
     let specified_remote = positional_remote.or_else(|| {
@@ -45,10 +45,42 @@ pub fn push_post_command_hook(
         .or_else(|| repository.get_default_remote().ok().flatten());
 
     if let Some(remote) = remote {
-        _ = push_authorship_notes(repository, remote.as_str());
+        debug_log(&format!(
+            "started pushing authorship notes to remote: {}",
+            remote
+        ));
+        // Clone what we need for the background thread
+        let global_args = repository.global_args_for_exec();
+
+        // Spawn background thread to push authorship notes in parallel with main push
+        Some(std::thread::spawn(move || {
+            // Recreate repository in the background thread
+            if let Ok(repo) = find_repository(&global_args) {
+                if let Err(e) = push_authorship_notes(&repo, &remote) {
+                    debug_log(&format!("authorship push failed: {}", e));
+                }
+            } else {
+                debug_log("failed to open repository for authorship push");
+            }
+        }))
     } else {
         // No remotes configured; skip silently
         debug_log("no remotes found for authorship push; skipping");
+        None
+    }
+}
+
+pub fn push_post_command_hook(
+    _repository: &Repository,
+    _parsed_args: &ParsedGitInvocation,
+    _exit_status: std::process::ExitStatus,
+    command_hooks_context: &mut CommandHooksContext,
+) {
+    // Always wait for the authorship push thread to complete if it was started,
+    // regardless of whether the main push succeeded or failed.
+    // This ensures proper cleanup of the background thread.
+    if let Some(handle) = command_hooks_context.push_authorship_handle.take() {
+        let _ = handle.join();
     }
 }
 

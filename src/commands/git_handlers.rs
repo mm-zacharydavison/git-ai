@@ -59,6 +59,8 @@ pub struct CommandHooksContext {
     pub pre_commit_hook_result: Option<bool>,
     pub rebase_original_head: Option<String>,
     pub _rebase_onto: Option<String>,
+    pub push_authorship_handle: Option<std::thread::JoinHandle<()>>,
+    pub fetch_authorship_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 pub fn handle_git(args: &[String]) {
@@ -74,6 +76,8 @@ pub fn handle_git(args: &[String]) {
         pre_commit_hook_result: None,
         rebase_original_head: None,
         _rebase_onto: None,
+        push_authorship_handle: None,
+        fetch_authorship_handle: None,
     };
 
     let parsed_args = parse_git_cli_args(args);
@@ -154,6 +158,14 @@ fn run_pre_command_hooks(
         Some("cherry-pick") => {
             cherry_pick_hooks::pre_cherry_pick_hook(parsed_args, repository, command_hooks_context);
         }
+        Some("push") => {
+            command_hooks_context.push_authorship_handle =
+                push_hooks::push_pre_command_hook(parsed_args, repository);
+        }
+        Some("fetch") | Some("pull") => {
+            command_hooks_context.fetch_authorship_handle =
+                fetch_hooks::fetch_pull_pre_command_hook(parsed_args, repository);
+        }
         _ => {}
     }
 }
@@ -172,13 +184,18 @@ fn run_post_command_hooks(
             repository,
             command_hooks_context,
         ),
-        Some("fetch") => {
-            fetch_hooks::fetch_pull_post_command_hook(repository, parsed_args, exit_status)
-        }
-        Some("pull") => {
-            fetch_hooks::fetch_pull_post_command_hook(repository, parsed_args, exit_status)
-        }
-        Some("push") => push_hooks::push_post_command_hook(repository, parsed_args, exit_status),
+        Some("fetch") | Some("pull") => fetch_hooks::fetch_pull_post_command_hook(
+            repository,
+            parsed_args,
+            exit_status,
+            command_hooks_context,
+        ),
+        Some("push") => push_hooks::push_post_command_hook(
+            repository,
+            parsed_args,
+            exit_status,
+            command_hooks_context,
+        ),
         Some("reset") => reset_hooks::post_reset_hook(parsed_args, repository, exit_status),
         Some("merge") => merge_hooks::post_merge_hook(parsed_args, exit_status, repository),
         Some("rebase") => rebase_hooks::handle_rebase_post_command(
