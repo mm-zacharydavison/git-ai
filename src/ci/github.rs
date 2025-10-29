@@ -83,12 +83,13 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
     // Fetch PR commits using GitHub's special PR refs
     // This is necessary because the PR branch may be deleted after merge
     // but GitHub keeps the commits accessible via pull/{number}/head
+    // We store the fetched commits in a local ref to ensure they're kept
     exec_git(&[
         "-C".to_string(),
         clone_dir.clone(),
         "fetch".to_string(),
         "origin".to_string(),
-        format!("pull/{}/head", pr_number),
+        format!("pull/{}/head:refs/github/pr/{}", pr_number, pr_number),
     ])?;
 
     let repo = find_repository_in_path(&clone_dir.clone())?;
