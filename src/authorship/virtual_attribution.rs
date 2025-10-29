@@ -336,7 +336,7 @@ impl VirtualAttributions {
                 checkpoint_file_contents.insert(file_path.clone(), file_content.clone());
 
                 // Convert line attributions to character attributions
-                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, ts);
+                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, 0);
                 checkpoint_attributions.insert(file_path.clone(), (char_attrs, line_attrs.clone()));
             }
         }
@@ -386,7 +386,7 @@ impl VirtualAttributions {
                     .get(&entry.file)
                     .cloned()
                     .unwrap_or_default();
-                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, ts);
+                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, 0);
 
                 checkpoint_attributions.insert(entry.file.clone(), (char_attrs, line_attrs));
             }

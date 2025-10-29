@@ -168,6 +168,113 @@ pub fn prepare_working_log_after_squash(
     Ok(())
 }
 
+/// Rewrite authorship after a squash or rebase merge performed in CI/GUI
+///
+/// This handles the case where a squash merge or rebase merge was performed via SCM GUI,
+/// and we need to reconstruct authorship after the fact. Unlike `prepare_working_log_after_squash`,
+/// this writes directly to the authorship log (git notes) since the merge is already committed.
+///
+/// # Arguments
+/// * `repo` - Git repository
+/// * `_head_ref` - Reference name of the source branch (e.g., "feature/123")
+/// * `merge_ref` - Reference name of the target/base branch (e.g., "main")
+/// * `source_head_sha` - SHA of the source branch head that was merged
+/// * `merge_commit_sha` - SHA of the final merge commit
+/// * `_suppress_output` - Whether to suppress output (unused, kept for API compatibility)
+pub fn rewrite_authorship_after_squash_or_rebase(
+    repo: &Repository,
+    _head_ref: &str,
+    merge_ref: &str,
+    source_head_sha: &str,
+    merge_commit_sha: &str,
+    _suppress_output: bool,
+) -> Result<(), GitAiError> {
+    use crate::authorship::virtual_attribution::{
+        VirtualAttributions, merge_attributions_favoring_first,
+    };
+
+    // Step 1: Get target branch head (first parent on merge_ref)
+    // This is more correct than just parent(0) in cases with complex back-and-forth merge history
+    let merge_commit = repo.find_commit(merge_commit_sha.to_string())?;
+    let target_branch_head = merge_commit.parent_on_refname(merge_ref)?;
+    let target_branch_head_sha = target_branch_head.id().to_string();
+
+    debug_log(&format!(
+        "Rewriting authorship for squash/rebase merge: {} -> {}",
+        source_head_sha, merge_commit_sha
+    ));
+
+    // Step 2: Get list of changed files between the two branches
+    let changed_files = repo.diff_changed_files(source_head_sha, &target_branch_head_sha)?;
+
+    if changed_files.is_empty() {
+        // No files changed, nothing to do
+        debug_log("No files changed in merge, skipping authorship rewrite");
+        return Ok(());
+    }
+
+    debug_log(&format!(
+        "Processing {} changed files for merge authorship",
+        changed_files.len()
+    ));
+
+    // Step 3: Create VirtualAttributions for both branches
+    let repo_clone = repo.clone();
+    let source_va = smol::block_on(async {
+        VirtualAttributions::new_for_base_commit(
+            repo_clone,
+            source_head_sha.to_string(),
+            &changed_files,
+        )
+        .await
+    })?;
+
+    let repo_clone = repo.clone();
+    let target_va = smol::block_on(async {
+        VirtualAttributions::new_for_base_commit(
+            repo_clone,
+            target_branch_head_sha.clone(),
+            &changed_files,
+        )
+        .await
+    })?;
+
+    // Step 4: Read committed files from merge commit (captures final state with conflict resolutions)
+    let committed_files = get_committed_files_content(repo, merge_commit_sha, &changed_files)?;
+
+    debug_log(&format!(
+        "Read {} committed files from merge commit",
+        committed_files.len()
+    ));
+
+    // Step 5: Merge VirtualAttributions, favoring target branch (base)
+    let merged_va = merge_attributions_favoring_first(target_va, source_va, committed_files)?;
+
+    // Step 6: Convert to AuthorshipLog (everything is committed in CI merge)
+    let mut authorship_log = merged_va.to_authorship_log()?;
+    authorship_log.metadata.base_commit_sha = merge_commit_sha.to_string();
+
+    debug_log(&format!(
+        "Created authorship log with {} attestations, {} prompts",
+        authorship_log.attestations.len(),
+        authorship_log.metadata.prompts.len()
+    ));
+
+    // Step 7: Save authorship log to git notes
+    let authorship_json = authorship_log
+        .serialize_to_string()
+        .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
+
+    crate::git::refs::notes_add(repo, merge_commit_sha, &authorship_json)?;
+
+    debug_log(&format!(
+        "✓ Saved authorship log for merge commit {}",
+        merge_commit_sha
+    ));
+
+    Ok(())
+}
+
 pub fn rewrite_authorship_after_rebase_v2(
     repo: &Repository,
     original_head: &str,

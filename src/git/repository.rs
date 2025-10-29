@@ -473,6 +473,74 @@ impl<'a> Commit<'a> {
     pub fn authorship_uncached(&self) -> AuthorshipLog {
         get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
     }
+
+    /// Find the first parent that exists on the specified refname
+    ///
+    /// This is useful for merge commits where we want to find the parent on a specific branch
+    /// (e.g., main) rather than just taking the first parent, which might not be correct in
+    /// complex merge histories with back-and-forth merges.
+    ///
+    /// # Arguments
+    /// * `refname` - The reference name to search for (e.g., "main", "refs/heads/main")
+    ///
+    /// # Returns
+    /// The first parent commit that is reachable from the specified refname
+    pub fn parent_on_refname(&self, refname: &str) -> Result<Commit<'a>, GitAiError> {
+        // Normalize the refname to fully qualified form
+        let fq_refname = {
+            let mut rp_args = self.repo.global_args_for_exec();
+            rp_args.push("rev-parse".to_string());
+            rp_args.push("--verify".to_string());
+            rp_args.push("--symbolic-full-name".to_string());
+            rp_args.push(refname.to_string());
+
+            match exec_git(&rp_args) {
+                Ok(output) => {
+                    let s = String::from_utf8(output.stdout).unwrap_or_default();
+                    let s = s.trim();
+                    if s.is_empty() {
+                        if refname.starts_with("refs/") {
+                            refname.to_string()
+                        } else {
+                            format!("refs/heads/{}", refname)
+                        }
+                    } else {
+                        s.to_string()
+                    }
+                }
+                Err(_) => {
+                    if refname.starts_with("refs/") {
+                        refname.to_string()
+                    } else {
+                        format!("refs/heads/{}", refname)
+                    }
+                }
+            }
+        };
+
+        // Iterate through parents and find the first one that's on the refname
+        for parent in self.parents() {
+            let parent_sha = parent.id();
+
+            // Check if this parent is an ancestor of the refname
+            // git merge-base --is-ancestor <parent> <refname>
+            let mut args = self.repo.global_args_for_exec();
+            args.push("merge-base".to_string());
+            args.push("--is-ancestor".to_string());
+            args.push(parent_sha.clone());
+            args.push(fq_refname.clone());
+
+            if exec_git(&args).is_ok() {
+                return Ok(parent);
+            }
+        }
+
+        // If no parent is on the refname, return an error
+        Err(GitAiError::Generic(format!(
+            "No parent of commit {} is reachable from refname {}",
+            self.oid, refname
+        )))
+    }
 }
 
 pub struct TreeEntry<'a> {
