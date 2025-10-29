@@ -71,7 +71,7 @@ fn test_squash_merge_with_deleted_branch() {
     println!("✅ Squash merged and deleted branch");
 
     // Wait for GitHub CI workflow to complete
-    test_repo.wait_for_workflows(&pr_number, 300)
+    test_repo.wait_for_workflows(300)
         .expect("GitHub CI workflow failed or timed out");
 
     // Verify we can still fetch the original commits via PR refs

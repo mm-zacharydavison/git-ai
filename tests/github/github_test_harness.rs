@@ -251,7 +251,7 @@ impl GitHubTestRepo {
 
     /// Wait for GitHub Actions workflow runs to complete for a specific PR
     /// Returns an error if any workflow fails
-    pub fn wait_for_workflows(&self, _pr_number: &str, timeout_seconds: u64) -> Result<(), String> {
+    pub fn wait_for_workflows(&self, timeout_seconds: u64) -> Result<(), String> {
         let repo_path = self.repo.path();
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
 
