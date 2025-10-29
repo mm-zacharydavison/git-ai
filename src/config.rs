@@ -56,7 +56,7 @@ impl Config {
         if !self.exclude_repositories.is_empty()
             && let Some(repository) = repository
         {
-            if let Some(remotes) = repository.remotes_with_urls_cached().ok() {
+            if let Some(remotes) = repository.remotes_with_urls().ok() {
                 // If any remote matches the exclusion list, deny access
                 if remotes
                     .iter()

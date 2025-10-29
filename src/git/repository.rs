@@ -790,7 +790,6 @@ pub struct Repository {
     pub pre_command_base_commit: Option<String>,
     pub pre_command_refname: Option<String>,
     workdir_cache: OnceLock<Result<PathBuf, GitAiError>>,
-    remotes_cache: OnceLock<Result<Vec<(String, String)>, GitAiError>>,
 }
 
 impl Repository {
@@ -949,12 +948,6 @@ impl Repository {
         }
 
         Ok(remotes)
-    }
-
-    pub fn remotes_with_urls_cached(&self) -> Result<Vec<(String, String)>, GitAiError> {
-        self.remotes_cache
-            .get_or_init(|| self.remotes_with_urls())
-            .clone()
     }
 
     pub fn config_get_str(&self, key: &str) -> Result<Option<String>, GitAiError> {
@@ -1681,7 +1674,6 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
         pre_command_base_commit: None,
         pre_command_refname: None,
         workdir_cache: OnceLock::new(),
-        remotes_cache: OnceLock::new(),
     })
 }
 

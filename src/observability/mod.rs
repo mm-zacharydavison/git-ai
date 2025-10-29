@@ -18,12 +18,14 @@ struct ErrorEnvelope {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct UsageEnvelope {
+struct MessageEnvelope {
     #[serde(rename = "type")]
     event_type: String,
     timestamp: String,
-    event: String,
-    properties: serde_json::Value,
+    message: String,
+    level: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -40,16 +42,16 @@ struct PerformanceEnvelope {
 #[derive(Clone)]
 enum LogEnvelope {
     Error(ErrorEnvelope),
-    Usage(UsageEnvelope),
     Performance(PerformanceEnvelope),
+    Message(MessageEnvelope),
 }
 
 impl LogEnvelope {
     fn to_json(&self) -> Option<serde_json::Value> {
         match self {
             LogEnvelope::Error(e) => serde_json::to_value(e).ok(),
-            LogEnvelope::Usage(u) => serde_json::to_value(u).ok(),
             LogEnvelope::Performance(p) => serde_json::to_value(p).ok(),
+            LogEnvelope::Message(m) => serde_json::to_value(m).ok(),
         }
     }
 }
@@ -75,7 +77,7 @@ fn get_observability() -> &'static Mutex<ObservabilityInner> {
 
 /// Set the repository context and flush buffered events to disk
 /// Should be called once Repository is available
-pub fn set_repo_context(repo: &crate::git::repository::Repository, remotes: Vec<&str>) {
+pub fn set_repo_context(repo: &crate::git::repository::Repository) {
     let log_path = repo
         .storage
         .logs
@@ -88,6 +90,8 @@ pub fn set_repo_context(repo: &crate::git::repository::Repository, remotes: Vec<
         LogMode::Buffered(events) => events.clone(),
         LogMode::Disk(_) => return, // Already set, ignore
     };
+
+    let n = buffered_events.len();
 
     // Switch to disk mode
     obs.mode = LogMode::Disk(log_path.clone());
@@ -108,6 +112,7 @@ pub fn set_repo_context(repo: &crate::git::repository::Repository, remotes: Vec<
             }
         }
     }
+    println!("Flushed buffered events to disk: {}", n);
 }
 
 /// Append an envelope (buffer if no repo context, write to disk if context set)
@@ -143,18 +148,6 @@ pub fn log_error(error: &dyn std::error::Error, context: Option<serde_json::Valu
     append_envelope(LogEnvelope::Error(envelope));
 }
 
-/// Log a usage event to Sentry
-pub fn log_usage_event(event_name: &str, properties: serde_json::Value) {
-    let envelope = UsageEnvelope {
-        event_type: "usage".to_string(),
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        event: event_name.to_string(),
-        properties,
-    };
-
-    append_envelope(LogEnvelope::Usage(envelope));
-}
-
 /// Log a performance metric to Sentry
 pub fn log_performance(operation: &str, duration: Duration, context: Option<serde_json::Value>) {
     let envelope = PerformanceEnvelope {
@@ -166,6 +159,19 @@ pub fn log_performance(operation: &str, duration: Duration, context: Option<serd
     };
 
     append_envelope(LogEnvelope::Performance(envelope));
+}
+
+/// Log a message to Sentry (info, warning, etc.)
+pub fn log_message(message: &str, level: &str, context: Option<serde_json::Value>) {
+    let envelope = MessageEnvelope {
+        event_type: "message".to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        message: message.to_string(),
+        level: level.to_string(),
+        context,
+    };
+
+    append_envelope(LogEnvelope::Message(envelope));
 }
 
 /// Spawn a background process to flush logs to Sentry

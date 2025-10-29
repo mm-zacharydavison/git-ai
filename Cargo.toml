@@ -21,7 +21,8 @@ git2 = { version = "0.20.2", optional = true }
 diff-match-patch-rs = "0.5.1"
 strsim = "0.11.1"
 jsonc-parser = { version = "0.27", features = ["cst"] }
-sentry = { version = "0.45.0", default-features = false, features = ["reqwest", "rustls"] }
+minreq = { version = "2.12", features = ["https-rustls"] }
+url = "2.5"
 
 [features]
 test-support = ["git2"]

@@ -1,10 +1,8 @@
 use crate::git::find_repository_in_path;
-use crate::utils::debug_log;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 /// Handle the flush-logs command
 pub fn handle_flush_logs(_args: &[String]) {
@@ -24,7 +22,6 @@ pub fn handle_flush_logs(_args: &[String]) {
 
     // Need at least one DSN to proceed
     if oss_dsn.is_none() && enterprise_dsn.is_none() {
-        debug_log("No Sentry DSN configured (SENTRY_OSS or SENTRY_ENTERPRISE), skipping log flush");
         std::process::exit(1);
     }
 
@@ -32,7 +29,6 @@ pub fn handle_flush_logs(_args: &[String]) {
     let logs_dir = match find_logs_directory() {
         Some(dir) => dir,
         None => {
-            debug_log("No .git/ai/logs directory found");
             std::process::exit(1);
         }
     };
@@ -56,13 +52,11 @@ pub fn handle_flush_logs(_args: &[String]) {
             })
             .collect(),
         Err(_) => {
-            debug_log("Failed to read logs directory");
             std::process::exit(1);
         }
     };
 
     if log_files.is_empty() {
-        debug_log("No log files to flush");
         std::process::exit(1);
     }
 
@@ -73,47 +67,32 @@ pub fn handle_flush_logs(_args: &[String]) {
         .and_then(|r| r.remotes_with_urls().ok())
         .unwrap_or_default();
 
-    // Initialize Sentry clients (one or both)
-    let (oss_hub, enterprise_hub) = initialize_sentry_hubs(oss_dsn, enterprise_dsn, &remotes_info);
+    // Initialize Sentry clients
+    let (oss_client, enterprise_client) = initialize_sentry_clients(oss_dsn, enterprise_dsn);
 
     let mut events_sent = 0;
     let mut files_to_delete = Vec::new();
 
-    // Process each log file and send to both hubs
+    // Process each log file and send events
     for log_file in log_files {
-        match process_log_file(&log_file, &oss_hub, &enterprise_hub) {
+        match process_log_file(&log_file, &oss_client, &enterprise_client, &remotes_info) {
             Ok(count) => {
                 events_sent += count;
                 if count > 0 {
                     files_to_delete.push(log_file);
                 }
             }
-            Err(e) => {
-                debug_log(&format!("Failed to process log file {:?}: {}", log_file, e));
-            }
+            Err(_) => {}
         }
     }
 
     if events_sent > 0 {
-        debug_log(&format!("Flushing {} events to Sentry", events_sent));
-        // Flush both hubs
-        if let Some(hub) = oss_hub.as_ref() {
-            hub.client().map(|c| c.flush(Some(Duration::from_secs(2))));
-        }
-        if let Some(hub) = enterprise_hub.as_ref() {
-            hub.client().map(|c| c.flush(Some(Duration::from_secs(2))));
-        }
-        std::thread::sleep(Duration::from_millis(100)); // Small delay to ensure events are sent
-
-        // Delete successfully flushed log files
         for file_path in files_to_delete {
             let _ = fs::remove_file(&file_path);
-            debug_log(&format!("Deleted log file: {:?}", file_path));
         }
 
         std::process::exit(0);
     } else {
-        debug_log("No events to flush");
         std::process::exit(1);
     }
 }
@@ -138,57 +117,76 @@ fn find_logs_directory() -> Option<PathBuf> {
     None
 }
 
-fn initialize_sentry_hubs(
+struct SentryClient {
+    endpoint: String,
+    public_key: String,
+}
+
+impl SentryClient {
+    fn from_dsn(dsn: &str) -> Option<Self> {
+        // Parse DSN: https://PUBLIC_KEY@HOST/PROJECT_ID
+        let url = url::Url::parse(dsn).ok()?;
+        let public_key = url.username().to_string();
+        let host = url.host_str()?;
+        let project_id = url.path().trim_start_matches('/');
+
+        let scheme = url.scheme();
+        let endpoint = format!("{}://{}/api/{}/store/", scheme, host, project_id);
+
+        Some(SentryClient {
+            endpoint,
+            public_key,
+        })
+    }
+
+    fn send_event(&self, event: Value) -> Result<String, Box<dyn std::error::Error>> {
+        let auth_header = format!(
+            "Sentry sentry_version=7, sentry_key={}, sentry_client=git-ai/{}",
+            self.public_key,
+            env!("CARGO_PKG_VERSION")
+        );
+
+        let body = serde_json::to_string(&event)?;
+
+        let response = minreq::post(&self.endpoint)
+            .with_header("X-Sentry-Auth", auth_header)
+            .with_header("Content-Type", "application/json")
+            .with_body(body)
+            .send()?;
+
+        let status = response.status_code;
+        let event_id = serde_json::from_str::<Value>(response.as_str()?)
+            .ok()
+            .and_then(|v| {
+                v.get("id")
+                    .and_then(|id| id.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        if status >= 200 && status < 300 {
+            Ok(event_id)
+        } else {
+            Err(format!("Sentry returned status {}", status).into())
+        }
+    }
+}
+
+fn initialize_sentry_clients(
     oss_dsn: Option<String>,
     enterprise_dsn: Option<String>,
-    remotes_info: &[(String, String)],
-) -> (
-    Option<std::sync::Arc<sentry::Hub>>,
-    Option<std::sync::Arc<sentry::Hub>>,
-) {
-    let create_hub = |dsn: String, name: &str| -> std::sync::Arc<sentry::Hub> {
-        let client = std::sync::Arc::new(sentry::Client::from((
-            dsn,
-            sentry::ClientOptions {
-                release: sentry::release_name!(),
-                ..Default::default()
-            },
-        )));
+) -> (Option<SentryClient>, Option<SentryClient>) {
+    let oss_client = oss_dsn.and_then(|dsn| SentryClient::from_dsn(&dsn));
+    let enterprise_client = enterprise_dsn.and_then(|dsn| SentryClient::from_dsn(&dsn));
 
-        let hub = std::sync::Arc::new(sentry::Hub::new(Some(client), Default::default()));
-
-        // Configure scope for this hub
-        hub.configure_scope(|scope| {
-            scope.set_tag("instance", name);
-
-            for (remote_name, remote_url) in remotes_info {
-                scope.set_tag(&format!("remote.{}", remote_name), remote_url);
-            }
-
-            scope.set_tag("os", std::env::consts::OS);
-            scope.set_tag("arch", std::env::consts::ARCH);
-        });
-
-        hub
-    };
-
-    let oss_hub = oss_dsn.map(|dsn| {
-        debug_log("Initializing OSS Sentry hub");
-        create_hub(dsn, "oss")
-    });
-
-    let enterprise_hub = enterprise_dsn.map(|dsn| {
-        debug_log("Initializing Enterprise Sentry hub");
-        create_hub(dsn, "enterprise")
-    });
-
-    (oss_hub, enterprise_hub)
+    (oss_client, enterprise_client)
 }
 
 fn process_log_file(
     path: &PathBuf,
-    oss_hub: &Option<std::sync::Arc<sentry::Hub>>,
-    enterprise_hub: &Option<std::sync::Arc<sentry::Hub>>,
+    oss_client: &Option<SentryClient>,
+    enterprise_client: &Option<SentryClient>,
+    remotes_info: &[(String, String)],
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let mut count = 0;
@@ -202,16 +200,16 @@ fn process_log_file(
             Ok(envelope) => {
                 let mut sent = false;
 
-                // Send to OSS hub if configured
-                if let Some(hub) = oss_hub {
-                    if send_envelope_to_sentry(&envelope, hub) {
+                // Send to OSS if configured
+                if let Some(client) = oss_client {
+                    if send_envelope_to_sentry(&envelope, client, remotes_info) {
                         sent = true;
                     }
                 }
 
-                // Send to Enterprise hub if configured
-                if let Some(hub) = enterprise_hub {
-                    if send_envelope_to_sentry(&envelope, hub) {
+                // Send to Enterprise if configured
+                if let Some(client) = enterprise_client {
+                    if send_envelope_to_sentry(&envelope, client, remotes_info) {
                         sent = true;
                     }
                 }
@@ -220,19 +218,33 @@ fn process_log_file(
                     count += 1;
                 }
             }
-            Err(e) => {
-                debug_log(&format!("Failed to parse envelope: {}", e));
-            }
+            Err(_) => {}
         }
     }
 
     Ok(count)
 }
 
-fn send_envelope_to_sentry(envelope: &Value, hub: &sentry::Hub) -> bool {
+fn send_envelope_to_sentry(
+    envelope: &Value,
+    client: &SentryClient,
+    remotes_info: &[(String, String)],
+) -> bool {
     let event_type = envelope.get("type").and_then(|t| t.as_str());
+    let timestamp = envelope
+        .get("timestamp")
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
 
-    match event_type {
+    // Build tags
+    let mut tags = BTreeMap::new();
+    tags.insert("os".to_string(), json!(std::env::consts::OS));
+    tags.insert("arch".to_string(), json!(std::env::consts::ARCH));
+    for (remote_name, remote_url) in remotes_info {
+        tags.insert(format!("remote.{}", remote_name), json!(remote_url));
+    }
+
+    let event = match event_type {
         Some("error") => {
             let message = envelope
                 .get("message")
@@ -240,50 +252,24 @@ fn send_envelope_to_sentry(envelope: &Value, hub: &sentry::Hub) -> bool {
                 .unwrap_or("Unknown error");
             let context = envelope.get("context");
 
-            let mut event = sentry::protocol::Event {
-                message: Some(message.to_string()),
-                level: sentry::protocol::Level::Error,
-                ..Default::default()
-            };
-
+            let mut extra = BTreeMap::new();
             if let Some(ctx) = context {
                 if let Some(obj) = ctx.as_object() {
-                    let mut extra = BTreeMap::new();
                     for (key, value) in obj {
                         extra.insert(key.clone(), value.clone());
                     }
-                    event.extra = extra;
                 }
             }
 
-            hub.capture_event(event);
-            true
-        }
-        Some("usage") => {
-            let event_name = envelope
-                .get("event")
-                .and_then(|e| e.as_str())
-                .unwrap_or("unknown");
-            let properties = envelope.get("properties");
-
-            let mut event = sentry::protocol::Event {
-                message: Some(format!("Usage: {}", event_name)),
-                level: sentry::protocol::Level::Info,
-                ..Default::default()
-            };
-
-            if let Some(props) = properties {
-                if let Some(obj) = props.as_object() {
-                    let mut extra = BTreeMap::new();
-                    for (key, value) in obj {
-                        extra.insert(key.clone(), value.clone());
-                    }
-                    event.extra = extra;
-                }
-            }
-
-            hub.capture_event(event);
-            true
+            json!({
+                "message": message,
+                "level": "error",
+                "timestamp": timestamp,
+                "platform": "other",
+                "tags": tags,
+                "extra": extra,
+                "release": format!("git-ai@{}", env!("CARGO_PKG_VERSION")),
+            })
         }
         Some("performance") => {
             let operation = envelope
@@ -296,16 +282,9 @@ fn send_envelope_to_sentry(envelope: &Value, hub: &sentry::Hub) -> bool {
                 .unwrap_or(0);
             let context = envelope.get("context");
 
-            let mut event = sentry::protocol::Event {
-                message: Some(format!("Performance: {} ({}ms)", operation, duration_ms)),
-                level: sentry::protocol::Level::Info,
-                ..Default::default()
-            };
-
             let mut extra = BTreeMap::new();
-            extra.insert("duration_ms".to_string(), Value::from(duration_ms));
-            extra.insert("operation".to_string(), Value::from(operation));
-
+            extra.insert("operation".to_string(), json!(operation));
+            extra.insert("duration_ms".to_string(), json!(duration_ms));
             if let Some(ctx) = context {
                 if let Some(obj) = ctx.as_object() {
                     for (key, value) in obj {
@@ -314,14 +293,53 @@ fn send_envelope_to_sentry(envelope: &Value, hub: &sentry::Hub) -> bool {
                 }
             }
 
-            event.extra = extra;
+            json!({
+                "message": format!("Performance: {} ({}ms)", operation, duration_ms),
+                "level": "info",
+                "timestamp": timestamp,
+                "platform": "other",
+                "tags": tags,
+                "extra": extra,
+                "release": format!("git-ai@{}", env!("CARGO_PKG_VERSION")),
+            })
+        }
+        Some("message") => {
+            let message = envelope
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown message");
+            let level = envelope
+                .get("level")
+                .and_then(|l| l.as_str())
+                .unwrap_or("info");
+            let context = envelope.get("context");
 
-            hub.capture_event(event);
-            true
+            let mut extra = BTreeMap::new();
+            if let Some(ctx) = context {
+                if let Some(obj) = ctx.as_object() {
+                    for (key, value) in obj {
+                        extra.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+
+            json!({
+                "message": message,
+                "level": level,
+                "timestamp": timestamp,
+                "platform": "other",
+                "tags": tags,
+                "extra": extra,
+                "release": format!("git-ai@{}", env!("CARGO_PKG_VERSION")),
+            })
         }
         _ => {
-            debug_log(&format!("Unknown event type: {:?}", event_type));
-            false
+            return false;
         }
+    };
+
+    match client.send_event(event) {
+        Ok(_) => true,
+        Err(_) => false,
     }
 }
