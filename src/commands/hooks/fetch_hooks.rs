@@ -13,6 +13,8 @@ pub fn fetch_pull_pre_command_hook(
         return None;
     }
 
+    crate::observability::spawn_background_flush();
+
     // Extract the remote name
     let remote = match fetch_remote_from_args(repository, parsed_args) {
         Ok(remote) => remote,

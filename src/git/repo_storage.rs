@@ -24,6 +24,7 @@ pub struct RepoStorage {
     pub repo_path: PathBuf,
     pub working_logs: PathBuf,
     pub rewrite_log: PathBuf,
+    pub logs: PathBuf,
 }
 
 impl RepoStorage {
@@ -31,11 +32,13 @@ impl RepoStorage {
         let ai_dir = repo_path.join("ai");
         let working_logs_dir = ai_dir.join("working_logs");
         let rewrite_log_file = ai_dir.join("rewrite_log");
+        let logs_dir = ai_dir.join("logs");
 
         let config = RepoStorage {
             repo_path: repo_path.to_path_buf(),
             working_logs: working_logs_dir,
             rewrite_log: rewrite_log_file,
+            logs: logs_dir,
         };
 
         // @todo - @acunniffe, make this lazy on a read or write.
@@ -52,6 +55,9 @@ impl RepoStorage {
 
         // Create working_logs directory
         fs::create_dir_all(&self.working_logs)?;
+
+        // Create logs directory for Sentry events
+        fs::create_dir_all(&self.logs)?;
 
         if !&self.rewrite_log.exists() && !&self.rewrite_log.is_file() {
             fs::write(&self.rewrite_log, "")?;

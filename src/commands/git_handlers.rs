@@ -9,6 +9,8 @@ use crate::config;
 use crate::git::cli_parser::{ParsedGitInvocation, parse_git_cli_args};
 use crate::git::find_repository;
 use crate::git::repository::Repository;
+use crate::observability;
+use crate::observability::log_usage_event;
 
 use crate::utils::Timer;
 use crate::utils::debug_log;
@@ -86,10 +88,14 @@ pub fn handle_git(args: &[String]) {
 
     let has_repo = repository_option.is_some();
 
-    // println!("command: {:?}", parsed_args.command);
-    // println!("global_args: {:?}", parsed_args.global_args);
-    // println!("command_args: {:?}", parsed_args.command_args);
-    // println!("to_invocation_vec: {:?}", parsed_args.to_invocation_vec());
+    if let Some(repo) = repository_option.as_ref() {
+        let remotes = repo.remotes_with_urls_cached().ok().unwrap_or_default();
+
+        observability::set_repo_context(
+            repo,
+            remotes.iter().map(|(_, url)| url.as_str()).collect(),
+        );
+    }
 
     let config = config::Config::get();
 

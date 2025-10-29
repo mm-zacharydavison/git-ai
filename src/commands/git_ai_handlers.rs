@@ -11,7 +11,7 @@ use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
-use crate::utils::{Timer, debug_log};
+use crate::utils::Timer;
 use std::env;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -79,6 +79,9 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "ci" => {
             commands::ci_handlers::handle_ci(&args[1..]);
+        }
+        "flush-logs" => {
+            commands::flush_logs::handle_flush_logs(&args[1..]);
         }
         _ => {
             println!("Unknown git-ai command: {}", args[0]);

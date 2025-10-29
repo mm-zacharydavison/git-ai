@@ -52,6 +52,8 @@ pub fn push_pre_command_hook(
         // Clone what we need for the background thread
         let global_args = repository.global_args_for_exec();
 
+        crate::observability::spawn_background_flush();
+
         // Spawn background thread to push authorship notes in parallel with main push
         Some(std::thread::spawn(move || {
             // Recreate repository in the background thread

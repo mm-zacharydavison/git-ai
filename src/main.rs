@@ -4,9 +4,11 @@ mod commands;
 mod config;
 mod error;
 mod git;
+mod observability;
 mod utils;
 
 use clap::Parser;
+use git_ai::observability::log_usage_event;
 
 use crate::utils::Timer;
 
@@ -22,6 +24,14 @@ struct Cli {
 
 fn main() {
     _ = Timer::default();
+
+    log_usage_event(
+        "using it",
+        serde_json::json!({
+            "command": "main",
+            "args": std::env::args().collect::<Vec<String>>(),
+        }),
+    );
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
