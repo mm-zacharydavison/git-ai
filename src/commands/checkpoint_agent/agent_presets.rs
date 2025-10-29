@@ -196,21 +196,33 @@ impl AgentCheckpointPreset for CursorPreset {
         }
 
         // Fetch the composer data and extract transcript + model + edited filepaths
-        let payload = Self::fetch_composer_payload(&global_db, &conversation_id)?;
-        let (transcript, model) = Self::transcript_data_from_composer_payload(
-            &payload,
-            &global_db,
-            &conversation_id,
-        )?
-        .unwrap_or_else(|| {
-            // Return empty transcript as default
-            // There's a race condition causing new threads to sometimes not show up.
-            // We refresh and grab all the messages in post-commit so we're ok with returning an empty (placeholder) transcript here and not throwing
-            println!(
-                "[Warning] Could not extract transcript from Cursor composer. Retrying at commit."
-            );
-            (AiTranscript::new(), "unknown".to_string())
-        });
+        let (transcript, model) = match Self::fetch_composer_payload(&global_db, &conversation_id)
+        {
+            Ok(payload) => Self::transcript_data_from_composer_payload(
+                &payload,
+                &global_db,
+                &conversation_id,
+            )?
+            .unwrap_or_else(|| {
+                // Return empty transcript as default
+                // There's a race condition causing new threads to sometimes not show up.
+                // We refresh and grab all the messages in post-commit so we're ok with returning an empty (placeholder) transcript here and not throwing
+                eprintln!(
+                    "[Warning] Could not extract transcript from Cursor composer. Retrying at commit."
+                );
+                (AiTranscript::new(), "unknown".to_string())
+            }),
+            Err(GitAiError::PresetError(msg))
+                if msg == "No conversation data found in database" =>
+            {
+                // Gracefully continue when the conversation hasn't been written yet due to Cursor race conditions
+                eprintln!(
+                    "[Warning] No conversation data found in Cursor DB for this thread. Proceeding and will re-sync at commit."
+                );
+                (AiTranscript::new(), "unknown".to_string())
+            }
+            Err(e) => return Err(e),
+        };
 
         // Extract edited filepaths
         let mut edited_filepaths: Option<Vec<String>> = None;
