@@ -296,11 +296,6 @@ impl VirtualAttributions {
         pathspecs: &[String],
         human_author: Option<String>,
     ) -> Result<Self, GitAiError> {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-
         // Step 1: Build base VirtualAttributions using blame (gets ALL prompts from history)
         let blame_va =
             Self::new_for_base_commit(repo.clone(), base_commit.clone(), pathspecs).await?;
@@ -405,7 +400,7 @@ impl VirtualAttributions {
             attributions: checkpoint_attributions,
             file_contents: checkpoint_file_contents.clone(),
             prompts: checkpoint_prompts.clone(),
-            ts,
+            ts: 0,
         };
 
         // Merge: checkpoint VA (primary) wins over blame VA (secondary) for overlaps
