@@ -251,7 +251,7 @@ impl GitHubTestRepo {
 
     /// Wait for GitHub Actions workflow runs to complete for a specific PR
     /// Returns an error if any workflow fails
-    pub fn wait_for_workflows(&self, pr_number: &str, timeout_seconds: u64) -> Result<(), String> {
+    pub fn wait_for_workflows(&self, _pr_number: &str, timeout_seconds: u64) -> Result<(), String> {
         let repo_path = self.repo.path();
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
 
@@ -266,12 +266,11 @@ impl GitHubTestRepo {
                 return Err(format!("Timeout waiting for workflows to complete after {}s", timeout_seconds));
             }
 
-            // Get workflow runs for the PR
+            // Get all workflow runs for the repository
             let output = Command::new("gh")
                 .args(&[
                     "run", "list",
                     "--repo", &full_repo,
-                    "--pr", pr_number,
                     "--json", "status,conclusion,name,databaseId",
                     "--limit", "10"
                 ])

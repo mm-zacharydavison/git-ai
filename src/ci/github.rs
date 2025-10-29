@@ -76,7 +76,7 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
         "clone".to_string(),
         "--branch".to_string(),
         base_ref.clone(),
-        authenticated_url,
+        authenticated_url.clone(),
         clone_dir.clone(),
     ])?;
 
@@ -88,7 +88,7 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
         "-C".to_string(),
         clone_dir.clone(),
         "fetch".to_string(),
-        "origin".to_string(),
+        authenticated_url.clone(),
         format!("pull/{}/head:refs/github/pr/{}", pr_number, pr_number),
     ])?;
 
