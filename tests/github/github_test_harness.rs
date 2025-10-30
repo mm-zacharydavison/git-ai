@@ -200,6 +200,156 @@ impl GitHubTestRepo {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// Install the GitHub CI workflow in the repository
+    pub fn install_github_ci_workflow(&self) -> Result<(), String> {
+        // Use git-ai to install the workflow
+        let output = self.repo.git_ai(&["ci", "github", "install"])
+            .map_err(|e| format!("Failed to install CI workflow: {}", e))?;
+
+        println!("✅ Installed GitHub CI workflow");
+        println!("{}", output);
+
+        // Commit and push the workflow file
+        self.repo.git(&["add", ".github/workflows/git-ai.yaml"])
+            .map_err(|e| format!("Failed to add workflow file: {}", e))?;
+
+        self.repo.git(&["commit", "-m", "Add git-ai CI workflow"])
+            .map_err(|e| format!("Failed to commit workflow: {}", e))?;
+
+        self.repo.git(&["push"])
+            .map_err(|e| format!("Failed to push workflow: {}", e))?;
+
+        println!("✅ Committed and pushed CI workflow");
+        Ok(())
+    }
+
+    /// Get the logs for a specific workflow run
+    pub fn get_workflow_logs(&self, run_id: &str) -> Result<String, String> {
+        let repo_path = self.repo.path();
+        let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
+
+        let output = Command::new("gh")
+            .args(&[
+                "run", "view",
+                run_id,
+                "--repo", &full_repo,
+                "--log"
+            ])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| format!("Failed to get workflow logs: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to get workflow logs:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Wait for GitHub Actions workflow runs to complete for a specific PR
+    /// Returns an error if any workflow fails
+    pub fn wait_for_workflows(&self, timeout_seconds: u64) -> Result<(), String> {
+        let repo_path = self.repo.path();
+        let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
+
+        println!("⏳ Waiting for GitHub Actions workflows to complete (timeout: {}s)...", timeout_seconds);
+
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let timeout = Duration::from_secs(timeout_seconds);
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(format!("Timeout waiting for workflows to complete after {}s", timeout_seconds));
+            }
+
+            // Get all workflow runs for the repository
+            let output = Command::new("gh")
+                .args(&[
+                    "run", "list",
+                    "--repo", &full_repo,
+                    "--json", "status,conclusion,name,databaseId",
+                    "--limit", "10"
+                ])
+                .current_dir(repo_path)
+                .output()
+                .map_err(|e| format!("Failed to list workflow runs: {}", e))?;
+
+            if !output.status.success() {
+                return Err(format!(
+                    "Failed to list workflow runs:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+
+            let runs_json = String::from_utf8_lossy(&output.stdout);
+            let runs: Vec<serde_json::Value> = serde_json::from_str(&runs_json)
+                .map_err(|e| format!("Failed to parse workflow runs JSON: {}", e))?;
+
+            // Check if there are any runs
+            if runs.is_empty() {
+                println!("   No workflow runs found yet, waiting...");
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+
+            // Check status of all runs
+            let mut all_completed = true;
+            let mut any_failed = false;
+            let mut failed_run_ids = Vec::new();
+
+            for run in &runs {
+                let status = run["status"].as_str().unwrap_or("unknown");
+                let name = run["name"].as_str().unwrap_or("unknown");
+                let run_id = run["databaseId"].as_u64().unwrap_or(0);
+
+                if status != "completed" {
+                    all_completed = false;
+                    println!("   Workflow '{}': {}", name, status);
+                }
+
+                if status == "completed" {
+                    let conclusion = run["conclusion"].as_str().unwrap_or("unknown");
+                    if conclusion != "success" {
+                        any_failed = true;
+                        failed_run_ids.push(run_id.to_string());
+                        println!("   ❌ Workflow '{}' failed with conclusion: {}", name, conclusion);
+                    } else {
+                        println!("   ✅ Workflow '{}' completed successfully", name);
+                    }
+                }
+            }
+
+            if all_completed {
+                if any_failed {
+                    // Fetch and display logs for failed workflows
+                    for run_id in &failed_run_ids {
+                        println!("\n📋 Logs for failed workflow run {}:", run_id);
+                        match self.get_workflow_logs(run_id) {
+                            Ok(logs) => {
+                                // Print last 100 lines of logs
+                                let lines: Vec<&str> = logs.lines().collect();
+                                let start_line = if lines.len() > 100 { lines.len() - 100 } else { 0 };
+                                for line in &lines[start_line..] {
+                                    println!("{}", line);
+                                }
+                            }
+                            Err(e) => println!("Failed to fetch logs: {}", e)
+                        }
+                    }
+                    return Err("One or more workflows failed".to_string());
+                }
+                println!("✅ All workflows completed successfully");
+                return Ok(());
+            }
+
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    }
+
     /// Checkout default branch and pull latest changes from remote
     pub fn checkout_and_pull_default_branch(&self) -> Result<(), String> {
         let default_branch = self.get_default_branch()?;
