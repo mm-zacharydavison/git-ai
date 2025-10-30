@@ -53,6 +53,7 @@ impl AttestationEntry {
         Self { hash, line_ranges }
     }
 
+    #[allow(dead_code)]
     pub fn remove_line_ranges(&mut self, to_remove: &[LineRange]) {
         let mut current_ranges = self.line_ranges.clone();
 
@@ -68,6 +69,7 @@ impl AttestationEntry {
     }
 
     /// Shift line ranges by a given offset starting at insertion_point
+    #[allow(dead_code)]
     pub fn shift_line_ranges(&mut self, insertion_point: u32, offset: i32) {
         let mut shifted_ranges = Vec::new();
         for range in &self.line_ranges {
@@ -256,11 +258,11 @@ impl AuthorshipLog {
         session_deletions: &mut HashMap<String, u32>,
     ) {
         // Register/update session in prompts metadata (if AI checkpoint)
-        let session_id_opt = match (&checkpoint.agent_id, &checkpoint.transcript) {
-            (Some(agent), Some(transcript)) => {
+        let session_id_opt = match &checkpoint.agent_id {
+            Some(agent) => {
                 let session_id = generate_short_hash(&agent.id, &agent.tool);
 
-                // Insert or update prompt record with latest transcript
+                // Insert or update prompt record
                 let entry =
                     self.metadata
                         .prompts
@@ -268,16 +270,22 @@ impl AuthorshipLog {
                         .or_insert(PromptRecord {
                             agent_id: agent.clone(),
                             human_author: human_author.map(|s| s.to_string()),
-                            messages: transcript.messages().to_vec(),
+                            messages: checkpoint
+                                .transcript
+                                .as_ref()
+                                .map(|t| t.messages().to_vec())
+                                .unwrap_or_default(),
                             total_additions: 0,
                             total_deletions: 0,
                             accepted_lines: 0,
                             overriden_lines: 0,
                         });
 
-                // Keep the longest/latest transcript
-                if entry.messages.len() < transcript.messages().len() {
-                    entry.messages = transcript.messages().to_vec();
+                // Update transcript if provided and longer than existing
+                if let Some(transcript) = &checkpoint.transcript {
+                    if entry.messages.len() < transcript.messages().len() {
+                        entry.messages = transcript.messages().to_vec();
+                    }
                 }
 
                 Some(session_id)
@@ -410,9 +418,21 @@ impl AuthorshipLog {
         checkpoints: &[crate::authorship::working_log::Checkpoint],
         base_commit_sha: &str,
         human_author: Option<&str>,
+        working_log: Option<&crate::git::repo_storage::PersistedWorkingLog>,
     ) -> Self {
         let mut authorship_log = Self::new();
         authorship_log.metadata.base_commit_sha = base_commit_sha.to_string();
+
+        // Load prompts from working log if available
+        if let Some(wl) = working_log {
+            let initial_data = wl.read_initial_attributions();
+            for (author_id, prompt_record) in initial_data.prompts {
+                authorship_log
+                    .metadata
+                    .prompts
+                    .insert(author_id, prompt_record);
+            }
+        }
 
         // Track additions and deletions per session_id
         let mut session_additions: HashMap<String, u32> = HashMap::new();
@@ -1334,6 +1354,7 @@ mod tests {
             &[checkpoint1, checkpoint2],
             "base123",
             None,
+            None,
         );
 
         // Get the prompt record
@@ -1507,6 +1528,7 @@ mod tests {
             &[checkpoint1, checkpoint2],
             "base123",
             Some("human@example.com"),
+            None,
         );
 
         // Get the prompt record

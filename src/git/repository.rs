@@ -47,6 +47,7 @@ pub struct CommitRange<'a> {
 }
 
 impl<'a> CommitRange<'a> {
+    #[allow(dead_code)]
     pub fn new(
         repo: &'a Repository,
         start_oid: String,
@@ -176,6 +177,7 @@ impl<'a> CommitRange<'a> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn length(&self) -> usize {
         // Use git rev-list --count to get the number of commits between start and end
         // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
@@ -260,13 +262,16 @@ impl<'a> Iterator for CommitRangeIterator<'a> {
 pub struct Signature<'a> {
     #[allow(dead_code)]
     repo: &'a Repository,
+    #[allow(dead_code)]
     name: String,
+    #[allow(dead_code)]
     email: String,
     time_iso8601: String,
 }
 
 pub struct Time {
     seconds: i64,
+    #[allow(dead_code)]
     offset_minutes: i32,
 }
 
@@ -275,12 +280,14 @@ impl Time {
         self.seconds
     }
 
+    #[allow(dead_code)]
     pub fn offset_minutes(&self) -> i32 {
         self.offset_minutes
     }
 }
 
 impl<'a> Signature<'a> {
+    #[allow(dead_code)]
     pub fn name(&self) -> Option<&str> {
         if self.name.is_empty() {
             None
@@ -289,6 +296,7 @@ impl<'a> Signature<'a> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn email(&self) -> Option<&str> {
         if self.email.is_empty() {
             None
@@ -319,6 +327,7 @@ impl<'a> Signature<'a> {
 pub struct Commit<'a> {
     repo: &'a Repository,
     oid: String,
+    #[allow(dead_code)]
     authorship_log: std::cell::OnceCell<AuthorshipLog>,
 }
 
@@ -400,6 +409,7 @@ impl<'a> Commit<'a> {
     }
 
     // Get the author of this commit.
+    #[allow(dead_code)]
     pub fn author(&self) -> Result<Signature<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("show".to_string());
@@ -453,13 +463,83 @@ impl<'a> Commit<'a> {
     }
 
     // lazy load the authorship log
+    #[allow(dead_code)]
     pub fn authorship(&self) -> &AuthorshipLog {
         self.authorship_log.get_or_init(|| {
             get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
         })
     }
+    #[allow(dead_code)]
     pub fn authorship_uncached(&self) -> AuthorshipLog {
         get_authorship(self.repo, self.oid.as_str()).unwrap_or_else(|| AuthorshipLog::new())
+    }
+
+    /// Find the first parent that exists on the specified refname
+    ///
+    /// This is useful for merge commits where we want to find the parent on a specific branch
+    /// (e.g., main) rather than just taking the first parent, which might not be correct in
+    /// complex merge histories with back-and-forth merges.
+    ///
+    /// # Arguments
+    /// * `refname` - The reference name to search for (e.g., "main", "refs/heads/main")
+    ///
+    /// # Returns
+    /// The first parent commit that is reachable from the specified refname
+    pub fn parent_on_refname(&self, refname: &str) -> Result<Commit<'a>, GitAiError> {
+        // Normalize the refname to fully qualified form
+        let fq_refname = {
+            let mut rp_args = self.repo.global_args_for_exec();
+            rp_args.push("rev-parse".to_string());
+            rp_args.push("--verify".to_string());
+            rp_args.push("--symbolic-full-name".to_string());
+            rp_args.push(refname.to_string());
+
+            match exec_git(&rp_args) {
+                Ok(output) => {
+                    let s = String::from_utf8(output.stdout).unwrap_or_default();
+                    let s = s.trim();
+                    if s.is_empty() {
+                        if refname.starts_with("refs/") {
+                            refname.to_string()
+                        } else {
+                            format!("refs/heads/{}", refname)
+                        }
+                    } else {
+                        s.to_string()
+                    }
+                }
+                Err(_) => {
+                    if refname.starts_with("refs/") {
+                        refname.to_string()
+                    } else {
+                        format!("refs/heads/{}", refname)
+                    }
+                }
+            }
+        };
+
+        // Iterate through parents and find the first one that's on the refname
+        for parent in self.parents() {
+            let parent_sha = parent.id();
+
+            // Check if this parent is an ancestor of the refname
+            // git merge-base --is-ancestor <parent> <refname>
+            let mut args = self.repo.global_args_for_exec();
+            args.push("merge-base".to_string());
+            args.push("--is-ancestor".to_string());
+            args.push(parent_sha.clone());
+            args.push(fq_refname.clone());
+
+            if exec_git(&args).is_ok() {
+                return Ok(parent);
+            }
+        }
+
+        // If no parent is on the refname, return an error
+        Err(GitAiError::Generic(format!(
+            "No parent of commit {} is reachable from refname {}",
+            self.oid, refname
+        )))
     }
 }
 
@@ -497,6 +577,7 @@ impl<'a> Tree<'a> {
         self.oid.clone()
     }
 
+    #[allow(dead_code)]
     pub fn clone(&self) -> Tree<'a> {
         Tree {
             repo: self.repo,
@@ -930,6 +1011,7 @@ impl Repository {
         })
     }
 
+    #[allow(dead_code)]
     pub fn remote_head(&self, remote_name: &str) -> Result<String, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("symbolic-ref".to_string());
@@ -965,6 +1047,7 @@ impl Repository {
     }
 
     // Merge two trees, producing an index that reflects the result of the merge. The index may be written as-is to the working directory or checked out. If the index is to be converted to a tree, the caller should resolve any conflicts that arose as part of the merge.
+    #[allow(dead_code)]
     pub fn merge_trees_favor_ours(
         &self,
         ancestor_tree: &Tree<'_>,
@@ -983,6 +1066,7 @@ impl Repository {
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
+    #[allow(dead_code)]
     pub fn commit_range_on_branch(
         &self,
         branch_refname: &str,
@@ -1091,7 +1175,8 @@ impl Repository {
         )?)
     }
 
-    // Create new commit in the repository If the update_ref is not None, name of the reference that will be updated to point to this commit. If the reference is not direct, it will be resolved to a direct reference. Use “HEAD” to update the HEAD of the current branch and make it point to this commit. If the reference doesn’t exist yet, it will be created. If it does exist, the first parent must be the tip of this branch.
+    // Create new commit in the repository If the update_ref is not None, name of the reference that will be updated to point to this commit. If the reference is not direct, it will be resolved to a direct reference. Use "HEAD" to update the HEAD of the current branch and make it point to this commit. If the reference doesn't exist yet, it will be created. If it does exist, the first parent must be the tip of this branch.
+    #[allow(dead_code)]
     pub fn commit(
         &self,
         update_ref: Option<&str>,
@@ -1246,6 +1331,7 @@ impl Repository {
         fetch_authorship_notes(self, remote_name)
     }
 
+    #[allow(dead_code)]
     pub fn push_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
         push_authorship_notes(self, remote_name)
     }
@@ -1376,6 +1462,53 @@ impl Repository {
         Ok(output.stdout)
     }
 
+    /// Get content of all staged files concurrently
+    /// Returns a HashMap of file paths to their staged content as strings
+    /// Skips files that fail to read or aren't valid UTF-8
+    pub fn get_all_staged_files_content(
+        &self,
+        file_paths: &[String],
+    ) -> Result<HashMap<String, String>, GitAiError> {
+        use futures::future::join_all;
+        use std::sync::Arc;
+
+        const MAX_CONCURRENT: usize = 30;
+
+        let repo_global_args = self.global_args_for_exec();
+        let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
+
+        let futures: Vec<_> = file_paths
+            .iter()
+            .map(|file_path| {
+                let mut args = repo_global_args.clone();
+                args.push("show".to_string());
+                args.push(format!(":{}", file_path));
+                let file_path = file_path.clone();
+                let semaphore = semaphore.clone();
+
+                async move {
+                    let _permit = semaphore.acquire().await;
+                    let result = exec_git(&args).and_then(|output| {
+                        String::from_utf8(output.stdout)
+                            .map_err(|e| GitAiError::Utf8Error(e.utf8_error()))
+                    });
+                    (file_path, result)
+                }
+            })
+            .collect();
+
+        let results = smol::block_on(async { join_all(futures).await });
+
+        let mut staged_files = HashMap::new();
+        for (file_path, result) in results {
+            if let Ok(content) = result {
+                staged_files.insert(file_path, content);
+            }
+        }
+
+        Ok(staged_files)
+    }
+
     /// List all files changed in a commit
     /// Returns a HashSet of file paths relative to the repository root
     pub fn list_commit_files(
@@ -1451,6 +1584,31 @@ impl Repository {
         let diff_output = String::from_utf8(output.stdout)?;
 
         parse_diff_added_lines(&diff_output)
+    }
+
+    /// Get list of changed files between two refs using `git diff --name-only`
+    /// Returns a Vec of file paths that differ between the two refs
+    pub fn diff_changed_files(
+        &self,
+        from_ref: &str,
+        to_ref: &str,
+    ) -> Result<Vec<String>, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("diff".to_string());
+        args.push("--name-only".to_string());
+        args.push(from_ref.to_string());
+        args.push(to_ref.to_string());
+
+        let output = exec_git(&args)?;
+        let stdout = String::from_utf8(output.stdout)?;
+
+        let files: Vec<String> = stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| line.to_string())
+            .collect();
+
+        Ok(files)
     }
 
     /// Get added line ranges from git diff between a commit and the working directory
@@ -1579,6 +1737,7 @@ pub fn exec_git_stdin(args: &[String], stdin_data: &[u8]) -> Result<Output, GitA
 }
 
 /// Helper to execute a git command with data provided on stdin and additional environment variables
+#[allow(dead_code)]
 pub fn exec_git_stdin_with_env(
     args: &[String],
     env: &Vec<(String, String)>,

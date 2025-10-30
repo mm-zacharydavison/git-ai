@@ -120,6 +120,7 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                         &checkpoints,
                         commit_hash,
                         None,
+                        None,
                     );
 
                 // Serialize the authorship log

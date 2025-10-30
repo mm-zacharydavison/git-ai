@@ -44,6 +44,7 @@ pub fn post_commit(
         &filtered_working_log,
         &parent_sha,
         Some(&human_author),
+        Some(&working_log),
     );
 
     // Filter the authorship log to only include committed lines
