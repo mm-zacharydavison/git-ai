@@ -279,7 +279,7 @@ fn check_for_updates_with_url(api_base_url: Option<&str>) {
             current_version, latest_version
         );
         eprintln!(
-            "\x1b[1;33mRun \x1b[1;36mgit-ai upgrade\x1b[0m \x1b[1;33mfor more info\x1b[0m"
+            "\x1b[1;33mRun \x1b[1;36mgit-ai upgrade\x1b[0m \x1b[1;33mto upgrade to the latest version.\x1b[0m"
         );
         eprintln!();
     }
