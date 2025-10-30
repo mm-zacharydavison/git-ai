@@ -8,3 +8,4 @@ pub mod hooks;
 pub mod install_hooks;
 pub mod squash_authorship;
 pub mod stats_delta;
+pub mod upgrade;

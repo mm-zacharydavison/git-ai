@@ -22,6 +22,9 @@ struct Cli {
 
 fn main() {
     _ = Timer::default();
+
+    commands::upgrade::check_for_updates();
+
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
