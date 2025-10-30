@@ -1,10 +1,11 @@
 use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
-use crate::authorship::working_log::CheckpointKind;
+use crate::authorship::attribution_tracker::LineAttribution;
+use crate::authorship::working_log::{Checkpoint, CheckpointKind};
 use crate::config;
 use crate::git::repository::Repository;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -245,6 +246,56 @@ impl AuthorshipLog {
         }
     }
 
+    fn collect_latest_line_attributions(
+        checkpoints: &[Checkpoint],
+    ) -> HashMap<String, Vec<LineAttribution>> {
+        let mut latest_by_file: HashMap<String, Vec<LineAttribution>> = HashMap::new();
+
+        for checkpoint in checkpoints {
+            for entry in &checkpoint.entries {
+                latest_by_file
+                    .insert(entry.file.clone(), entry.line_attributions.clone());
+            }
+        }
+
+        latest_by_file
+    }
+
+    fn calculate_overridden_lines_for_attestation(
+        attestation_entry: &AttestationEntry,
+        line_attributions: &[LineAttribution],
+    ) -> u32 {
+        if attestation_entry.line_ranges.is_empty() {
+            return 0;
+        }
+
+        let mut overridden_lines: HashSet<u32> = HashSet::new();
+
+        for attribution in line_attributions {
+            if attribution.author_id != attestation_entry.hash || !attribution.overridden {
+                continue;
+            }
+
+            for range in &attestation_entry.line_ranges {
+                let (range_start, range_end) = match range {
+                    LineRange::Single(line) => (*line, *line),
+                    LineRange::Range(start, end) => (*start, *end),
+                };
+
+                let overlap_start = attribution.start_line.max(range_start);
+                let overlap_end = attribution.end_line.min(range_end);
+
+                if overlap_start <= overlap_end {
+                    for line in overlap_start..=overlap_end {
+                        overridden_lines.insert(line);
+                    }
+                }
+            }
+        }
+
+        overridden_lines.len() as u32
+    }
+
     /// Apply a single checkpoint to this authorship log
     ///
     /// This method processes one checkpoint and updates the authorship log accordingly.
@@ -342,6 +393,7 @@ impl AuthorshipLog {
     /// - Updates all PromptRecords with final metrics
     pub fn finalize(
         &mut self,
+        checkpoints: &[Checkpoint],
         session_additions: &HashMap<String, u32>,
         session_deletions: &HashMap<String, u32>,
     ) {
@@ -389,6 +441,8 @@ impl AuthorshipLog {
             file_attestation.entries = consolidated_entries;
         }
 
+        let latest_line_attributions = Self::collect_latest_line_attributions(checkpoints);
+
         // Calculate accepted_lines for each session from the final attestation log
         let mut session_accepted_lines: HashMap<String, u32> = HashMap::new();
         for file_attestation in &self.attestations {
@@ -404,12 +458,33 @@ impl AuthorshipLog {
             }
         }
 
+        let mut session_overridden_lines: HashMap<String, u32> = HashMap::new();
+        for file_attestation in &self.attestations {
+            if let Some(line_attributions) =
+                latest_line_attributions.get(&file_attestation.file_path)
+            {
+                for attestation_entry in &file_attestation.entries {
+                    let overridden_count = Self::calculate_overridden_lines_for_attestation(
+                        attestation_entry,
+                        line_attributions,
+                    );
+                    if overridden_count > 0 {
+                        session_overridden_lines
+                            .entry(attestation_entry.hash.clone())
+                            .and_modify(|count| *count += overridden_count)
+                            .or_insert(overridden_count);
+                    }
+                }
+            }
+        }
+
         // Update all PromptRecords with the calculated metrics
         for (session_id, prompt_record) in self.metadata.prompts.iter_mut() {
             prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
             prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
             prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
-            // overriden_lines is calculated and accumulated in apply_checkpoint, don't reset it here
+            prompt_record.overriden_lines =
+                *session_overridden_lines.get(session_id).unwrap_or(&0);
         }
     }
 
@@ -449,7 +524,7 @@ impl AuthorshipLog {
         }
 
         // Finalize the log (cleanup, consolidate, metrics)
-        authorship_log.finalize(&session_additions, &session_deletions);
+        authorship_log.finalize(checkpoints, &session_additions, &session_deletions);
 
         // If prompts should be ignored, clear the transcripts but keep the prompt records
         let ignore_prompts: bool = config::Config::get().get_ignore_prompts();
@@ -1539,6 +1614,8 @@ mod tests {
         assert_eq!(prompt_record.total_deletions, 0); // AI didn't delete anything
         // accepted_lines: lines 1, 2, 3 = 3 lines (after human deletion of original lines 2-3)
         assert_eq!(prompt_record.accepted_lines, 3);
+        // overridden_lines: lines 1-3 are marked overridden in latest checkpoint
+        assert_eq!(prompt_record.overriden_lines, 3);
     }
 
     #[test]
