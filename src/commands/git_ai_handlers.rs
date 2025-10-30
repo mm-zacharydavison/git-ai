@@ -310,7 +310,9 @@ fn handle_checkpoint(args: &[String]) {
         }
     };
 
-    if let Err(e) = commands::checkpoint::run(
+    let checkpoint_start = std::time::Instant::now();
+    let agent_tool = agent_run_result.as_ref().map(|r| r.agent_id.tool.clone());
+    let checkpoint_result = commands::checkpoint::run(
         &repo,
         &default_user_name,
         checkpoint_kind,
@@ -318,9 +320,23 @@ fn handle_checkpoint(args: &[String]) {
         reset,
         false,
         agent_run_result,
-    ) {
-        eprintln!("Checkpoint failed: {}", e);
-        std::process::exit(1);
+    );
+    match checkpoint_result {
+        Ok((_, files_edited, _)) => {
+            let elapsed = checkpoint_start.elapsed();
+            eprintln!("Checkpoint completed in {:?}", elapsed);
+        }
+        Err(e) => {
+            let elapsed = checkpoint_start.elapsed();
+            eprintln!("Checkpoint failed after {:?} with error {}", elapsed, e);
+            let context = serde_json::json!({
+                "function": "checkpoint",
+                "agent": agent_tool.unwrap_or_default(),
+                "checkpoint_kind": format!("{:?}", checkpoint_kind)
+            });
+            observability::log_error(&e, Some(context));
+            std::process::exit(1);
+        }
     }
 }
 

@@ -50,3 +50,13 @@ pub fn log_performance_target_if_violated(
         ));
     }
 }
+
+pub fn log_performance_for_checkpoint(files_edited: usize, duration: Duration) {
+    log_performance(
+        "checkpoint",
+        duration,
+        Some(json!({
+            "command": command,
+        })),
+    );
+}
