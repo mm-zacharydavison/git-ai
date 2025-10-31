@@ -223,7 +223,6 @@ impl PersistedWorkingLog {
     /// Write initial attributions to the INITIAL file.
     /// This seeds the working log with known attributions from rewrite operations.
     /// Only writes files that have non-empty attributions.
-    #[allow(dead_code)]
     pub fn write_initial_attributions(
         &self,
         attributions: HashMap<String, Vec<LineAttribution>>,

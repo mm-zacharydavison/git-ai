@@ -731,7 +731,7 @@ impl VirtualAttributions {
                                 start_line: range_start,
                                 end_line: range_end,
                                 author_id: author_id.clone(),
-                                overridden: false,
+                                overrode: None,
                             });
                             range_start = line;
                             range_end = line;
@@ -743,7 +743,7 @@ impl VirtualAttributions {
                         start_line: range_start,
                         end_line: range_end,
                         author_id: author_id.clone(),
-                        overridden: false,
+                        overrode: None,
                     });
                 }
 
@@ -975,7 +975,7 @@ fn compute_attributions_for_file(
                     start_line: line,
                     end_line: line,
                     author_id: author.clone(),
-                    overridden: false,
+                    overrode: None,
                 });
             }
 
@@ -1019,5 +1019,66 @@ fn get_file_content_at_commit(
             }
         }
         Err(_) => Ok(String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_virtual_attributions() {
+        let repo = crate::git::find_repository_in_path(".").unwrap();
+
+        let virtual_attributions = smol::block_on(async {
+            VirtualAttributions::new_for_base_commit(
+                repo,
+                "5753483e6a8d0024dacfc6eaab8b8f5b2f2301c5".to_string(),
+                &["src/utils.rs".to_string()],
+            )
+            .await
+        })
+        .unwrap();
+
+        println!(
+            "virtual_attributions files: {:?}",
+            virtual_attributions.files()
+        );
+        println!("base_commit: {}", virtual_attributions.base_commit());
+        println!("timestamp: {}", virtual_attributions.timestamp());
+
+        if let Some((char_attrs, line_attrs)) =
+            virtual_attributions.get_attributions("src/utils.rs")
+        {
+            println!("\n=== src/utils.rs Attribution Info ===");
+            println!("Character-level attributions: {} ranges", char_attrs.len());
+            for (i, attr) in char_attrs.iter().enumerate() {
+                println!(
+                    "  [{}] chars {}..{} (len={}) -> author: '{}', ts: {}",
+                    i,
+                    attr.start,
+                    attr.end,
+                    attr.end - attr.start,
+                    attr.author_id,
+                    attr.ts
+                );
+            }
+
+            println!("\nLine-level attributions: {} ranges", line_attrs.len());
+            for (i, attr) in line_attrs.iter().enumerate() {
+                println!(
+                    "  [{}] lines {}..{} (count={}) -> author: '{}', overrode: {}",
+                    i,
+                    attr.start_line,
+                    attr.end_line,
+                    attr.line_count(),
+                    attr.author_id,
+                    format!("{:?}", attr.overrode)
+                );
+            }
+        }
+
+        assert!(!virtual_attributions.files().is_empty());
     }
 }
