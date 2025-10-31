@@ -949,6 +949,8 @@ fn find_dominant_author_for_line(
     full_content: &str,
 ) -> (String, Option<String>) {
     let (line_start, line_end) = boundaries.get_line_range(line_num).unwrap();
+    let line_content = &full_content[line_start..line_end];
+    let is_line_empty = line_content.is_empty() || line_content.chars().all(|c| c.is_whitespace());
 
     let mut candidate_attrs = Vec::new();
     for attribution in attributions {
@@ -959,8 +961,8 @@ fn find_dominant_author_for_line(
         // Get the substring of the content on this line that is covered by the attribution
         let content_slice = &full_content[std::cmp::max(line_start, attribution.start)
             ..std::cmp::min(line_end, attribution.end)];
-        let non_whitespace_count = content_slice.chars().filter(|c| !c.is_whitespace()).count();
-        if non_whitespace_count > 0 {
+        let attr_non_whitespace_count = content_slice.chars().filter(|c| !c.is_whitespace()).count();
+        if attr_non_whitespace_count > 0 || is_line_empty {
             candidate_attrs.push(attribution.clone());
         } else {
             // If the attribution is only whitespace, discard it
@@ -2305,15 +2307,17 @@ fn main() {
 
         let line_attrs = attributions_to_line_attributions(&attributions, content);
 
-        // Line 2 has only whitespace from Bob, which after trimming becomes empty and is ignored
-        // So line 2 should have no attribution, and we only get attributions for lines 1 and 3
-        assert_eq!(line_attrs.len(), 2);
+        // Ensure we retain expected attribution for empty lines
+        assert_eq!(line_attrs.len(), 3);
         assert_eq!(line_attrs[0].start_line, 1);
         assert_eq!(line_attrs[0].end_line, 1);
         assert_eq!(line_attrs[0].author_id, "Alice");
-        assert_eq!(line_attrs[1].start_line, 3);
-        assert_eq!(line_attrs[1].end_line, 3);
-        assert_eq!(line_attrs[1].author_id, "Charlie");
+        assert_eq!(line_attrs[1].start_line, 2);
+        assert_eq!(line_attrs[1].end_line, 2);
+        assert_eq!(line_attrs[1].author_id, "Bob");
+        assert_eq!(line_attrs[2].start_line, 3);
+        assert_eq!(line_attrs[2].end_line, 3);
+        assert_eq!(line_attrs[2].author_id, "Charlie");
     }
 
     #[test]
