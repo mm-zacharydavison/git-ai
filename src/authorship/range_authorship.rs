@@ -12,11 +12,11 @@ use crate::utils::debug_log;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RangeAuthorshipStats {
-    pub authorship_stats: AuthorshipStats,
+    pub authorship_stats: RangeAuthorshipStatsData,
     pub range_stats: CommitStats,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthorshipStats {
+pub struct RangeAuthorshipStatsData {
     pub total_commits: usize,
     pub commits_with_authorship: usize,
     pub authors_commiting_authorship: HashSet<String>,
@@ -107,7 +107,7 @@ pub fn range_authorship(
         calculate_range_stats_direct(repository, &start_sha, &end_sha, &commit_authorship)?;
 
     Ok(RangeAuthorshipStats {
-        authorship_stats: AuthorshipStats {
+        authorship_stats: RangeAuthorshipStatsData {
             total_commits: commit_authorship.len(),
             commits_with_authorship: commit_authorship
                 .iter()
@@ -251,11 +251,11 @@ fn calculate_range_stats_direct(
         mixed_additions: 0,
         ai_additions,
         ai_accepted,
+        total_ai_additions: 0,
+        total_ai_deletions: 0,
         time_waiting_for_ai: 0,
         git_diff_deleted_lines,
         git_diff_added_lines,
-        human_deletions: git_diff_deleted_lines,
-        ai_deletions: 0,
         tool_model_breakdown: std::collections::BTreeMap::new(),
     })
 }

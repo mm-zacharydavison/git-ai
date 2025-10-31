@@ -60,14 +60,21 @@ fn test_authorship_log_stats() {
 
     let mut stats = repo.git_ai(&["stats", "--json"]).unwrap();
     stats = stats.split("}}}").next().unwrap().to_string() + "}}}";
-    println!("{}", stats);
     let stats: CommitStats = serde_json::from_str(&stats).unwrap();
-    println!("{:?}", stats);
     assert_eq!(stats.human_additions, 4);
-    assert_eq!(stats.human_deletions, 0);
-    assert_eq!(stats.ai_additions, 8);
+    assert_eq!(stats.mixed_additions, 1);
+    assert_eq!(stats.ai_additions, 6); // Includes the one mixed line (Neptune (override))
     assert_eq!(stats.ai_accepted, 5);
-    assert_eq!(stats.ai_deletions, 0);
-    assert_eq!(stats.git_diff_added_lines, 9);
+    assert_eq!(stats.total_ai_additions, 11);
+    assert_eq!(stats.total_ai_deletions, 11);
     assert_eq!(stats.git_diff_deleted_lines, 0);
+    assert_eq!(stats.git_diff_added_lines, 9);
+
+    assert_eq!(stats.tool_model_breakdown.len(), 1);
+    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().ai_additions, 6);
+    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().ai_accepted, 5);
+    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().total_ai_additions, 11);
+    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().total_ai_deletions, 11);
+    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().mixed_additions, 1);
+    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().time_waiting_for_ai, 0);
 }
