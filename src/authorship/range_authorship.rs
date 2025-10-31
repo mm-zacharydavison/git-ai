@@ -225,39 +225,39 @@ fn calculate_range_stats_direct(
     }
 
     // Second pass: for each added line, lookup authorship from cache
-    let mut human_additions = 0u32;
-    let mut ai_additions = 0u32;
     let mut ai_accepted = 0u32;
 
     for (file_path, line_numbers) in added_lines_by_file {
         if let Some(file_blame) = blame_cache.get(&file_path) {
             for line_no in line_numbers {
-                if let Some((_, is_ai)) = file_blame.get_line_authorship(line_no) {
-                    if is_ai {
-                        ai_additions += 1;
-                        ai_accepted += 1;
-                    } else {
-                        human_additions += 1;
-                    }
-                } else {
-                    // Could not determine, count as human
-                    human_additions += 1;
+                match file_blame.get_line_authorship(line_no) {
+                    Some((_, true)) => ai_accepted += 1,
+                    _ => {},
                 }
             }
         }
     }
-    Ok(CommitStats {
-        human_additions,
+
+    // Align commit stats calculations with stats_for_commit_stats
+    let mut stats = CommitStats {
+        human_additions: 0,
         mixed_additions: 0,
-        ai_additions,
-        ai_accepted,
+        ai_additions: 0,
+        ai_accepted: 0,
         total_ai_additions: 0,
         total_ai_deletions: 0,
         time_waiting_for_ai: 0,
         git_diff_deleted_lines,
         git_diff_added_lines,
         tool_model_breakdown: std::collections::BTreeMap::new(),
-    })
+    };
+
+    stats.ai_accepted = ai_accepted.min(git_diff_added_lines);
+    stats.ai_additions =
+        std::cmp::min(stats.mixed_additions + stats.ai_accepted, git_diff_added_lines);
+    stats.human_additions = git_diff_added_lines.saturating_sub(stats.ai_accepted);
+
+    Ok(stats)
 }
 
 /// Cache of blame information for a single file
