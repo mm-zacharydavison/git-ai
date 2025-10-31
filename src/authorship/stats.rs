@@ -564,6 +564,14 @@ pub fn analyze_authorship_log(
 ) -> Result<AuthorshipAnalysis, GitAiError> {
     let mut analysis = AuthorshipAnalysis::default();
 
+    // TODO:
+    // ai_accepted -> how many lines landed with attribution
+    // mixed_additions -> sum(overriden) for all prompts
+    // ai_additions -> ai_accepted + mixed_additions
+    // ai_deletions -> ????
+    // human_additions -> total - AI
+    // human_deletions -> ????
+
     // Count lines by author type
     for file_attestation in &authorship_log.attestations {
         for entry in &file_attestation.entries {
@@ -579,63 +587,42 @@ pub fn analyze_authorship_log(
 
             // Check if this is an AI-generated entry
             if let Some(prompt_record) = authorship_log.metadata.prompts.get(&entry.hash) {
-                // This is AI-generated code
-                // Check if it was overridden (edited by humans)
-                if prompt_record.overriden_lines > 0 {
-                    // Mixed: AI-generated but edited by humans
-                    // Ensure we don't have more overridden lines than total lines
-                    let overriden_lines =
-                        std::cmp::min(prompt_record.overriden_lines, lines_in_entry);
-                    analysis.mixed_additions += overriden_lines;
-                    analysis.ai_additions += lines_in_entry - overriden_lines;
-                } else {
-                    // Pure AI: no human editing
-                    analysis.ai_additions += lines_in_entry;
-                }
-
                 // Count accepted lines (this is a simplified approach)
                 // In a real implementation, you might want to track acceptance more precisely
-                analysis.ai_accepted += lines_in_entry; // For now, assume all AI lines are accepted
+                analysis.ai_accepted += lines_in_entry;
 
                 let key = format!(
                     "{}::{}",
                     prompt_record.agent_id.tool, prompt_record.agent_id.model
                 );
                 let tool_stats = analysis.tool_model_breakdown.entry(key).or_default();
-
-                if prompt_record.overriden_lines > 0 {
-                    let overriden_lines =
-                        std::cmp::min(prompt_record.overriden_lines, lines_in_entry);
-                    tool_stats.mixed_additions += overriden_lines;
-                    tool_stats.ai_additions += lines_in_entry - overriden_lines;
-                } else {
-                    tool_stats.ai_additions += lines_in_entry;
-                }
                 tool_stats.ai_accepted += lines_in_entry;
-
-                // Calculate time waiting for AI from transcript
-                // Create a transcript from the messages
-                let transcript = crate::authorship::transcript::AiTranscript {
-                    messages: prompt_record.messages.clone(),
-                };
-                let waiting = calculate_waiting_time(&transcript);
-                analysis.time_waiting_for_ai += waiting;
-                tool_stats.time_waiting_for_ai += waiting;
-            } else {
-                // Human-authored lines
-                analysis.human_additions += lines_in_entry;
             }
         }
     }
 
     for prompt_record in authorship_log.metadata.prompts.values() {
+        analysis.ai_additions += prompt_record.total_additions;
+        analysis.ai_deletions += prompt_record.total_deletions;
+        analysis.mixed_additions += prompt_record.overriden_lines;
+
         let key = format!(
             "{}::{}",
             prompt_record.agent_id.tool, prompt_record.agent_id.model
         );
         let tool_stats = analysis.tool_model_breakdown.entry(key).or_default();
+        tool_stats.ai_additions += prompt_record.total_additions;
         tool_stats.ai_deletions += prompt_record.total_deletions;
-        analysis.ai_deletions += prompt_record.total_deletions;
+        tool_stats.mixed_additions += prompt_record.overriden_lines;
+
+        // Calculate time waiting for AI from transcript
+        // Create a transcript from the messages
+        let transcript = crate::authorship::transcript::AiTranscript {
+            messages: prompt_record.messages.clone(),
+        };
+        let waiting = calculate_waiting_time(&transcript);
+        analysis.time_waiting_for_ai += waiting;
+        tool_stats.time_waiting_for_ai += waiting;
     }
 
     Ok(analysis)

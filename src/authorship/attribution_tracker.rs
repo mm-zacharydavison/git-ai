@@ -37,16 +37,16 @@ pub struct LineAttribution {
     pub author_id: String,
     /// True if the line has non-whitespace edits that landed after a non-whitespace AI edit
     #[serde(default)]
-    pub overridden: bool,
+    pub overrode: Option<String>,
 }
 
 impl LineAttribution {
-    pub fn new(start_line: u32, end_line: u32, author_id: String, overridden: bool) -> Self {
+    pub fn new(start_line: u32, end_line: u32, author_id: String, overrode: Option<String>) -> Self {
         LineAttribution {
             start_line,
             end_line,
             author_id,
-            overridden,
+            overrode,
         }
     }
 
@@ -925,19 +925,19 @@ pub fn attributions_to_line_attributions(
     }
 
     // For each line, determine the dominant author
-    let mut line_authors: Vec<Option<(String, bool)>> = Vec::with_capacity(line_count as usize);
+    let mut line_authors: Vec<Option<(String, Option<String>)>> = Vec::with_capacity(line_count as usize);
 
     for line_num in 1..=line_count {
-        let (author, overridden) =
+        let (author, overrode) =
             find_dominant_author_for_line(line_num, &boundaries, attributions, content);
-        line_authors.push(Some((author, overridden)));
+        line_authors.push(Some((author, overrode)));
     }
 
     // Merge consecutive lines with the same author
     let mut merged_line_authors = merge_consecutive_line_attributions(line_authors);
 
     // Strip away all human lines (only AI lines need to be retained)
-    merged_line_authors.retain(|line_attr| line_attr.author_id != CheckpointKind::Human.to_str() || line_attr.overridden);
+    merged_line_authors.retain(|line_attr| line_attr.author_id != CheckpointKind::Human.to_str() || line_attr.overrode.is_some());
     merged_line_authors
 }
 
@@ -947,7 +947,7 @@ fn find_dominant_author_for_line(
     boundaries: &LineBoundaries,
     attributions: &Vec<Attribution>,
     full_content: &str,
-) -> (String, bool) {
+) -> (String, Option<String>) {
     let (line_start, line_end) = boundaries.get_line_range(line_num).unwrap();
 
     let mut candidate_attrs = Vec::new();
@@ -969,7 +969,7 @@ fn find_dominant_author_for_line(
     }
 
     if candidate_attrs.is_empty() {
-        return (CheckpointKind::Human.to_str(), false);
+        return (CheckpointKind::Human.to_str(), None);
     }
 
     // Choose the author with the latest timestamp
@@ -979,31 +979,35 @@ fn find_dominant_author_for_line(
         .filter(|a| a.ts == latest_timestamp)
         .map(|a| a.author_id.clone())
         .collect::<Vec<String>>();
-    let last_ai_edit_ts = candidate_attrs
+    let last_ai_edit = candidate_attrs
         .iter()
         .filter(|a| a.author_id != CheckpointKind::Human.to_str())
-        .map(|a| a.ts)
         .last();
-    let last_human_edit_ts = candidate_attrs
+    let last_human_edit = candidate_attrs
         .iter()
         .filter(|a| a.author_id == CheckpointKind::Human.to_str())
-        .map(|a| a.ts)
         .last();
-    let overridden = match (last_ai_edit_ts, last_human_edit_ts) {
-        (Some(ai_ts), Some(h_ts)) => h_ts > ai_ts,
-        _ => false,
+    let overrode = match (last_ai_edit, last_human_edit) {
+        (Some(ai), Some(h)) => {
+            if h.ts > ai.ts {
+                Some(ai.author_id.clone())
+            } else {
+                None
+            }
+        },
+        _ => None,
     };
-    return (latest_author[0].clone(), overridden);
+    return (latest_author[0].clone(), overrode);
 }
 
 /// Merge consecutive lines with the same author into LineAttribution ranges
 fn merge_consecutive_line_attributions(
-    line_authorship: Vec<Option<(String, bool)>>,
+    line_authorship: Vec<Option<(String, Option<String>)>>,
 ) -> Vec<LineAttribution> {
     let mut result = Vec::new();
     let line_count = line_authorship.len();
 
-    let mut current_authorship: Option<(String, bool)> = None;
+    let mut current_authorship: Option<(String, Option<String>)> = None;
     let mut current_start: u32 = 0;
 
     for (idx, authorship) in line_authorship.into_iter().enumerate() {
@@ -1663,7 +1667,7 @@ fn foo() {
     #[test]
     fn test_line_to_char_attribution_single_range() {
         let content = "line 1\nline 2\nline 3\n";
-        let line_attrs = vec![LineAttribution::new(1, 3, "Alice".to_string(), false)];
+        let line_attrs = vec![LineAttribution::new(1, 3, "Alice".to_string(), None)];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
 
@@ -1677,8 +1681,8 @@ fn foo() {
     fn test_line_to_char_attribution_multiple_ranges() {
         let content = "line 1\nline 2\nline 3\nline 4\n";
         let line_attrs = vec![
-            LineAttribution::new(1, 2, "Alice".to_string(), false),
-            LineAttribution::new(3, 4, "Bob".to_string(), false),
+            LineAttribution::new(1, 2, "Alice".to_string(), None),
+            LineAttribution::new(3, 4, "Bob".to_string(), None),
         ];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
@@ -1695,7 +1699,7 @@ fn foo() {
     #[test]
     fn test_line_to_char_attribution_single_line() {
         let content = "line 1\nline 2\nline 3\n";
-        let line_attrs = vec![LineAttribution::new(2, 2, "Bob".to_string(), false)];
+        let line_attrs = vec![LineAttribution::new(2, 2, "Bob".to_string(), None)];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
 
@@ -1708,7 +1712,7 @@ fn foo() {
     #[test]
     fn test_line_to_char_attribution_no_trailing_newline() {
         let content = "line 1\nline 2";
-        let line_attrs = vec![LineAttribution::new(1, 2, "Alice".to_string(), false)];
+        let line_attrs = vec![LineAttribution::new(1, 2, "Alice".to_string(), None)];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
 
@@ -2008,7 +2012,7 @@ fn foo() {
     #[test]
     fn test_line_to_char_attribution_empty_content() {
         let content = "";
-        let line_attrs = vec![LineAttribution::new(1, 1, "Alice".to_string(), false)];
+        let line_attrs = vec![LineAttribution::new(1, 1, "Alice".to_string(), None)];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
 
@@ -2019,7 +2023,7 @@ fn foo() {
     fn test_line_to_char_attribution_invalid_line_numbers() {
         let content = "line 1\nline 2\n";
         // Line 5 doesn't exist (only 2 lines)
-        let line_attrs = vec![LineAttribution::new(5, 10, "Alice".to_string(), false)];
+        let line_attrs = vec![LineAttribution::new(5, 10, "Alice".to_string(), None)];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
 
@@ -2038,8 +2042,8 @@ fn test() {
 }
 "#;
         let line_attrs = vec![
-            LineAttribution::new(1, 3, "Alice".to_string(), false),
-            LineAttribution::new(5, 7, "Bob".to_string(), false),
+            LineAttribution::new(1, 3, "Alice".to_string(), None),
+            LineAttribution::new(5, 7, "Bob".to_string(), None),
         ];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
@@ -2057,11 +2061,11 @@ fn test() {
     fn test_line_to_char_attribution_preserves_author_order() {
         let content = "a\nb\nc\nd\ne\n";
         let line_attrs = vec![
-            LineAttribution::new(1, 1, "Alice".to_string(), false),
-            LineAttribution::new(2, 2, "Bob".to_string(), false),
-            LineAttribution::new(3, 3, "Charlie".to_string(), false),
-            LineAttribution::new(4, 4, "Dave".to_string(), false),
-            LineAttribution::new(5, 5, "Eve".to_string(), false),
+            LineAttribution::new(1, 1, "Alice".to_string(), None),
+            LineAttribution::new(2, 2, "Bob".to_string(), None),
+            LineAttribution::new(3, 3, "Charlie".to_string(), None),
+            LineAttribution::new(4, 4, "Dave".to_string(), None),
+            LineAttribution::new(5, 5, "Eve".to_string(), None),
         ];
 
         let char_attrs = line_attributions_to_attributions(&line_attrs, content, TEST_TS);
@@ -2314,7 +2318,7 @@ fn main() {
 
     #[test]
     fn test_line_attribution_helper_methods() {
-        let line_attr = LineAttribution::new(5, 10, "Alice".to_string(), false);
+        let line_attr = LineAttribution::new(5, 10, "Alice".to_string(), None);
 
         assert_eq!(line_attr.line_count(), 6);
         assert!(!line_attr.is_empty());

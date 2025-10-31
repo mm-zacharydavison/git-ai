@@ -44,7 +44,7 @@ fn test_initial_only_no_blame_data() {
         start_line: 1,
         end_line: 3,
         author_id: "initial-ai-123".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("newfile.txt".to_string(), line_attrs);
 
@@ -132,7 +132,7 @@ fn test_initial_wins_overlaps() {
         start_line: 1,
         end_line: 2,
         author_id: "initial-override-456".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("example.txt".to_string(), line_attrs);
 
@@ -201,13 +201,13 @@ fn test_initial_and_blame_merge() {
         start_line: 1,
         end_line: 3,
         author_id: "initial-123".to_string(),
-        overridden: false,
+        overrode: None,
     });
     line_attrs.push(LineAttribution {
         start_line: 5,
         end_line: 5,
         author_id: "initial-456".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("example.txt".to_string(), line_attrs);
 
@@ -292,7 +292,7 @@ fn test_partial_file_coverage() {
         start_line: 1,
         end_line: 2,
         author_id: "initial-fileA".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("fileA.txt".to_string(), line_attrs);
     // Note: fileB.txt is not in INITIAL
