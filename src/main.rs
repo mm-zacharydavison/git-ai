@@ -1,9 +1,9 @@
 mod authorship;
+mod ci;
 mod commands;
 mod config;
 mod error;
 mod git;
-mod ci;
 mod utils;
 
 use clap::Parser;

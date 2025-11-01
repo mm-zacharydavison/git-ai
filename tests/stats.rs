@@ -1,7 +1,7 @@
 mod repos;
+use git_ai::authorship::stats::CommitStats;
 use repos::test_file::ExpectedLineExt;
 use repos::test_repo::TestRepo;
-use git_ai::authorship::stats::CommitStats;
 use serde_json;
 
 #[test]
@@ -71,10 +71,52 @@ fn test_authorship_log_stats() {
     assert_eq!(stats.git_diff_added_lines, 9);
 
     assert_eq!(stats.tool_model_breakdown.len(), 1);
-    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().ai_additions, 6);
-    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().ai_accepted, 5);
-    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().total_ai_additions, 11);
-    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().total_ai_deletions, 11);
-    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().mixed_additions, 1);
-    assert_eq!(stats.tool_model_breakdown.get("mock_ai::unknown").unwrap().time_waiting_for_ai, 0);
+    assert_eq!(
+        stats
+            .tool_model_breakdown
+            .get("mock_ai::unknown")
+            .unwrap()
+            .ai_additions,
+        6
+    );
+    assert_eq!(
+        stats
+            .tool_model_breakdown
+            .get("mock_ai::unknown")
+            .unwrap()
+            .ai_accepted,
+        5
+    );
+    assert_eq!(
+        stats
+            .tool_model_breakdown
+            .get("mock_ai::unknown")
+            .unwrap()
+            .total_ai_additions,
+        11
+    );
+    assert_eq!(
+        stats
+            .tool_model_breakdown
+            .get("mock_ai::unknown")
+            .unwrap()
+            .total_ai_deletions,
+        11
+    );
+    assert_eq!(
+        stats
+            .tool_model_breakdown
+            .get("mock_ai::unknown")
+            .unwrap()
+            .mixed_additions,
+        1
+    );
+    assert_eq!(
+        stats
+            .tool_model_breakdown
+            .get("mock_ai::unknown")
+            .unwrap()
+            .time_waiting_for_ai,
+        0
+    );
 }

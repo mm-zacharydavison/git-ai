@@ -1,6 +1,6 @@
+use crate::repos::test_repo::TestRepo;
 use std::process::Command;
 use std::sync::OnceLock;
-use crate::repos::test_repo::TestRepo;
 
 /// Merge strategy for pull requests
 #[derive(Debug, Clone, Copy)]
@@ -18,17 +18,13 @@ static GH_CLI_AVAILABLE: OnceLock<bool> = OnceLock::new();
 /// Check if GitHub CLI is available and authenticated
 pub fn is_gh_cli_available() -> bool {
     *GH_CLI_AVAILABLE.get_or_init(|| {
-        let version_check = Command::new("gh")
-            .arg("--version")
-            .output();
+        let version_check = Command::new("gh").arg("--version").output();
 
         if version_check.is_err() || !version_check.unwrap().status.success() {
             return false;
         }
 
-        let auth_check = Command::new("gh")
-            .args(&["auth", "status"])
-            .output();
+        let auth_check = Command::new("gh").args(&["auth", "status"]).output();
 
         auth_check.is_ok() && auth_check.unwrap().status.success()
     })
@@ -76,20 +72,24 @@ impl GitHubTestRepo {
         std::fs::write(repo_path.join("README.md"), "# GitHub Test Repository\n")
             .map_err(|e| format!("Failed to create README: {}", e))?;
 
-        self.repo.git(&["add", "."])
+        self.repo
+            .git(&["add", "."])
             .map_err(|e| format!("Failed to add files: {}", e))?;
 
-        self.repo.git(&["commit", "-m", "Initial commit"])
+        self.repo
+            .git(&["commit", "-m", "Initial commit"])
             .map_err(|e| format!("Failed to create initial commit: {}", e))?;
 
         // Create GitHub repository
         let output = Command::new("gh")
             .args(&[
-                "repo", "create",
+                "repo",
+                "create",
                 &self.github_repo_name,
                 "--public",
-                "--source", repo_path.to_str().unwrap(),
-                "--push"
+                "--source",
+                repo_path.to_str().unwrap(),
+                "--push",
             ])
             .current_dir(repo_path)
             .output()
@@ -102,7 +102,10 @@ impl GitHubTestRepo {
             ));
         }
 
-        println!("✅ Created GitHub repository: {}/{}", self.github_owner, self.github_repo_name);
+        println!(
+            "✅ Created GitHub repository: {}/{}",
+            self.github_owner, self.github_repo_name
+        );
         Ok(())
     }
 
@@ -113,7 +116,9 @@ impl GitHubTestRepo {
 
     /// Push current branch to GitHub
     pub fn push_branch(&self, branch_name: &str) -> Result<(), String> {
-        self.repo.git(&["push", "--set-upstream", "origin", branch_name]).map(|_| ())
+        self.repo
+            .git(&["push", "--set-upstream", "origin", branch_name])
+            .map(|_| ())
     }
 
     /// Create a pull request
@@ -121,11 +126,7 @@ impl GitHubTestRepo {
         let repo_path = self.repo.path();
 
         let output = Command::new("gh")
-            .args(&[
-                "pr", "create",
-                "--title", title,
-                "--body", body
-            ])
+            .args(&["pr", "create", "--title", title, "--body", body])
             .current_dir(repo_path)
             .output()
             .map_err(|e| format!("Failed to execute gh pr create: {}", e))?;
@@ -153,12 +154,7 @@ impl GitHubTestRepo {
         };
 
         let output = Command::new("gh")
-            .args(&[
-                "pr", "merge",
-                pr_number,
-                strategy_flag,
-                "--delete-branch"
-            ])
+            .args(&["pr", "merge", pr_number, strategy_flag, "--delete-branch"])
             .current_dir(repo_path)
             .output()
             .map_err(|e| format!("Failed to execute gh pr merge: {}", e))?;
@@ -170,7 +166,10 @@ impl GitHubTestRepo {
             ));
         }
 
-        println!("✅ Merged pull request #{} using {:?} strategy", pr_number, strategy);
+        println!(
+            "✅ Merged pull request #{} using {:?} strategy",
+            pr_number, strategy
+        );
         Ok(())
     }
 
@@ -185,7 +184,15 @@ impl GitHubTestRepo {
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
 
         let output = Command::new("gh")
-            .args(&["repo", "view", &full_repo, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"])
+            .args(&[
+                "repo",
+                "view",
+                &full_repo,
+                "--json",
+                "defaultBranchRef",
+                "--jq",
+                ".defaultBranchRef.name",
+            ])
             .current_dir(repo_path)
             .output()
             .map_err(|e| format!("Failed to get default branch: {}", e))?;
@@ -203,20 +210,25 @@ impl GitHubTestRepo {
     /// Install the GitHub CI workflow in the repository
     pub fn install_github_ci_workflow(&self) -> Result<(), String> {
         // Use git-ai to install the workflow
-        let output = self.repo.git_ai(&["ci", "github", "install"])
+        let output = self
+            .repo
+            .git_ai(&["ci", "github", "install"])
             .map_err(|e| format!("Failed to install CI workflow: {}", e))?;
 
         println!("✅ Installed GitHub CI workflow");
         println!("{}", output);
 
         // Commit and push the workflow file
-        self.repo.git(&["add", ".github/workflows/git-ai.yaml"])
+        self.repo
+            .git(&["add", ".github/workflows/git-ai.yaml"])
             .map_err(|e| format!("Failed to add workflow file: {}", e))?;
 
-        self.repo.git(&["commit", "-m", "Add git-ai CI workflow"])
+        self.repo
+            .git(&["commit", "-m", "Add git-ai CI workflow"])
             .map_err(|e| format!("Failed to commit workflow: {}", e))?;
 
-        self.repo.git(&["push"])
+        self.repo
+            .git(&["push"])
             .map_err(|e| format!("Failed to push workflow: {}", e))?;
 
         println!("✅ Committed and pushed CI workflow");
@@ -229,12 +241,7 @@ impl GitHubTestRepo {
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
 
         let output = Command::new("gh")
-            .args(&[
-                "run", "view",
-                run_id,
-                "--repo", &full_repo,
-                "--log"
-            ])
+            .args(&["run", "view", run_id, "--repo", &full_repo, "--log"])
             .current_dir(repo_path)
             .output()
             .map_err(|e| format!("Failed to get workflow logs: {}", e))?;
@@ -255,7 +262,10 @@ impl GitHubTestRepo {
         let repo_path = self.repo.path();
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
 
-        println!("⏳ Waiting for GitHub Actions workflows to complete (timeout: {}s)...", timeout_seconds);
+        println!(
+            "⏳ Waiting for GitHub Actions workflows to complete (timeout: {}s)...",
+            timeout_seconds
+        );
 
         use std::time::{Duration, Instant};
         let start = Instant::now();
@@ -263,16 +273,23 @@ impl GitHubTestRepo {
 
         loop {
             if start.elapsed() > timeout {
-                return Err(format!("Timeout waiting for workflows to complete after {}s", timeout_seconds));
+                return Err(format!(
+                    "Timeout waiting for workflows to complete after {}s",
+                    timeout_seconds
+                ));
             }
 
             // Get all workflow runs for the repository
             let output = Command::new("gh")
                 .args(&[
-                    "run", "list",
-                    "--repo", &full_repo,
-                    "--json", "status,conclusion,name,databaseId",
-                    "--limit", "10"
+                    "run",
+                    "list",
+                    "--repo",
+                    &full_repo,
+                    "--json",
+                    "status,conclusion,name,databaseId",
+                    "--limit",
+                    "10",
                 ])
                 .current_dir(repo_path)
                 .output()
@@ -316,7 +333,10 @@ impl GitHubTestRepo {
                     if conclusion != "success" {
                         any_failed = true;
                         failed_run_ids.push(run_id.to_string());
-                        println!("   ❌ Workflow '{}' failed with conclusion: {}", name, conclusion);
+                        println!(
+                            "   ❌ Workflow '{}' failed with conclusion: {}",
+                            name, conclusion
+                        );
                     } else {
                         println!("   ✅ Workflow '{}' completed successfully", name);
                     }
@@ -332,12 +352,16 @@ impl GitHubTestRepo {
                             Ok(logs) => {
                                 // Print last 100 lines of logs
                                 let lines: Vec<&str> = logs.lines().collect();
-                                let start_line = if lines.len() > 100 { lines.len() - 100 } else { 0 };
+                                let start_line = if lines.len() > 100 {
+                                    lines.len() - 100
+                                } else {
+                                    0
+                                };
                                 for line in &lines[start_line..] {
                                     println!("{}", line);
                                 }
                             }
-                            Err(e) => println!("Failed to fetch logs: {}", e)
+                            Err(e) => println!("Failed to fetch logs: {}", e),
                         }
                     }
                     return Err("One or more workflows failed".to_string());
@@ -364,11 +388,7 @@ impl GitHubTestRepo {
         let full_repo = format!("{}/{}", self.github_owner, self.github_repo_name);
 
         let output = Command::new("gh")
-            .args(&[
-                "repo", "delete",
-                &full_repo,
-                "--yes"
-            ])
+            .args(&["repo", "delete", &full_repo, "--yes"])
             .output()
             .map_err(|e| format!("Failed to execute gh repo delete: {}", e))?;
 
@@ -387,16 +407,23 @@ impl GitHubTestRepo {
 impl Drop for GitHubTestRepo {
     fn drop(&mut self) {
         if std::env::var("GIT_AI_TEST_NO_CLEANUP").is_ok() {
-            eprintln!("⚠️  Cleanup disabled - repository preserved: {}/{}",
-                self.github_owner, self.github_repo_name);
-            eprintln!("   URL: https://github.com/{}/{}",
-                self.github_owner, self.github_repo_name);
+            eprintln!(
+                "⚠️  Cleanup disabled - repository preserved: {}/{}",
+                self.github_owner, self.github_repo_name
+            );
+            eprintln!(
+                "   URL: https://github.com/{}/{}",
+                self.github_owner, self.github_repo_name
+            );
             return;
         }
 
         if let Err(e) = self.delete_from_github() {
             eprintln!("⚠️  Failed to cleanup GitHub repository: {}", e);
-            eprintln!("   Manual cleanup required: {}/{}", self.github_owner, self.github_repo_name);
+            eprintln!(
+                "   Manual cleanup required: {}/{}",
+                self.github_owner, self.github_repo_name
+            );
         }
     }
 }
