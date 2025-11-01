@@ -1,24 +1,39 @@
+use crate::config::Config;
 use crate::git::find_repository_in_path;
+use futures::stream::{self, StreamExt};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Handle the flush-logs command
 pub fn handle_flush_logs(_args: &[String]) {
+    let config = Config::get();
+
+    // Check for Enterprise DSN: config takes precedence over env var, which takes precedence over build-time value
+    let enterprise_dsn = config
+        .telemetry_enterprise_dsn()
+        .map(|s| s.to_string())
+        .or_else(|| {
+            std::env::var("SENTRY_ENTERPRISE")
+                .ok()
+                .or_else(|| option_env!("SENTRY_ENTERPRISE").map(|s| s.to_string()))
+                .filter(|s| !s.is_empty())
+        });
+
     // Check for OSS DSN: runtime env var takes precedence over build-time value
     // Can be explicitly disabled with empty string
-    let oss_dsn = std::env::var("SENTRY_OSS")
-        .ok()
-        .or_else(|| option_env!("SENTRY_OSS").map(|s| s.to_string()))
-        .filter(|s| !s.is_empty());
-
-    // Check for Enterprise DSN: runtime env var takes precedence over build-time value
-    // Off by default unless they build their own fork or set at runtime
-    let enterprise_dsn = std::env::var("SENTRY_ENTERPRISE")
-        .ok()
-        .or_else(|| option_env!("SENTRY_ENTERPRISE").map(|s| s.to_string()))
-        .filter(|s| !s.is_empty());
+    // Skip OSS DSN if telemetry_oss is set to "off"
+    let oss_dsn = if config.telemetry_oss() == Some("off") {
+        None
+    } else {
+        std::env::var("SENTRY_OSS")
+            .ok()
+            .or_else(|| option_env!("SENTRY_OSS").map(|s| s.to_string()))
+            .filter(|s| !s.is_empty())
+    };
 
     // Need at least one DSN to proceed
     if oss_dsn.is_none() && enterprise_dsn.is_none() {
@@ -70,23 +85,83 @@ pub fn handle_flush_logs(_args: &[String]) {
     // Initialize Sentry clients
     let (oss_client, enterprise_client) = initialize_sentry_clients(oss_dsn, enterprise_dsn);
 
+    // Check if clients are present (needed for cleanup logic later)
+    let has_clients = oss_client.is_some() || enterprise_client.is_some();
+
+    eprintln!(
+        "Processing {} log files (max 10 concurrent)...",
+        log_files.len()
+    );
+
+    // Process log files in parallel (max 10 at a time)
+    let results = smol::block_on(async {
+        let oss_client = Arc::new(oss_client);
+        let enterprise_client = Arc::new(enterprise_client);
+        let remotes_info = Arc::new(remotes_info);
+
+        stream::iter(log_files)
+            .map(|log_file| {
+                let oss_client = Arc::clone(&oss_client);
+                let enterprise_client = Arc::clone(&enterprise_client);
+                let remotes_info = Arc::clone(&remotes_info);
+
+                smol::unblock(move || {
+                    let file_name = log_file
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+
+                    match process_log_file(
+                        &log_file,
+                        &oss_client,
+                        &enterprise_client,
+                        &remotes_info,
+                    ) {
+                        Ok(count) if count > 0 => {
+                            eprintln!("  ✓ {} - sent {} events", file_name, count);
+                            Some((log_file, count))
+                        }
+                        Ok(_) => {
+                            eprintln!("  ○ {} - no events to send", file_name);
+                            None
+                        }
+                        Err(e) => {
+                            eprintln!("  ✗ {} - error: {}", file_name, e);
+                            None
+                        }
+                    }
+                })
+            })
+            .buffer_unordered(10) // Process max 10 files concurrently
+            .collect::<Vec<_>>()
+            .await
+    });
+
+    // Collect results
     let mut events_sent = 0;
     let mut files_to_delete = Vec::new();
 
-    // Process each log file and send events
-    for log_file in log_files {
-        match process_log_file(&log_file, &oss_client, &enterprise_client, &remotes_info) {
-            Ok(count) => {
-                events_sent += count;
-                if count > 0 {
-                    files_to_delete.push(log_file);
-                }
-            }
-            Err(_) => {}
+    for result in results {
+        if let Some((log_file, count)) = result {
+            events_sent += count;
+            files_to_delete.push(log_file);
         }
     }
 
+    eprintln!(
+        "\nSummary: {} events sent from {} files",
+        events_sent,
+        files_to_delete.len()
+    );
+
+    // Clean up old logs if no clients configured
+    if !has_clients {
+        eprintln!("Cleaning up old logs (no telemetry clients configured)...");
+        cleanup_old_logs(&logs_dir);
+    }
+
     if events_sent > 0 {
+        eprintln!("Deleting {} processed log files", files_to_delete.len());
         for file_path in files_to_delete {
             let _ = fs::remove_file(&file_path);
         }
@@ -94,6 +169,57 @@ pub fn handle_flush_logs(_args: &[String]) {
         std::process::exit(0);
     } else {
         std::process::exit(1);
+    }
+}
+
+/// Clean up old log files when count > 100
+/// Deletes logs older than a week based on file modification time
+fn cleanup_old_logs(logs_dir: &PathBuf) {
+    let Ok(entries) = fs::read_dir(logs_dir) else {
+        return;
+    };
+
+    // Collect all log files with their metadata
+    let mut log_files: Vec<(PathBuf, fs::Metadata)> = Vec::new();
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("log") {
+                if let Ok(metadata) = entry.metadata() {
+                    log_files.push((path, metadata));
+                }
+            }
+        }
+    }
+
+    // Only clean up if count > 100
+    if log_files.len() <= 100 {
+        return;
+    }
+
+    // Calculate cutoff time (one week ago)
+    let one_week_ago = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .saturating_sub(7 * 24 * 60 * 60); // 7 days in seconds
+
+    // Delete logs older than a week
+    for (path, metadata) in log_files {
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(modified_secs) = modified.duration_since(UNIX_EPOCH) {
+                if modified_secs.as_secs() < one_week_ago {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        } else if let Ok(created) = metadata.created() {
+            // Fallback to creation time if modification time is not available
+            if let Ok(created_secs) = created.duration_since(UNIX_EPOCH) {
+                if created_secs.as_secs() < one_week_ago {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
     }
 }
 

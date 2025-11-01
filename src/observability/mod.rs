@@ -92,8 +92,6 @@ pub fn set_repo_context(repo: &crate::git::repository::Repository) {
         LogMode::Disk(_) => return, // Already set, ignore
     };
 
-    let n = buffered_events.len();
-
     // Switch to disk mode
     obs.mode = LogMode::Disk(log_path.clone());
     drop(obs); // Release lock before writing
@@ -176,6 +174,8 @@ pub fn log_message(message: &str, level: &str, context: Option<serde_json::Value
 
 /// Spawn a background process to flush logs to Sentry
 pub fn spawn_background_flush() {
+    // Always spawn flush process - it will handle OSS/Enterprise DSN logic
+    // and cleanup when telemetry_oss is "off"
     use std::process::Command;
 
     if let Ok(exe) = std::env::current_exe() {
