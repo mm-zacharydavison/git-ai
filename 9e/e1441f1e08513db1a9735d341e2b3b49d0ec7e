@@ -1,0 +1,62 @@
+docs/reference.mdx
+  16981d7 54-65,67-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "base_commit_sha": "e70670247744d752524935abccc84062a344452b",
+  "prompts": {
+    "16981d7": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "5c0ed196-360c-4ae5-9af0-8ea6020476aa",
+        "model": "gpt-5"
+      },
+      "human_author": "Sasha Varlamov <sasha@sashavarlamov.com>",
+      "messages": [
+        {
+          "type": "user",
+          "text": "@reference.mdx (52-56) \n\nUpdate the reference for the stats command to document what each field represents and how it's calculated.\n\n\n\nFor ground truth reference: @stats.rs (25-47) @stats.rs (9-23)",
+          "timestamp": "2025-10-31T23:37:35.207Z"
+        },
+        {
+          "type": "assistant",
+          "text": "I'll open `docs/reference.mdx` to locate the Output section and update it with field definitions for the stats command based on `CommitStats` and `ToolModelHeadlineStats`.",
+          "timestamp": "2025-10-31T23:37:43.338Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "target_file": "/Users/svarlamov/projects/git-ai/docs/reference.mdx"
+          }
+        },
+        {
+          "type": "assistant",
+          "text": "I’m going to update the Output section in `docs/reference.mdx` to define each stats field and briefly explain how each is calculated, reflecting the ground truth in `src/authorship/stats.rs`.",
+          "timestamp": "2025-10-31T23:38:01.386Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "apply_patch",
+          "input": {
+            "file_path": "/Users/svarlamov/projects/git-ai/docs/reference.mdx"
+          }
+        },
+        {
+          "type": "assistant",
+          "text": "I updated the Output section in `docs/reference.mdx` with concise definitions and calculation notes for all fields, including a per-tool breakdown and overlap clarification. Now I’ll check for any linter issues in the edited file.",
+          "timestamp": "2025-10-31T23:38:08.025Z"
+        },
+        {
+          "type": "assistant",
+          "text": "- Enhanced `stats` Output section in `docs/reference.mdx` to define and explain:\n  - `human_additions`, `mixed_additions`, `ai_additions`, `ai_accepted`\n  - `total_ai_additions`, `total_ai_deletions`, `time_waiting_for_ai`\n  - `git_diff_added_lines`, `git_diff_deleted_lines`\n  - `tool_model_breakdown` per `<tool>:<model>`\n- Added notes clarifying category overlap and how attribution is computed.",
+          "timestamp": "2025-10-31T23:38:08.131Z"
+        }
+      ],
+      "total_additions": 15,
+      "total_deletions": 0,
+      "accepted_lines": 16,
+      "overriden_lines": 1
+    }
+  }
+}
