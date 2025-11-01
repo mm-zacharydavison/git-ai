@@ -2508,7 +2508,7 @@ fn compute() -> i32 {
     }
 
     #[test]
-    fn test_line_attribution_ignores_whitespace_only_ranges() {
+    fn test_line_attribution_ignores_whitespace_only_ranges_on_non_empty_lines() {
         // Test that ranges containing only whitespace are completely ignored
         let content = "a b c\n";
         let attributions = vec![

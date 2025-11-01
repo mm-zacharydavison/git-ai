@@ -813,7 +813,9 @@ fn compute_line_stats(
     // Count added/deleted lines for each file in this checkpoint
     let mut total_additions = 0u32;
     let mut total_deletions = 0u32;
-
+    let mut total_additions_sloc = 0u32;
+    let mut total_deletions_sloc = 0u32;
+    
     // good candidate for parallelization
     for file_path in files {
         let abs_path = working_log.repo_root.join(file_path);
@@ -855,19 +857,21 @@ fn compute_line_stats(
             match change.tag() {
                 ChangeTag::Insert => {
                     let non_whitespace_lines = change
-                        .value()
-                        .lines()
-                        .filter(|line| !line.trim().is_empty())
-                        .count() as u32;
-                    total_additions += non_whitespace_lines;
+                    .value()
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count() as u32;
+                    total_additions += change.value().lines().count() as u32;
+                    total_additions_sloc += non_whitespace_lines;
                 }
                 ChangeTag::Delete => {
                     let non_whitespace_lines = change
-                        .value()
-                        .lines()
-                        .filter(|line| !line.trim().is_empty())
-                        .count() as u32;
-                    total_deletions += non_whitespace_lines;
+                    .value()
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count() as u32;
+                    total_deletions += change.value().lines().count() as u32;
+                    total_deletions_sloc += non_whitespace_lines;
                 }
                 ChangeTag::Equal => {}
             }
@@ -876,6 +880,8 @@ fn compute_line_stats(
 
     stats.additions = total_additions;
     stats.deletions = total_deletions;
+    stats.additions_sloc = total_additions_sloc;
+    stats.deletions_sloc = total_deletions_sloc;
 
     Ok(stats)
 }
@@ -1273,8 +1279,10 @@ mod tests {
             .line_stats
             .clone();
 
-        assert_eq!(after_add_last.additions, 2, "Only visible lines counted");
+        assert_eq!(after_add_last.additions, 8, "Additions includes empty lines");
         assert_eq!(after_add_last.deletions, 0, "No deletions expected yet");
+        assert_eq!(after_add_last.additions_sloc, 2, "Only visible lines counted");
+        assert_eq!(after_add_last.deletions_sloc, 0, "No deletions expected yet");
 
         let cleaned_content = std::fs::read_to_string(test_file.path()).unwrap();
         let cleaned_lines: Vec<&str> = cleaned_content
@@ -1298,7 +1306,9 @@ mod tests {
             .clone();
 
         assert_eq!(latest_stats.additions, 0, "No additions in cleanup checkpoint");
-        assert_eq!(latest_stats.deletions, 0, "Whitespace deletions ignored");
+        assert_eq!(latest_stats.deletions, 6, "Deletions includes empty lines");
+        assert_eq!(latest_stats.additions_sloc, 0, "No additions in cleanup checkpoint");
+        assert_eq!(latest_stats.deletions_sloc, 0, "Whitespace deletions ignored");
     }
 
 }

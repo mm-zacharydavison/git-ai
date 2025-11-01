@@ -86,8 +86,14 @@ impl CheckpointKind {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CheckpointLineStats {
+    #[serde(default)]
     pub additions: u32,
+    #[serde(default)]
     pub deletions: u32,
+    #[serde(default)]
+    pub additions_sloc: u32,
+    #[serde(default)]
+    pub deletions_sloc: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
