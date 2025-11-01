@@ -46,6 +46,9 @@ pub fn handle_git_ai(args: &[String]) {
         "stats" => {
             handle_stats(&args[1..]);
         }
+        "show" => {
+            commands::show::handle_show(&args[1..]);
+        }
         "checkpoint" => {
             if !allowed_repository {
                 eprintln!(
@@ -105,6 +108,7 @@ fn print_help() {
         "  stats-delta        Generate authorship logs for children of commits with working logs"
     );
     eprintln!("    --json                 Output created notes as JSON");
+    eprintln!("  show <rev|range>   Display authorship logs for a revision or range");
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
     eprintln!("  ci                 Continuous integration utilities");
     eprintln!("    github                 GitHub CI helpers");
