@@ -26,10 +26,12 @@ pub fn log_performance_target_if_violated(
 
     if !within_target {
         debug_log(&format!(
-            "ᕽ Performance target violated for command: {}. Total duration: {}ms, Git duration: {}ms",
+            "ᕽ Performance target violated for command: {}. Total duration: {}ms, Git duration: {}ms. Pre-command: {}ms, Post-command: {}ms.",
             command,
             total_duration.as_millis(),
             git_duration.as_millis(),
+            pre_command.as_millis(),
+            post_command.as_millis(),
         ));
 
         log_performance(
