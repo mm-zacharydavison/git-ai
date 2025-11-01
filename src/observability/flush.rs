@@ -9,7 +9,15 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Handle the flush-logs command
-pub fn handle_flush_logs(_args: &[String]) {
+pub fn handle_flush_logs(args: &[String]) {
+    let force = args.contains(&"--force".to_string());
+    if cfg!(debug_assertions) && !force {
+        eprintln!(
+            "Flush logs is disabled in debug mode, but if you really want to run it add --force flag"
+        );
+        std::process::exit(1);
+    }
+
     let config = Config::get();
 
     // Check for Enterprise DSN: config takes precedence over env var, which takes precedence over build-time value
