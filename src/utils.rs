@@ -1,16 +1,27 @@
 use crate::git::diff_tree_to_tree::Diff;
 use std::time::{Duration, Instant};
 
+/// Check if debug logging is enabled via environment variable
+///
+/// This is checked once at module initialization to avoid repeated environment variable lookups.
+static DEBUG_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn is_debug_enabled() -> bool {
+    *DEBUG_ENABLED.get_or_init(|| {
+        cfg!(debug_assertions) || std::env::var("GIT_AI_DEBUG").unwrap_or_default() == "1"
+    })
+}
+
 /// Debug logging utility function
 ///
-/// Prints debug messages with a colored prefix when debug assertions are enabled.
-/// This function only outputs messages when the code is compiled with debug assertions.
+/// Prints debug messages with a colored prefix when debug assertions are enabled or when
+/// the `GIT_AI_DEBUG` environment variable is set to "1".
 ///
 /// # Arguments
 ///
 /// * `msg` - The debug message to print
 pub fn debug_log(msg: &str) {
-    if cfg!(debug_assertions) {
+    if is_debug_enabled() {
         eprintln!("\x1b[1;33m[git-ai]\x1b[0m {}", msg);
     }
 }
