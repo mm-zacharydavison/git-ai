@@ -232,7 +232,7 @@ fn calculate_range_stats_direct(
             for line_no in line_numbers {
                 match file_blame.get_line_authorship(line_no) {
                     Some((_, true)) => ai_accepted += 1,
-                    _ => {},
+                    _ => {}
                 }
             }
         }
@@ -253,8 +253,10 @@ fn calculate_range_stats_direct(
     };
 
     stats.ai_accepted = ai_accepted.min(git_diff_added_lines);
-    stats.ai_additions =
-        std::cmp::min(stats.mixed_additions + stats.ai_accepted, git_diff_added_lines);
+    stats.ai_additions = std::cmp::min(
+        stats.mixed_additions + stats.ai_accepted,
+        git_diff_added_lines,
+    );
     stats.human_additions = git_diff_added_lines.saturating_sub(stats.ai_accepted);
 
     Ok(stats)

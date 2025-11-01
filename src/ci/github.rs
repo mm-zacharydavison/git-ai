@@ -1,10 +1,10 @@
 use crate::ci::ci_context::{CiContext, CiEvent};
 use crate::error::GitAiError;
 use crate::git::repository::exec_git;
-use serde::{Deserialize, Serialize};
 use crate::git::repository::find_repository_in_path;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::PathBuf;
 
 const GITHUB_CI_TEMPLATE_YAML: &str = include_str!("workflow_templates/github.yaml");
 
@@ -44,7 +44,9 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
         return Ok(None);
     }
 
-    let event_payload = serde_json::from_str::<GithubCiEventPayload>(&std::fs::read_to_string(env_event_path)?).unwrap_or_default();
+    let event_payload =
+        serde_json::from_str::<GithubCiEventPayload>(&std::fs::read_to_string(env_event_path)?)
+            .unwrap_or_default();
     if event_payload.pull_request.is_none() {
         return Ok(None);
     }
@@ -66,7 +68,10 @@ pub fn get_github_ci_context() -> Result<Option<CiContext>, GitAiError> {
     // Authenticate the clone URL with GITHUB_TOKEN if available
     let authenticated_url = if let Ok(token) = std::env::var("GITHUB_TOKEN") {
         // Replace https://github.com/ with https://x-access-token:TOKEN@github.com/
-        clone_url.replace("https://github.com/", &format!("https://x-access-token:{}@github.com/", token))
+        clone_url.replace(
+            "https://github.com/",
+            &format!("https://x-access-token:{}@github.com/", token),
+        )
     } else {
         clone_url
     };

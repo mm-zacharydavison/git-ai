@@ -524,7 +524,10 @@ pub fn stats_for_commit_stats(
                 prompt_record.agent_id.tool, prompt_record.agent_id.model
             );
             let tool_stats = commit_stats.tool_model_breakdown.entry(key).or_default();
-            tool_stats.ai_additions += std::cmp::min(prompt_record.total_additions, prompt_record.overriden_lines+prompt_record.accepted_lines);
+            tool_stats.ai_additions += std::cmp::min(
+                prompt_record.total_additions,
+                prompt_record.overriden_lines + prompt_record.accepted_lines,
+            );
             tool_stats.total_ai_additions += prompt_record.total_additions;
             tool_stats.total_ai_deletions += prompt_record.total_deletions;
             tool_stats.mixed_additions += prompt_record.overriden_lines;
@@ -540,11 +543,17 @@ pub fn stats_for_commit_stats(
         }
 
         // AI additions are the sum of mixed and accepted lines, capped at the total git diff added lines
-        commit_stats.ai_additions = std::cmp::min(commit_stats.mixed_additions + commit_stats.ai_accepted, git_diff_added_lines);
+        commit_stats.ai_additions = std::cmp::min(
+            commit_stats.mixed_additions + commit_stats.ai_accepted,
+            git_diff_added_lines,
+        );
     }
 
     // Human additions are the difference between total git diff and AI additions (ensure non-negative)
-    commit_stats.human_additions = std::cmp::max(0, git_diff_added_lines.saturating_sub(commit_stats.ai_accepted));
+    commit_stats.human_additions = std::cmp::max(
+        0,
+        git_diff_added_lines.saturating_sub(commit_stats.ai_accepted),
+    );
 
     Ok(commit_stats)
 }

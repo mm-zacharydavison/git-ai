@@ -41,7 +41,12 @@ pub struct LineAttribution {
 }
 
 impl LineAttribution {
-    pub fn new(start_line: u32, end_line: u32, author_id: String, overrode: Option<String>) -> Self {
+    pub fn new(
+        start_line: u32,
+        end_line: u32,
+        author_id: String,
+        overrode: Option<String>,
+    ) -> Self {
         LineAttribution {
             start_line,
             end_line,
@@ -925,7 +930,8 @@ pub fn attributions_to_line_attributions(
     }
 
     // For each line, determine the dominant author
-    let mut line_authors: Vec<Option<(String, Option<String>)>> = Vec::with_capacity(line_count as usize);
+    let mut line_authors: Vec<Option<(String, Option<String>)>> =
+        Vec::with_capacity(line_count as usize);
 
     for line_num in 1..=line_count {
         let (author, overrode) =
@@ -937,7 +943,9 @@ pub fn attributions_to_line_attributions(
     let mut merged_line_authors = merge_consecutive_line_attributions(line_authors);
 
     // Strip away all human lines (only AI lines need to be retained)
-    merged_line_authors.retain(|line_attr| line_attr.author_id != CheckpointKind::Human.to_str() || line_attr.overrode.is_some());
+    merged_line_authors.retain(|line_attr| {
+        line_attr.author_id != CheckpointKind::Human.to_str() || line_attr.overrode.is_some()
+    });
     merged_line_authors
 }
 
@@ -961,7 +969,8 @@ fn find_dominant_author_for_line(
         // Get the substring of the content on this line that is covered by the attribution
         let content_slice = &full_content[std::cmp::max(line_start, attribution.start)
             ..std::cmp::min(line_end, attribution.end)];
-        let attr_non_whitespace_count = content_slice.chars().filter(|c| !c.is_whitespace()).count();
+        let attr_non_whitespace_count =
+            content_slice.chars().filter(|c| !c.is_whitespace()).count();
         if attr_non_whitespace_count > 0 || is_line_empty {
             candidate_attrs.push(attribution.clone());
         } else {
@@ -996,7 +1005,7 @@ fn find_dominant_author_for_line(
             } else {
                 None
             }
-        },
+        }
         _ => None,
     };
     return (latest_author[0].clone(), overrode);
@@ -2508,7 +2517,7 @@ fn compute() -> i32 {
     }
 
     #[test]
-    fn test_line_attribution_ignores_whitespace_only_ranges() {
+    fn test_line_attribution_ignores_whitespace_only_ranges_on_non_empty_lines() {
         // Test that ranges containing only whitespace are completely ignored
         let content = "a b c\n";
         let attributions = vec![

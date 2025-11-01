@@ -11,7 +11,8 @@ fn test_prepare_working_log_simple_squash() {
 
     // Create master branch with initial content
     file.set_contents(lines!["line 1", "line 2", "line 3"]);
-    repo.stage_all_and_commit("Initial commit on master").unwrap();
+    repo.stage_all_and_commit("Initial commit on master")
+        .unwrap();
 
     let default_branch = repo.current_branch();
 
@@ -60,15 +61,17 @@ fn test_prepare_working_log_squash_with_main_changes() {
 
     // Switch back to master and make out-of-band changes
     repo.git(&["checkout", &default_branch]).unwrap();
-    
+
     // Re-initialize file after checkout to get current master state
     let mut file = repo.filename("document.txt");
     file.insert_at(0, lines!["// Master update at top"]);
-    repo.stage_all_and_commit("Out-of-band update on master").unwrap();
+    repo.stage_all_and_commit("Out-of-band update on master")
+        .unwrap();
 
     // Squash merge feature into master
     repo.git(&["merge", "--squash", "feature"]).unwrap();
-    repo.stage_all_and_commit("Squashed feature with out-of-band").unwrap();
+    repo.stage_all_and_commit("Squashed feature with out-of-band")
+        .unwrap();
 
     // Verify both changes are present with correct attribution
     file.assert_lines_and_blame(lines![
@@ -122,4 +125,3 @@ fn test_prepare_working_log_squash_multiple_sessions() {
         "// AI session 2".ai()
     ]);
 }
-

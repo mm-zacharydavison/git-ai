@@ -1,5 +1,5 @@
-use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
 use crate::authorship::attribution_tracker::LineAttribution;
+use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
 use crate::authorship::working_log::{Checkpoint, CheckpointKind};
 use crate::config;
 use crate::git::repository::Repository;
@@ -253,8 +253,7 @@ impl AuthorshipLog {
 
         for checkpoint in checkpoints {
             for entry in &checkpoint.entries {
-                latest_by_file
-                    .insert(entry.file.clone(), entry.line_attributions.clone());
+                latest_by_file.insert(entry.file.clone(), entry.line_attributions.clone());
             }
         }
 
@@ -268,7 +267,8 @@ impl AuthorshipLog {
         let mut overridden_lines: HashSet<u32> = HashSet::new();
 
         for attribution in line_attributions {
-            if attribution.overrode.is_none() || attribution.overrode.clone().unwrap() != session_id {
+            if attribution.overrode.is_none() || attribution.overrode.clone().unwrap() != session_id
+            {
                 continue;
             }
 
@@ -351,12 +351,10 @@ impl AuthorshipLog {
 
         // Update metrics from checkpoint line_stats
         if let Some(ref session_id) = session_id_opt {
-            *session_additions
-                .entry(session_id.clone())
-                .or_insert(0) += checkpoint.line_stats.additions;
-            *session_deletions
-                .entry(session_id.clone())
-                .or_insert(0) += checkpoint.line_stats.deletions;
+            *session_additions.entry(session_id.clone()).or_insert(0) +=
+                checkpoint.line_stats.additions;
+            *session_deletions.entry(session_id.clone()).or_insert(0) +=
+                checkpoint.line_stats.deletions;
         }
 
         // Process each file entry in checkpoint
@@ -449,7 +447,10 @@ impl AuthorshipLog {
         }
 
         let latest_line_attributions = Self::collect_latest_line_attributions(checkpoints);
-        let all_line_attributions = latest_line_attributions.values().flatten().collect::<Vec<&LineAttribution>>();
+        let all_line_attributions = latest_line_attributions
+            .values()
+            .flatten()
+            .collect::<Vec<&LineAttribution>>();
 
         // Calculate accepted_lines for each session from the final attestation log
         let mut session_accepted_lines: HashMap<String, u32> = HashMap::new();
