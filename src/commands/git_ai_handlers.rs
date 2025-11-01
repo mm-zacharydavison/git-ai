@@ -12,6 +12,7 @@ use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
 use crate::observability;
+use crate::observability::wrapper_performance_targets::log_performance_for_checkpoint;
 use std::env;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -324,6 +325,7 @@ fn handle_checkpoint(args: &[String]) {
     match checkpoint_result {
         Ok((_, files_edited, _)) => {
             let elapsed = checkpoint_start.elapsed();
+            log_performance_for_checkpoint(files_edited, elapsed, checkpoint_kind);
             eprintln!("Checkpoint completed in {:?}", elapsed);
         }
         Err(e) => {
@@ -332,6 +334,7 @@ fn handle_checkpoint(args: &[String]) {
             let context = serde_json::json!({
                 "function": "checkpoint",
                 "agent": agent_tool.unwrap_or_default(),
+                "duration": elapsed.as_millis(),
                 "checkpoint_kind": format!("{:?}", checkpoint_kind)
             });
             observability::log_error(&e, Some(context));

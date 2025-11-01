@@ -47,8 +47,5 @@ fn main() {
         std::process::exit(0);
     }
 
-    // debug_log(&format!("in main, command: {}", command));
-    // debug_log(&format!("in main, args: {:?}", positional_args));
-
     commands::git_handlers::handle_git(&cli.args);
 }
