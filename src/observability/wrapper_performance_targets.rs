@@ -33,7 +33,6 @@ pub fn log_performance_target_if_violated(
             pre_command.as_millis(),
             post_command.as_millis(),
         ));
-
         log_performance(
             "performance_target_violated",
             total_duration,
