@@ -55,6 +55,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             -e DEBIAN_FRONTEND=noninteractive \
+            -e SENTRY_OSS="${{ secrets.SENTRY_OSS }}" \
             ${{ matrix.docker_image }} \
             bash -c "
               apt-get update && \
@@ -90,6 +91,7 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_INCREMENTAL: 0
+          SENTRY_OSS: ${{ secrets.SENTRY_OSS }}
 
       - name: Verify binary architecture (Linux)
         if: contains(matrix.os, 'ubuntu')
@@ -184,6 +186,7 @@ jobs:
           cargo build --release --target x86_64-apple-darwin
         env:
           CARGO_INCREMENTAL: 0
+          SENTRY_OSS: ${{ secrets.SENTRY_OSS }}
 
       - name: Verify binary architecture
         run: |
