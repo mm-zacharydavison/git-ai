@@ -14,7 +14,7 @@ pub struct Config {
     ignore_prompts: bool,
     allow_repositories: HashSet<String>,
     exclude_repositories: HashSet<String>,
-    telemetry_oss: Option<String>,
+    telemetry_oss_disabled: bool,
     telemetry_enterprise_dsn: Option<String>,
 }
 #[derive(Deserialize)]
@@ -97,9 +97,9 @@ impl Config {
         self.ignore_prompts
     }
 
-    /// Returns the telemetry_oss setting. Returns Some("off") if set to "off", None otherwise.
-    pub fn telemetry_oss(&self) -> Option<&str> {
-        self.telemetry_oss.as_deref()
+    /// Returns true if OSS telemetry is disabled.
+    pub fn is_telemetry_oss_disabled(&self) -> bool {
+        self.telemetry_oss_disabled
     }
 
     /// Returns the telemetry_enterprise_dsn if set.
@@ -126,10 +126,11 @@ fn build_config() -> Config {
         .unwrap_or(vec![])
         .into_iter()
         .collect();
-    let telemetry_oss = file_cfg
+    let telemetry_oss_disabled = file_cfg
         .as_ref()
         .and_then(|c| c.telemetry_oss.clone())
-        .filter(|s| s == "off");
+        .filter(|s| s == "off")
+        .is_some();
     let telemetry_enterprise_dsn = file_cfg
         .as_ref()
         .and_then(|c| c.telemetry_enterprise_dsn.clone())
@@ -142,7 +143,7 @@ fn build_config() -> Config {
         ignore_prompts,
         allow_repositories,
         exclude_repositories,
-        telemetry_oss,
+        telemetry_oss_disabled,
         telemetry_enterprise_dsn,
     }
 }
@@ -233,7 +234,7 @@ mod tests {
             ignore_prompts: false,
             allow_repositories: allow_repositories.into_iter().collect(),
             exclude_repositories: exclude_repositories.into_iter().collect(),
-            telemetry_oss: None,
+            telemetry_oss_disabled: false,
             telemetry_enterprise_dsn: None,
         }
     }

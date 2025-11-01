@@ -33,8 +33,8 @@ pub fn handle_flush_logs(args: &[String]) {
 
     // Check for OSS DSN: runtime env var takes precedence over build-time value
     // Can be explicitly disabled with empty string
-    // Skip OSS DSN if telemetry_oss is set to "off"
-    let oss_dsn = if config.telemetry_oss() == Some("off") {
+    // Skip OSS DSN if OSS telemetry is disabled in config
+    let oss_dsn = if config.is_telemetry_oss_disabled() {
         None
     } else {
         std::env::var("SENTRY_OSS")
