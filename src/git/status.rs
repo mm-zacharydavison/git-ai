@@ -55,15 +55,21 @@ pub struct StatusEntry {
 
 impl Repository {
     // Run status porcelain v2 on the repository. Will fail for bare repositories.
+    // If pathspecs is Some(Empty Vec), it will return empty vector, not default to full repo scan.
     pub fn status(
         &self,
         pathspecs: Option<&HashSet<String>>,
     ) -> Result<Vec<StatusEntry>, GitAiError> {
+        if pathspecs.is_some() && pathspecs.as_ref().unwrap().is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut args = self.global_args_for_exec();
         args.push("status".to_string());
         args.push("--porcelain=v2".to_string());
         args.push("-z".to_string());
 
+        println!("pathspecs: {:?}", pathspecs);
         // Add pathspecs if provided
         if let Some(paths) = pathspecs {
             args.push("--".to_string());
@@ -71,6 +77,8 @@ impl Repository {
                 args.push(path.clone());
             }
         }
+
+        println!("args: {:?}", args);
 
         let output = exec_git(&args)?;
 

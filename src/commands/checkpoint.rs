@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub fn run(
     repo: &Repository,
@@ -22,6 +22,7 @@ pub fn run(
     reset: bool,
     quiet: bool,
     agent_run_result: Option<AgentRunResult>,
+    pre_commit_mode: bool,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
@@ -115,7 +116,14 @@ pub fn run(
         })
     });
 
-    let files = get_all_tracked_files(repo, &base_commit, &working_log, pathspec_filter)?;
+    let files = get_all_tracked_files(
+        repo,
+        &base_commit,
+        &working_log,
+        pathspec_filter,
+        pre_commit_mode,
+    )?;
+
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
         working_log.reset_working_log()?;
@@ -301,20 +309,26 @@ pub fn run(
     Ok((entries.len(), files.len(), checkpoints.len()))
 }
 
-fn get_all_files(
+fn get_status_of_files(
     repo: &Repository,
     edited_filepaths: Option<&Vec<String>>,
 ) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
 
+    println!("edited_filepaths: {:?}", edited_filepaths);
     // Convert edited_filepaths to HashSet for git status if provided
     let pathspec = edited_filepaths.map(|paths| {
         use std::collections::HashSet;
         paths.iter().cloned().collect::<HashSet<String>>()
     });
 
+    println!("pathspec: {:?}", pathspec);
+
     // Use porcelain v2 format to get status
+    let start = Instant::now();
+
     let statuses = repo.status(pathspec.as_ref())?;
+    println!("get_all_files statuses time: {:?}", start.elapsed());
 
     for entry in statuses {
         // Skip ignored files
@@ -358,25 +372,59 @@ fn get_all_tracked_files(
     _base_commit: &str,
     working_log: &PersistedWorkingLog,
     edited_filepaths: Option<&Vec<String>>,
+    pre_commit_mode: bool,
 ) -> Result<Vec<String>, GitAiError> {
-    let mut files = get_all_files(repo, edited_filepaths)?;
+    // when edited filepaths is set, EVEN when empty, we know an agent has passed pathspecs
+    let search_paths = match edited_filepaths {
+        Some(_) => {
+            let mut files: HashSet<String> = edited_filepaths
+                .map(|paths| paths.iter().cloned().collect())
+                .unwrap_or_default();
 
-    // Also include files that were in previous checkpoints but might not show up in git status
-    // This ensures we track deletions when files return to their original state
-    if let Ok(working_log_data) = working_log.read_all_checkpoints() {
-        for checkpoint in &working_log_data {
-            for entry in &checkpoint.entries {
-                if !files.contains(&entry.file) {
-                    // Check if it's a text file before adding
-                    if is_text_file(repo, &entry.file) {
-                        files.push(entry.file.clone());
+            if let Ok(working_log_data) = working_log.read_all_checkpoints() {
+                for checkpoint in &working_log_data {
+                    for entry in &checkpoint.entries {
+                        if !files.contains(&entry.file) {
+                            // Check if it's a text file before adding
+                            if is_text_file(repo, &entry.file) {
+                                files.insert(entry.file.clone());
+                            }
+                        }
                     }
                 }
             }
-        }
-    }
 
-    Ok(files)
+            println!("files from checkpoints: {:?}", files);
+            Some(files.into_iter().collect::<Vec<String>>())
+        }
+        _ => {
+            let mut files: HashSet<String> = HashSet::new();
+            if let Ok(working_log_data) = working_log.read_all_checkpoints() {
+                for checkpoint in &working_log_data {
+                    for entry in &checkpoint.entries {
+                        if !files.contains(&entry.file) {
+                            // Check if it's a text file before adding
+                            if is_text_file(repo, &entry.file) {
+                                files.insert(entry.file.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if files.is_empty() && pre_commit_mode {
+                Some(Vec::new())
+            } else if files.is_empty() {
+                None
+            } else {
+                Some(files.into_iter().collect::<Vec<String>>())
+            }
+        }
+    };
+
+    let results_for_tracked_files = get_status_of_files(repo, search_paths.as_ref())?;
+
+    Ok(results_for_tracked_files)
 }
 
 fn save_current_file_states(
