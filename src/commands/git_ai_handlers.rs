@@ -11,7 +11,8 @@ use crate::config;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
-use crate::utils::{Timer, debug_log};
+use crate::observability;
+use crate::observability::wrapper_performance_targets::log_performance_for_checkpoint;
 use std::env;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -26,11 +27,14 @@ pub fn handle_git_ai(args: &[String]) {
     let current_dir = env::current_dir().unwrap().to_string_lossy().to_string();
     let repository_option = find_repository_in_path(&current_dir).ok();
 
+    // Set repo context to flush buffered events
+    if let Some(repo) = repository_option.as_ref() {
+        observability::set_repo_context(repo);
+    }
+
     let config = config::Config::get();
 
     let allowed_repository = config.is_allowed_repository(&repository_option);
-
-    let timer = Timer::default();
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => {
@@ -56,9 +60,7 @@ pub fn handle_git_ai(args: &[String]) {
                 );
                 std::process::exit(1);
             }
-            let end = timer.start("git-ai checkpoint");
             handle_checkpoint(&args[1..]);
-            end();
         }
         "blame" => {
             handle_ai_blame(&args[1..]);
@@ -79,6 +81,9 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "ci" => {
             commands::ci_handlers::handle_ci(&args[1..]);
+        }
+        "flush-logs" => {
+            commands::flush_logs::handle_flush_logs(&args[1..]);
         }
         _ => {
             println!("Unknown git-ai command: {}", args[0]);
@@ -306,7 +311,9 @@ fn handle_checkpoint(args: &[String]) {
         }
     };
 
-    if let Err(e) = commands::checkpoint::run(
+    let checkpoint_start = std::time::Instant::now();
+    let agent_tool = agent_run_result.as_ref().map(|r| r.agent_id.tool.clone());
+    let checkpoint_result = commands::checkpoint::run(
         &repo,
         &default_user_name,
         checkpoint_kind,
@@ -314,9 +321,25 @@ fn handle_checkpoint(args: &[String]) {
         reset,
         false,
         agent_run_result,
-    ) {
-        eprintln!("Checkpoint failed: {}", e);
-        std::process::exit(1);
+    );
+    match checkpoint_result {
+        Ok((_, files_edited, _)) => {
+            let elapsed = checkpoint_start.elapsed();
+            log_performance_for_checkpoint(files_edited, elapsed, checkpoint_kind);
+            eprintln!("Checkpoint completed in {:?}", elapsed);
+        }
+        Err(e) => {
+            let elapsed = checkpoint_start.elapsed();
+            eprintln!("Checkpoint failed after {:?} with error {}", elapsed, e);
+            let context = serde_json::json!({
+                "function": "checkpoint",
+                "agent": agent_tool.unwrap_or_default(),
+                "duration": elapsed.as_millis(),
+                "checkpoint_kind": format!("{:?}", checkpoint_kind)
+            });
+            observability::log_error(&e, Some(context));
+            std::process::exit(1);
+        }
     }
 }
 

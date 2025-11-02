@@ -7,7 +7,7 @@ use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::{Timer, debug_log};
+use crate::utils::debug_log;
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{HashMap, HashSet};
@@ -23,7 +23,6 @@ pub fn run(
     quiet: bool,
     agent_run_result: Option<AgentRunResult>,
 ) -> Result<(usize, usize, usize), GitAiError> {
-    let total_timer = Timer::default();
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
         Ok(head) => match head.target() {
@@ -116,10 +115,7 @@ pub fn run(
         })
     });
 
-    let end_get_files_clock = Timer::default().start_quiet("checkpoint: get tracked files");
     let files = get_all_tracked_files(repo, &base_commit, &working_log, pathspec_filter)?;
-    let get_files_duration = end_get_files_clock();
-    Timer::default().print_duration("checkpoint: get tracked files", get_files_duration);
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
         working_log.reset_working_log()?;
@@ -180,15 +176,11 @@ pub fn run(
                 debug_log("");
             }
         }
-        Timer::default().print_duration("checkpoint: total", total_timer.epoch.elapsed());
         return Ok((0, files.len(), checkpoints.len()));
     }
 
     // Save current file states and get content hashes
-    let end_save_states_clock = Timer::default().start_quiet("checkpoint: persist file versions");
     let file_content_hashes = save_current_file_states(&working_log, &files)?;
-    let save_states_duration = end_save_states_clock();
-    Timer::default().print_duration("checkpoint: persist file versions", save_states_duration);
 
     // Order file hashes by key and create a hash of the ordered hashes
     let mut ordered_hashes: Vec<_> = file_content_hashes.iter().collect();
@@ -204,14 +196,10 @@ pub fn run(
     // Note: foreign prompts from INITIAL file are read in post_commit.rs
     // when converting working log -> authorship log
 
-    let timer = Timer::default();
     // If this is not the first checkpoint, diff against the last saved state
-    let end_entries_clock = Timer::default().start_quiet("checkpoint: compute entries");
     let entries = if checkpoints.is_empty() || reset {
         // First checkpoint or reset - diff against base commit
-
-        let end = timer.start("checkpoint: get initial checkpoint entries");
-        let result = smol::block_on(get_initial_checkpoint_entries(
+        smol::block_on(get_initial_checkpoint_entries(
             kind,
             repo,
             &working_log,
@@ -220,10 +208,7 @@ pub fn run(
             &file_content_hashes,
             agent_run_result.as_ref(),
             ts,
-        ))?;
-
-        end();
-        result
+        ))?
     } else {
         // Subsequent checkpoint - diff against last saved state
         get_subsequent_checkpoint_entries(
@@ -236,8 +221,6 @@ pub fn run(
             ts,
         )?
     };
-    let entries_duration = end_entries_clock();
-    Timer::default().print_duration("checkpoint: compute entries", entries_duration);
 
     // Skip adding checkpoint if there are no changes
     if !entries.is_empty() {
@@ -249,11 +232,8 @@ pub fn run(
         );
 
         // Compute and set line stats
-        let end_stats_clock = Timer::default().start_quiet("checkpoint: compute line stats");
         checkpoint.line_stats =
             compute_line_stats(repo, &working_log, &files, &entries, &checkpoints, kind)?;
-        let stats_duration = end_stats_clock();
-        Timer::default().print_duration("checkpoint: compute line stats", stats_duration);
 
         // Set transcript and agent_id if provided and not a human checkpoint
         if kind != CheckpointKind::Human
@@ -264,10 +244,7 @@ pub fn run(
         }
 
         // Append checkpoint to the working log
-        let end_append_clock = Timer::default().start_quiet("checkpoint: append working log");
         working_log.append_checkpoint(&checkpoint)?;
-        let append_duration = end_append_clock();
-        Timer::default().print_duration("checkpoint: append working log", append_duration);
         checkpoints.push(checkpoint);
     }
 
@@ -321,7 +298,6 @@ pub fn run(
     }
 
     // Return the requested values: (entries_len, files_len, working_log_len)
-    Timer::default().print_duration("checkpoint: total", total_timer.epoch.elapsed());
     Ok((entries.len(), files.len(), checkpoints.len()))
 }
 

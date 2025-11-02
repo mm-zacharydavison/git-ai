@@ -14,6 +14,8 @@ pub struct Config {
     ignore_prompts: bool,
     allow_repositories: HashSet<String>,
     exclude_repositories: HashSet<String>,
+    telemetry_oss_disabled: bool,
+    telemetry_enterprise_dsn: Option<String>,
 }
 #[derive(Deserialize)]
 struct FileConfig {
@@ -25,6 +27,10 @@ struct FileConfig {
     allow_repositories: Option<Vec<String>>,
     #[serde(default)]
     exclude_repositories: Option<Vec<String>>,
+    #[serde(default)]
+    telemetry_oss: Option<String>,
+    #[serde(default)]
+    telemetry_enterprise_dsn: Option<String>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -90,6 +96,16 @@ impl Config {
     pub fn ignore_prompts(&self) -> bool {
         self.ignore_prompts
     }
+
+    /// Returns true if OSS telemetry is disabled.
+    pub fn is_telemetry_oss_disabled(&self) -> bool {
+        self.telemetry_oss_disabled
+    }
+
+    /// Returns the telemetry_enterprise_dsn if set.
+    pub fn telemetry_enterprise_dsn(&self) -> Option<&str> {
+        self.telemetry_enterprise_dsn.as_deref()
+    }
 }
 
 fn build_config() -> Config {
@@ -110,6 +126,15 @@ fn build_config() -> Config {
         .unwrap_or(vec![])
         .into_iter()
         .collect();
+    let telemetry_oss_disabled = file_cfg
+        .as_ref()
+        .and_then(|c| c.telemetry_oss.clone())
+        .filter(|s| s == "off")
+        .is_some();
+    let telemetry_enterprise_dsn = file_cfg
+        .as_ref()
+        .and_then(|c| c.telemetry_enterprise_dsn.clone())
+        .filter(|s| !s.is_empty());
 
     let git_path = resolve_git_path(&file_cfg);
 
@@ -118,6 +143,8 @@ fn build_config() -> Config {
         ignore_prompts,
         allow_repositories,
         exclude_repositories,
+        telemetry_oss_disabled,
+        telemetry_enterprise_dsn,
     }
 }
 
@@ -207,6 +234,8 @@ mod tests {
             ignore_prompts: false,
             allow_repositories: allow_repositories.into_iter().collect(),
             exclude_repositories: exclude_repositories.into_iter().collect(),
+            telemetry_oss_disabled: false,
+            telemetry_enterprise_dsn: None,
         }
     }
 

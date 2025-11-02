@@ -19,6 +19,8 @@ All options in `config.json` are optional and will fall back to default values i
 | `ignore_prompts` | `boolean` | Whether prompts should be excluded from authorship logs | `false` |
 | `allow_repositories` | `Path[]` | Allow `git-ai` in only these remotes | If not specified or set to an empty list, all repositories are allowed |
 | `exclude_repositories` | `Path[]` | Exclude `git-ai` from these remotes | If a repository is present in both allow and exclude lists, exclusion takes precedence |
+| `telemetry_oss` | `"off"` | Disable OSS performance metrics and error logging sent to Git AI maintainers | Defaults to enabled |
+| `telemetry_enterprise_dsn` | `string` | A Sentry DSN to use to send yourself performance metrics and error logging | Defaults to none |
 
 ## Example Configuration
 
@@ -71,6 +73,15 @@ Set `ignore_prompts` to `true` to exclude all prompts from authorship logs:
 {
     "ignore_prompts": true
 }
+```
+
+## Telemetry for Custom Forks
+
+If you build `git-ai` from source you can set your Sentry-compatible DSN at build time instead of using the `config.json` file.
+
+```
+SENTRY_ENTERPRISE="https://enterprise-key@o0.ingest.sentry.io/456" \
+cargo build --release
 ```
 
 ## Deployment
