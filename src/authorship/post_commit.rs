@@ -44,28 +44,23 @@ pub fn post_commit(
 
     let timer = Instant::now();
 
-    // Create VirtualAttributions from working log
-    let repo_clone = repo.clone();
-    let parent_sha_clone = parent_sha.clone();
-    let pathspecs: Vec<String> = filtered_working_log
-        .iter()
-        .flat_map(|cp| cp.entries.iter().map(|e| e.file.clone()))
-        .collect();
-
-    let working_va = smol::block_on(async {
-        VirtualAttributions::from_working_log_for_commit(
-            repo_clone,
-            parent_sha_clone,
-            &pathspecs,
-            Some(human_author.clone()),
-        )
-        .await
-    })?;
+    // Create VirtualAttributions from working log (fast path - no blame)
+    // We don't need to run blame because we only care about the working log data
+    // that was accumulated since the parent commit
+    let working_va = VirtualAttributions::from_just_working_log(
+        repo.clone(),
+        parent_sha.clone(),
+        Some(human_author.clone()),
+    )?;
 
     println!("virtual attributions created {:?}", timer.elapsed());
 
     let committed_files_time = Instant::now();
     // Get committed file contents from commit tree
+    let pathspecs: Vec<String> = filtered_working_log
+        .iter()
+        .flat_map(|cp| cp.entries.iter().map(|e| e.file.clone()))
+        .collect();
     let committed_files = get_committed_files_content(repo, &commit_sha, &pathspecs)?;
 
     println!("committed files read {:?}", committed_files_time.elapsed());
