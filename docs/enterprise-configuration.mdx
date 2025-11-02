@@ -17,8 +17,8 @@ All options in `config.json` are optional and will fall back to default values i
 | --- | --- | --- | --- |
 | `git_path` | `Path` | The path to the (unaltered) `git` binary you distribute on developer machines | Whichever git is on the shell path |
 | `ignore_prompts` | `boolean` | Whether prompts should be excluded from authorship logs | `false` |
-| `allow_repositories` | `Path[]` | Allow `git-ai` in only these remotes | If not specified or set to an empty list, all repositories are allowed |
-| `exclude_repositories` | `Path[]` | Exclude `git-ai` from these remotes | If a repository is present in both allow and exclude lists, exclusion takes precedence |
+| `allow_repositories` | `Pattern[]` | Allow `git-ai` in only these remotes. Supports glob patterns (e.g., `https://github.com/myorg/*`) | If not specified or set to an empty list, all repositories are allowed |
+| `exclude_repositories` | `Pattern[]` | Exclude `git-ai` from these remotes. Supports glob patterns (e.g., `https://github.com/myorg/*`) | If a repository is present in both allow and exclude lists, exclusion takes precedence |
 | `telemetry_oss` | `"off"` | Disable OSS performance metrics and error logging sent to Git AI maintainers | Defaults to enabled |
 | `telemetry_enterprise_dsn` | `string` | A Sentry DSN to use to send yourself performance metrics and error logging | Defaults to none |
 
@@ -41,29 +41,62 @@ All options in `config.json` are optional and will fall back to default values i
 
 ### Limiting to Specific Repositories
 
-Use `allow_repositories` to enable Git AI only for approved repositories:
+Use `allow_repositories` to enable Git AI only for approved repositories. You can use exact URLs or glob patterns:
 
 ```json
 {
     "allow_repositories": [
         "https://github.com/yourorg/product-repo.git",
-        "https://github.com/yourorg/mobile-app.git"
+        "https://github.com/yourorg/mobile-app.git",
+        "https://github.com/yourorg/*"
     ]
 }
 ```
 
+The glob pattern `https://github.com/yourorg/*` will match all repositories under your organization.
+
 ### Excluding Sensitive Repositories
 
-Use `exclude_repositories` to prevent Git AI from tracking specific repositories:
+Use `exclude_repositories` to prevent Git AI from tracking specific repositories. Glob patterns make it easy to exclude entire categories:
 
 ```json
 {
     "exclude_repositories": [
-        "https://github.com/yourorg/secrets-manager.git",
-        "https://github.com/yourorg/compliance-docs.git"
+        "https://github.com/yourorg/**",
+        "**/org/**",
     ]
 }
 ```
+
+Glob patterns like `https://github.com/*/private-*` will match any repository starting with "private-" from any organization, and `*secret*` will match any remote URL containing the word "secret".
+
+## Glob Pattern Support
+
+Both `allow_repositories` and `exclude_repositories` support glob patterns for flexible repository matching:
+
+- `*` matches any sequence of characters within a path segment
+- `?` matches any single character
+- `[abc]` matches any character in the brackets
+- `[!abc]` matches any character not in the brackets
+
+### Common Glob Pattern Examples
+
+```json
+{
+    "allow_repositories": [
+        "https://github.com/myorg/*",           // All repos in myorg
+        "https://github.com/*/public-*",        // Any repo starting with public-
+        "*@github.com:company/*",               // SSH remotes for company org
+        "https://*.internal.com/*"              // Any internal domain repos
+    ],
+    "exclude_repositories": [
+        "https://github.com/*/test-*",          // Any test repositories
+        "*.internal.private.com/*"              // Specific internal domain
+    ]
+}
+```
+
+**Note:** Exact URLs still work as before and are treated as literal patterns (no wildcards needed).
 
 ### Privacy-First Setup
 
