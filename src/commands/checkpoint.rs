@@ -381,6 +381,12 @@ fn get_all_tracked_files(
                 .map(|paths| paths.iter().cloned().collect())
                 .unwrap_or_default();
 
+            for file in working_log.read_initial_attributions().files.keys() {
+                if is_text_file(repo, &file) {
+                    files.insert(file.clone());
+                }
+            }
+
             if let Ok(working_log_data) = working_log.read_all_checkpoints() {
                 for checkpoint in &working_log_data {
                     for entry in &checkpoint.entries {
@@ -409,6 +415,12 @@ fn get_all_tracked_files(
                             }
                         }
                     }
+                }
+            }
+
+            for file in working_log.read_initial_attributions().files.keys() {
+                if is_text_file(repo, &file) {
+                    files.insert(file.clone());
                 }
             }
 
