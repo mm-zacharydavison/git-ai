@@ -3,7 +3,7 @@ use std::{ops::Add, time::Duration};
 use serde_json::json;
 
 use crate::{
-    authorship::working_log::CheckpointKind, observability::log_performance, utils::debug_log,
+    authorship::working_log::CheckpointKind, observability::log_performance, utils::debug_performance_log,
 };
 
 pub fn log_performance_target_if_violated(
@@ -25,7 +25,7 @@ pub fn log_performance_target_if_violated(
     };
 
     if !within_target {
-        debug_log(&format!(
+        debug_performance_log(&format!(
             "ᕽ Performance target violated for command: {}. Total duration: {}ms, Git duration: {}ms. Pre-command: {}ms, Post-command: {}ms.",
             command,
             total_duration.as_millis(),
@@ -45,7 +45,7 @@ pub fn log_performance_target_if_violated(
             })),
         );
     } else {
-        debug_log(&format!(
+        debug_performance_log(&format!(
             "✓ Performance target met for command: {}. Total duration: {}ms, Git duration: {}ms",
             command,
             total_duration.as_millis(),
@@ -70,13 +70,13 @@ pub fn log_performance_for_checkpoint(
             })),
         );
 
-        debug_log(&format!(
+        debug_performance_log(&format!(
             "ᕽ Performance target violated for checkpoint: {}. Total duration. Files edited: {}",
             duration.as_millis(),
             files_edited,
         ));
     } else {
-        debug_log(&format!(
+        debug_performance_log(&format!(
             "✓ Performance target met for checkpoint: {}. Total duration. Files edited: {}",
             duration.as_millis(),
             files_edited,

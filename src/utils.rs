@@ -5,11 +5,24 @@ use std::time::{Duration, Instant};
 ///
 /// This is checked once at module initialization to avoid repeated environment variable lookups.
 static DEBUG_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static DEBUG_PERFORMANCE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn is_debug_enabled() -> bool {
     *DEBUG_ENABLED.get_or_init(|| {
         cfg!(debug_assertions) || std::env::var("GIT_AI_DEBUG").unwrap_or_default() == "1"
     })
+}
+
+fn is_debug_performance_enabled() -> bool {
+    is_debug_enabled() && *DEBUG_PERFORMANCE_ENABLED.get_or_init(|| {
+        std::env::var("GIT_AI_DEBUG_PERFORMANCE").unwrap_or_default() == "1" || std::env::var("GIT_AI_DEBUG_PERFORMANCE").unwrap_or_default() != "0"
+    })
+}
+
+pub fn debug_performance_log(msg: &str) {
+    if is_debug_performance_enabled() {
+        eprintln!("\x1b[1;33m[git-ai (perf)]\x1b[0m {}", msg);
+    }
 }
 
 /// Debug logging utility function
