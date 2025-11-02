@@ -3,8 +3,11 @@ use std::{ops::Add, time::Duration};
 use serde_json::json;
 
 use crate::{
-    authorship::working_log::CheckpointKind, observability::log_performance, utils::debug_performance_log,
+    authorship::working_log::CheckpointKind, observability::log_performance,
+    utils::debug_performance_log,
 };
+
+const PERFORMANCE_FLOOR_MS: Duration = Duration::from_millis(70);
 
 pub fn log_performance_target_if_violated(
     command: &str,
@@ -13,15 +16,30 @@ pub fn log_performance_target_if_violated(
     post_command: Duration,
 ) {
     let total_duration = pre_command + git_duration + post_command;
+    let git_ai_overhead = pre_command + post_command;
     let within_target: bool = match command {
-        "commit" => git_duration.mul_f32(1.1) >= total_duration,
-        "rebase" => git_duration.mul_f32(1.1) >= total_duration,
-        "cherry-pick" => git_duration.mul_f32(1.1) >= total_duration,
-        "reset" => git_duration.mul_f32(1.1) >= total_duration,
-        "fetch" => git_duration.mul_f32(1.5) >= total_duration,
-        "pull" => git_duration.mul_f32(1.5) >= total_duration,
-        "push" => git_duration.mul_f32(1.5) >= total_duration,
-        _ => git_duration.add(Duration::from_millis(100)) >= total_duration,
+        "commit" => {
+            git_duration.mul_f32(1.1) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        "rebase" => {
+            git_duration.mul_f32(1.1) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        "cherry-pick" => {
+            git_duration.mul_f32(1.1) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        "reset" => {
+            git_duration.mul_f32(1.1) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        "fetch" => {
+            git_duration.mul_f32(1.5) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        "pull" => {
+            git_duration.mul_f32(1.5) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        "push" => {
+            git_duration.mul_f32(1.5) >= total_duration || git_ai_overhead < PERFORMANCE_FLOOR_MS
+        }
+        _ => git_duration.add(PERFORMANCE_FLOOR_MS) >= total_duration,
     };
 
     if !within_target {
