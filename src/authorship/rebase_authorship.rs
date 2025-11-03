@@ -931,28 +931,20 @@ pub fn reconstruct_working_log_after_reset(
         merged_va.files().len()
     ));
 
-    // Step 6: Convert merged VA to AuthorshipLog
-    let mut authorship_log = merged_va.to_authorship_log()?;
-    authorship_log.metadata.base_commit_sha = target_commit_sha.to_string();
+    // Step 6: Convert to INITIAL (everything is uncommitted after reset)
+    // Pass empty committed_files since nothing has been committed yet
+    let empty_committed_files: HashMap<String, String> = HashMap::new();
+    let (authorship_log, initial_attributions) =
+        merged_va.to_authorship_log_and_initial_working_log(empty_committed_files)?;
 
     debug_log(&format!(
-        "Converted to authorship log with {} attestations, {} prompts",
+        "Generated INITIAL attributions for {} files, {} attestations, {} prompts",
+        initial_attributions.files.len(),
         authorship_log.attestations.len(),
         authorship_log.metadata.prompts.len()
     ));
 
-    // Step 7: Convert to INITIAL (everything is uncommitted after reset)
-    // Pass empty committed_files since nothing has been committed yet
-    let empty_committed_files: HashMap<String, String> = HashMap::new();
-    let (_authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(empty_committed_files)?;
-
-    debug_log(&format!(
-        "Generated INITIAL attributions for {} files",
-        initial_attributions.files.len()
-    ));
-
-    // Step 8: Write INITIAL file
+    // Step 7: Write INITIAL file
     let new_working_log = repo.storage.working_log_for_base_commit(target_commit_sha);
     new_working_log.reset_working_log()?;
 
