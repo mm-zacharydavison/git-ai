@@ -1025,6 +1025,7 @@ mod tests {
                 file.filename().to_string(), // This one is valid
             ]),
             will_edit_filepaths: None,
+            dirty_files: None,
         };
 
         // Run checkpoint - should not crash even with paths outside repo

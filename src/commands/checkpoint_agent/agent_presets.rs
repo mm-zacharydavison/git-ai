@@ -22,6 +22,7 @@ pub struct AgentRunResult {
     pub repo_working_dir: Option<String>,
     pub edited_filepaths: Option<Vec<String>>,
     pub will_edit_filepaths: Option<Vec<String>>,
+    pub dirty_files: Option<Vec<String>>,
 }
 
 pub trait AgentCheckpointPreset {
@@ -100,6 +101,7 @@ impl AgentCheckpointPreset for ClaudePreset {
                 repo_working_dir: None,
                 edited_filepaths: None,
                 will_edit_filepaths: file_path_as_vec,
+                dirty_files: None,
             });
         }
 
@@ -111,6 +113,7 @@ impl AgentCheckpointPreset for ClaudePreset {
             repo_working_dir: None,
             edited_filepaths: file_path_as_vec,
             will_edit_filepaths: None,
+            dirty_files: None,
         })
     }
 }
@@ -180,6 +183,7 @@ impl AgentCheckpointPreset for CursorPreset {
                 repo_working_dir: Some(repo_working_dir),
                 edited_filepaths: None,
                 will_edit_filepaths: None,
+                dirty_files: None,
             });
         }
 
@@ -248,6 +252,7 @@ impl AgentCheckpointPreset for CursorPreset {
             repo_working_dir: Some(repo_working_dir),
             edited_filepaths,
             will_edit_filepaths: None,
+            dirty_files: None,
         })
     }
 }
@@ -601,6 +606,7 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             repo_working_dir: Some(repo_working_dir),
             edited_filepaths,
             will_edit_filepaths: None,
+            dirty_files: None,
         })
     }
 }

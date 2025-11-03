@@ -285,6 +285,7 @@ fn handle_checkpoint(args: &[String]) {
                     repo_working_dir: None,
                     edited_filepaths,
                     will_edit_filepaths: None,
+                    dirty_files: None,
                 });
             }
             _ => {}
