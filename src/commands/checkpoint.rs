@@ -310,7 +310,6 @@ fn get_status_of_files(
     let mut files = Vec::new();
 
     // Use porcelain v2 format to get status
-    let start = Instant::now();
 
     let edited_filepaths_option = if edited_filepaths.is_empty() {
         None
@@ -319,7 +318,6 @@ fn get_status_of_files(
     };
 
     let statuses = repo.status(edited_filepaths_option)?;
-    println!("get_all_files statuses time: {:?}", start.elapsed());
 
     for entry in statuses {
         // Skip ignored files
@@ -387,11 +385,6 @@ fn get_all_tracked_files(
             }
         }
     }
-
-    println!(
-        "files from checkpoints and initial attributions: {:?}",
-        files
-    );
 
     let results_for_tracked_files = get_status_of_files(repo, files)?;
 
@@ -935,11 +928,6 @@ mod tests {
         let (entries_len_2, files_len_2, _) =
             tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
 
-        // The bug might show up here
-        println!(
-            "Second checkpoint: entries_len={}, files_len={}",
-            entries_len_2, files_len_2
-        );
         assert_eq!(
             files_len_2, 1,
             "Second checkpoint: should have 1 file with changes"
@@ -975,11 +963,6 @@ mod tests {
         // Now run checkpoint
         let (entries_len, files_len, _checkpoints_len) =
             tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
-
-        println!(
-            "Checkpoint result: entries_len={}, files_len={}",
-            entries_len, files_len
-        );
 
         // This should work: we should see 1 file with 1 entry
         assert_eq!(files_len, 1, "Should detect 1 file with staged changes");
