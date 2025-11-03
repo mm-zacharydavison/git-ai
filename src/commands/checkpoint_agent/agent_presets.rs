@@ -9,6 +9,7 @@ use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::env;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 pub struct AgentCheckpointFlags {
     pub hook_input: Option<String>,
@@ -22,7 +23,7 @@ pub struct AgentRunResult {
     pub repo_working_dir: Option<String>,
     pub edited_filepaths: Option<Vec<String>>,
     pub will_edit_filepaths: Option<Vec<String>>,
-    pub dirty_files: Option<Vec<String>>,
+    pub dirty_files: Option<HashMap<String, String>>,
 }
 
 pub trait AgentCheckpointPreset {
