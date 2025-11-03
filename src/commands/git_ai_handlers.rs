@@ -1,6 +1,6 @@
 use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
-use crate::authorship::working_log::{AgentId, CheckpointKind};
+use crate::authorship::working_log::{AgentId, Checkpoint, CheckpointKind};
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
@@ -8,6 +8,7 @@ use crate::commands::checkpoint_agent::agent_presets::{
 };
 use crate::commands::checkpoint_agent::agent_v1_preset::AgentV1Preset;
 use crate::config;
+use crate::error::GitAiError;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
@@ -269,20 +270,7 @@ fn handle_checkpoint(args: &[String]) {
                         .and_then(|r| r.repo_working_dir.clone())
                         .unwrap_or(repository_working_dir.clone());
                     // Find the git repository
-                    let repo = match find_repository_in_path(&working_dir) {
-                        Ok(repo) => repo,
-                        Err(e) => {
-                            eprintln!("Failed to find repository: {}", e);
-                            std::process::exit(1);
-                        }
-                    };
-                    match repo.get_staged_and_unstaged_filenames() {
-                        Ok(filenames) => {
-                            println!("filenames for mock_ai: {:?}", filenames);
-                            Some(filenames.into_iter().collect())
-                        }
-                        Err(e) => None,
-                    }
+                    Some(get_all_files_for_mock_ai(&working_dir))
                 };
 
                 agent_run_result = Some(AgentRunResult {
@@ -319,6 +307,31 @@ fn handle_checkpoint(args: &[String]) {
         .as_ref()
         .map(|r| r.checkpoint_kind)
         .unwrap_or(CheckpointKind::Human);
+
+    if CheckpointKind::Human == checkpoint_kind {
+        println!(
+            "get_all_files_for_mock_ai HUMAN Checkpoints: {:?}",
+            get_all_files_for_mock_ai(&final_working_dir)
+        );
+        agent_run_result = Some(AgentRunResult {
+            agent_id: AgentId {
+                tool: "mock_ai".to_string(),
+                id: format!(
+                    "ai-thread-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or_else(|_| 0)
+                ),
+                model: "unknown".to_string(),
+            },
+            checkpoint_kind: CheckpointKind::Human,
+            transcript: None,
+            will_edit_filepaths: Some(get_all_files_for_mock_ai(&final_working_dir)),
+            edited_filepaths: None,
+            repo_working_dir: Some(final_working_dir),
+        });
+    }
 
     // Get the current user name from git config
     let default_user_name = match repo.config_get_str("user.name") {
@@ -525,5 +538,23 @@ fn handle_stats(args: &[String]) {
             }
         }
         std::process::exit(1);
+    }
+}
+
+fn get_all_files_for_mock_ai(working_dir: &str) -> Vec<String> {
+    // Find the git repository
+    let repo = match find_repository_in_path(&working_dir) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            return Vec::new();
+        }
+    };
+    match repo.get_staged_and_unstaged_filenames() {
+        Ok(filenames) => {
+            println!("filenames for mock_ai: {:?}", filenames);
+            filenames.into_iter().collect()
+        }
+        Err(_) => Vec::new(),
     }
 }
