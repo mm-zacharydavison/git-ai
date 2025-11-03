@@ -298,6 +298,7 @@ pub fn run(
 // Gets tracked changes AND
 fn get_status_of_files(
     repo: &Repository,
+    working_log: &PersistedWorkingLog,
     edited_filepaths: HashSet<String>,
     skip_untracked: bool,
 ) -> Result<Vec<String>, GitAiError> {
@@ -337,7 +338,7 @@ fn get_status_of_files(
             let is_text = if is_deleted {
                 is_text_file_in_head(repo, &entry.path)
             } else {
-                is_text_file(repo, &entry.path)
+                is_text_file(working_log, &entry.path)
             };
 
             if is_text {
@@ -363,7 +364,7 @@ fn get_all_tracked_files(
         .unwrap_or_default();
 
     for file in working_log.read_initial_attributions().files.keys() {
-        if is_text_file(repo, &file) {
+        if is_text_file(working_log, &file) {
             files.insert(file.clone());
         }
     }
@@ -373,7 +374,7 @@ fn get_all_tracked_files(
             for entry in &checkpoint.entries {
                 if !files.contains(&entry.file) {
                     // Check if it's a text file before adding
-                    if is_text_file(repo, &entry.file) {
+                    if is_text_file(working_log, &entry.file) {
                         files.insert(entry.file.clone());
                     }
                 }
@@ -390,9 +391,9 @@ fn get_all_tracked_files(
     };
 
     let results_for_tracked_files = if is_pre_commit && !has_ai_checkpoints {
-        get_status_of_files(repo, files, true)?
+        get_status_of_files(repo, working_log, files, true)?
     } else {
-        get_status_of_files(repo, files, false)?
+        get_status_of_files(repo, working_log, files, false)?
     };
 
     Ok(results_for_tracked_files)
@@ -787,8 +788,9 @@ fn compute_line_stats(
 
     // good candidate for parallelization
     for file_path in files {
-        let abs_path = working_log.repo_root.join(file_path);
-        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+        let current_content = working_log
+            .read_current_file_content(file_path)
+            .unwrap_or_else(|_| String::new());
 
         // Get previous content
         let previous_content = if let Some((prev_hash, _)) = previous_file_state.get(file_path) {
@@ -1219,9 +1221,8 @@ mod tests {
     }
 }
 
-fn is_text_file(repo: &Repository, path: &str) -> bool {
-    let repo_workdir = repo.workdir().unwrap();
-    let abs_path = repo_workdir.join(path);
+fn is_text_file(working_log: &PersistedWorkingLog, path: &str) -> bool {
+    let abs_path = working_log.repo_root.join(path);
 
     if let Ok(metadata) = std::fs::metadata(&abs_path) {
         if !metadata.is_file() {
@@ -1231,12 +1232,10 @@ fn is_text_file(repo: &Repository, path: &str) -> bool {
         return false; // If metadata can't be read, treat as non-text
     }
 
-    if let Ok(content) = std::fs::read(&abs_path) {
-        // Consider a file text if it contains no null bytes
-        !content.contains(&0)
-    } else {
-        false
-    }
+    working_log
+        .read_current_file_content(path)
+        .map(|content| !content.chars().any(|c| c == '\0'))
+        .unwrap_or(false)
 }
 
 fn is_text_file_in_head(repo: &Repository, path: &str) -> bool {

@@ -171,6 +171,13 @@ impl PersistedWorkingLog {
         Ok(sha)
     }
 
+    pub fn read_current_file_content(&self, file_path: &str) -> Result<String, GitAiError> {
+        match fs::read(self.repo_root.join(file_path)) {
+            Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).to_string()),
+            Err(_) => Ok(String::new()),
+        }
+    }
+
     /* append checkpoint */
     pub fn append_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), GitAiError> {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
