@@ -358,17 +358,10 @@ pub fn rewrite_authorship_after_rebase_v2(
 
         let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&commit_tree), None, None)?;
 
-        // Build new content by applying the diff to current content
-        let mut new_content_state = HashMap::new();
+        // Identify which tracked files actually changed in this commit
+        let mut changed_files_in_commit = std::collections::HashSet::new();
+        let mut new_content_for_changed_files = HashMap::new();
 
-        // Start with all files from current VA
-        for file in current_va.files() {
-            if let Some(content) = current_va.get_file_content(&file) {
-                new_content_state.insert(file, content.clone());
-            }
-        }
-
-        // Apply changes from this commit's diff
         for delta in diff.deltas() {
             let file_path = delta
                 .new_file()
@@ -382,6 +375,8 @@ pub fn rewrite_authorship_after_rebase_v2(
                 continue;
             }
 
+            changed_files_in_commit.insert(file_path_str.clone());
+
             // Get new content for this file from the commit
             let new_content = if let Ok(entry) = commit_tree.get_path(file_path) {
                 if let Ok(blob) = repo.find_blob(entry.id()) {
@@ -394,16 +389,28 @@ pub fn rewrite_authorship_after_rebase_v2(
                 String::new()
             };
 
-            new_content_state.insert(file_path_str, new_content);
+            new_content_for_changed_files.insert(file_path_str, new_content);
         }
 
-        // Transform attributions based on the new content state
-        // Pass original_head state to restore attributions for content that existed before rebase
-        current_va = transform_attributions_to_final_state(
-            &current_va,
-            new_content_state.clone(),
-            Some(&original_head_state_va),
-        )?;
+        // Only transform attributions for files that actually changed
+        // For unchanged files, we'll preserve them as-is
+        if !changed_files_in_commit.is_empty() {
+            current_va = transform_attributions_to_final_state(
+                &current_va,
+                new_content_for_changed_files.clone(),
+                Some(&original_head_state_va),
+            )?;
+        }
+
+        // Build complete content state for authorship log (all tracked files)
+        let mut new_content_state = HashMap::new();
+        for file in current_va.files() {
+            if let Some(content) = current_va.get_file_content(&file) {
+                new_content_state.insert(file, content.clone());
+            }
+        }
+        // Update with any changed files
+        new_content_state.extend(new_content_for_changed_files);
 
         // Convert to AuthorshipLog, but filter to only files that exist in this commit
         let mut authorship_log = current_va.to_authorship_log()?;
