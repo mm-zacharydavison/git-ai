@@ -353,7 +353,6 @@ impl TmpRepo {
             false, // reset
             true,
             None, // agent_run_result
-            false, // pre_commit_mode
         )
     }
 
@@ -408,7 +407,6 @@ impl TmpRepo {
             false, // reset
             true,
             Some(agent_run_result),
-            false, // pre_commit_mode
         )
     }
 
@@ -430,7 +428,7 @@ impl TmpRepo {
             false, // reset
             true,  // quiet
             agent_run_result,
-            false, // pre_commit_mode
+            // pre_commit_mode
         )
     }
 

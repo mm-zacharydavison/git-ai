@@ -54,13 +54,72 @@ pub struct StatusEntry {
 }
 
 impl Repository {
-    // Run status porcelain v2 on the repository. Will fail for bare repositories.
-    // If pathspecs is Some(Empty Vec), it will return empty vector, not default to full repo scan.
+    // Get status for tracked files that changed
+    pub fn get_staged_filenames(&self) -> Result<HashSet<String>, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("diff".to_string());
+        args.push("--cached".to_string());
+        args.push("--name-only".to_string());
+
+        let output = exec_git(&args)?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git diff exited with status {}",
+                output.status
+            )));
+        }
+
+        let stdout = str::from_utf8(&output.stdout)?;
+        let filenames: HashSet<String> = stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| line.to_string())
+            .collect();
+
+        Ok(filenames)
+    }
+
+    // Get status for tracked files that changed
+    pub fn get_staged_and_unstaged_filenames(&self) -> Result<HashSet<String>, GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("status".to_string());
+        args.push("--porcelain=v2".to_string());
+        args.push("-z".to_string());
+
+        let output = exec_git(&args)?;
+
+        if !output.status.success() {
+            return Err(GitAiError::Generic(format!(
+                "git status exited with status {}",
+                output.status
+            )));
+        }
+
+        let entries = parse_porcelain_v2(&output.stdout)?;
+
+        let filenames: HashSet<String> = entries
+            .iter()
+            .filter(|entry| entry.kind != EntryKind::Ignored)
+            .map(|entry| entry.path.clone())
+            .collect();
+
+        Ok(filenames)
+    }
+
     pub fn status(
         &self,
         pathspecs: Option<&HashSet<String>>,
     ) -> Result<Vec<StatusEntry>, GitAiError> {
-        if pathspecs.is_some() && pathspecs.as_ref().unwrap().is_empty() {
+        let staged_filenames = self.get_staged_filenames()?;
+
+        let combined_pathspecs: HashSet<String> = if let Some(paths) = pathspecs {
+            staged_filenames.union(paths).cloned().collect()
+        } else {
+            staged_filenames
+        };
+
+        if combined_pathspecs.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -69,7 +128,6 @@ impl Repository {
         args.push("--porcelain=v2".to_string());
         args.push("-z".to_string());
 
-        println!("pathspecs: {:?}", pathspecs);
         // Add pathspecs if provided
         if let Some(paths) = pathspecs {
             args.push("--".to_string());
@@ -77,8 +135,6 @@ impl Repository {
                 args.push(path.clone());
             }
         }
-
-        println!("args: {:?}", args);
 
         let output = exec_git(&args)?;
 

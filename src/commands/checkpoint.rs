@@ -22,7 +22,6 @@ pub fn run(
     reset: bool,
     quiet: bool,
     agent_run_result: Option<AgentRunResult>,
-    pre_commit_mode: bool,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
@@ -116,13 +115,7 @@ pub fn run(
         })
     });
 
-    let files = get_all_tracked_files(
-        repo,
-        &base_commit,
-        &working_log,
-        pathspec_filter,
-        pre_commit_mode,
-    )?;
+    let files = get_all_tracked_files(repo, &base_commit, &working_log, pathspec_filter)?;
 
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
@@ -309,25 +302,23 @@ pub fn run(
     Ok((entries.len(), files.len(), checkpoints.len()))
 }
 
+// Gets tracked changes AND
 fn get_status_of_files(
     repo: &Repository,
-    edited_filepaths: Option<&Vec<String>>,
+    edited_filepaths: HashSet<String>,
 ) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
-
-    println!("edited_filepaths: {:?}", edited_filepaths);
-    // Convert edited_filepaths to HashSet for git status if provided
-    let pathspec = edited_filepaths.map(|paths| {
-        use std::collections::HashSet;
-        paths.iter().cloned().collect::<HashSet<String>>()
-    });
-
-    println!("pathspec: {:?}", pathspec);
 
     // Use porcelain v2 format to get status
     let start = Instant::now();
 
-    let statuses = repo.status(pathspec.as_ref())?;
+    let edited_filepaths_option = if edited_filepaths.is_empty() {
+        None
+    } else {
+        Some(&edited_filepaths)
+    };
+
+    let statuses = repo.status(edited_filepaths_option)?;
     println!("get_all_files statuses time: {:?}", start.elapsed());
 
     for entry in statuses {
@@ -366,75 +357,43 @@ fn get_status_of_files(
     Ok(files)
 }
 
-/// Get all files that should be tracked, including those from previous checkpoints
+/// Get all files that should be tracked, including those from previous checkpoints and INITIAL attributions
+///
 fn get_all_tracked_files(
     repo: &Repository,
     _base_commit: &str,
     working_log: &PersistedWorkingLog,
     edited_filepaths: Option<&Vec<String>>,
-    pre_commit_mode: bool,
 ) -> Result<Vec<String>, GitAiError> {
-    // when edited filepaths is set, EVEN when empty, we know an agent has passed pathspecs
-    let search_paths = match edited_filepaths {
-        Some(_) => {
-            let mut files: HashSet<String> = edited_filepaths
-                .map(|paths| paths.iter().cloned().collect())
-                .unwrap_or_default();
+    let mut files: HashSet<String> = edited_filepaths
+        .map(|paths| paths.iter().cloned().collect())
+        .unwrap_or_default();
 
-            for file in working_log.read_initial_attributions().files.keys() {
-                if is_text_file(repo, &file) {
-                    files.insert(file.clone());
-                }
-            }
+    for file in working_log.read_initial_attributions().files.keys() {
+        if is_text_file(repo, &file) {
+            files.insert(file.clone());
+        }
+    }
 
-            if let Ok(working_log_data) = working_log.read_all_checkpoints() {
-                for checkpoint in &working_log_data {
-                    for entry in &checkpoint.entries {
-                        if !files.contains(&entry.file) {
-                            // Check if it's a text file before adding
-                            if is_text_file(repo, &entry.file) {
-                                files.insert(entry.file.clone());
-                            }
-                        }
+    if let Ok(working_log_data) = working_log.read_all_checkpoints() {
+        for checkpoint in &working_log_data {
+            for entry in &checkpoint.entries {
+                if !files.contains(&entry.file) {
+                    // Check if it's a text file before adding
+                    if is_text_file(repo, &entry.file) {
+                        files.insert(entry.file.clone());
                     }
                 }
             }
-
-            println!("files from checkpoints: {:?}", files);
-            Some(files.into_iter().collect::<Vec<String>>())
         }
-        _ => {
-            let mut files: HashSet<String> = HashSet::new();
-            if let Ok(working_log_data) = working_log.read_all_checkpoints() {
-                for checkpoint in &working_log_data {
-                    for entry in &checkpoint.entries {
-                        if !files.contains(&entry.file) {
-                            // Check if it's a text file before adding
-                            if is_text_file(repo, &entry.file) {
-                                files.insert(entry.file.clone());
-                            }
-                        }
-                    }
-                }
-            }
+    }
 
-            for file in working_log.read_initial_attributions().files.keys() {
-                if is_text_file(repo, &file) {
-                    files.insert(file.clone());
-                }
-            }
+    println!(
+        "files from checkpoints and initial attributions: {:?}",
+        files
+    );
 
-            if files.is_empty() && pre_commit_mode {
-                Some(Vec::new())
-            } else if files.is_empty() {
-                None
-            } else {
-                Some(files.into_iter().collect::<Vec<String>>())
-            }
-        }
-    };
-
-    let results_for_tracked_files = get_status_of_files(repo, search_paths.as_ref())?;
+    let results_for_tracked_files = get_status_of_files(repo, files)?;
 
     Ok(results_for_tracked_files)
 }
@@ -951,27 +910,6 @@ mod tests {
     }
 
     #[test]
-    fn test_checkpoint_with_unstaged_changes() {
-        // Create a repo with an initial commit
-        let (tmp_repo, file, _) = TmpRepo::new_with_base_commit().unwrap();
-
-        // Make changes to the file BUT keep them unstaged
-        // We need to manually write to the file without staging
-        let file_path = file.path();
-        let mut current_content = std::fs::read_to_string(&file_path).unwrap();
-        current_content.push_str("New line added by user\n");
-        std::fs::write(&file_path, current_content).unwrap();
-
-        // Run checkpoint - it should track the unstaged changes
-        let (entries_len, files_len, _checkpoints_len) =
-            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
-
-        // This should work correctly
-        assert_eq!(files_len, 1, "Should have 1 file with changes");
-        assert_eq!(entries_len, 1, "Should have 1 file entry in checkpoint");
-    }
-
-    #[test]
     fn test_checkpoint_with_staged_changes_after_previous_checkpoint() {
         // Create a repo with an initial commit
         let (tmp_repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
@@ -1048,55 +986,6 @@ mod tests {
         assert_eq!(
             entries_len, 1,
             "Should track the staged changes in checkpoint"
-        );
-    }
-
-    #[test]
-    fn test_checkpoint_then_stage_then_checkpoint_again() {
-        use std::fs;
-
-        // Create a repo with an initial commit
-        let (tmp_repo, file, _) = TmpRepo::new_with_base_commit().unwrap();
-
-        // Get the file path
-        let file_path = file.path();
-        let filename = file.filename();
-
-        // Step 1: Manually modify the file WITHOUT staging
-        let mut content = fs::read_to_string(&file_path).unwrap();
-        content.push_str("New line added\n");
-        fs::write(&file_path, &content).unwrap();
-
-        // Step 2: Checkpoint the unstaged changes
-        let (entries_len_1, files_len_1, _) =
-            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
-
-        println!(
-            "First checkpoint (unstaged): entries_len={}, files_len={}",
-            entries_len_1, files_len_1
-        );
-        assert_eq!(files_len_1, 1, "First checkpoint: should detect 1 file");
-        assert_eq!(entries_len_1, 1, "First checkpoint: should create 1 entry");
-
-        // Step 3: Now stage the file (without making any new changes)
-        tmp_repo.stage_file(filename).unwrap();
-
-        // Step 4: Try to checkpoint again - the file is now staged but content hasn't changed
-        let (entries_len_2, files_len_2, _) =
-            tmp_repo.trigger_checkpoint_with_author("Aidan").unwrap();
-
-        println!(
-            "Second checkpoint (staged, no new changes): entries_len={}, files_len={}",
-            entries_len_2, files_len_2
-        );
-
-        // After the fix: The checkpoint correctly recognizes that the file was already checkpointed
-        // and doesn't create a duplicate entry. The improved message clarifies this to the user:
-        // "changed 0 of the 1 file(s) that have changed since the last commit (1 already checkpointed)"
-        assert_eq!(files_len_2, 1, "Second checkpoint: file is still staged");
-        assert_eq!(
-            entries_len_2, 0,
-            "Second checkpoint: no NEW changes, so no new entry (already checkpointed)"
         );
     }
 

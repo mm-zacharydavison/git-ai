@@ -12,7 +12,6 @@ pub fn pre_commit(repo: &Repository, default_author: String) -> Result<(), GitAi
         false,
         true,
         None,
-        true,
     );
     result.map(|_| ())
 }

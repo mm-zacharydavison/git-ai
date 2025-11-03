@@ -264,7 +264,25 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     if paths.is_empty() { None } else { Some(paths) }
                 } else {
-                    None
+                    let working_dir = agent_run_result
+                        .as_ref()
+                        .and_then(|r| r.repo_working_dir.clone())
+                        .unwrap_or(repository_working_dir.clone());
+                    // Find the git repository
+                    let repo = match find_repository_in_path(&working_dir) {
+                        Ok(repo) => repo,
+                        Err(e) => {
+                            eprintln!("Failed to find repository: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
+                    match repo.get_staged_and_unstaged_filenames() {
+                        Ok(filenames) => {
+                            println!("filenames for mock_ai: {:?}", filenames);
+                            Some(filenames.into_iter().collect())
+                        }
+                        Err(e) => None,
+                    }
                 };
 
                 agent_run_result = Some(AgentRunResult {
@@ -321,7 +339,6 @@ fn handle_checkpoint(args: &[String]) {
         reset,
         false,
         agent_run_result,
-        false,
     );
     match checkpoint_result {
         Ok((_, files_edited, _)) => {
