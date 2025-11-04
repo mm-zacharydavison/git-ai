@@ -45,9 +45,6 @@ pub fn handle_git_ai(args: &[String]) {
             println!(env!("CARGO_PKG_VERSION"));
             std::process::exit(0);
         }
-        "stats-delta" => {
-            handle_stats_delta(&args[1..]);
-        }
         "stats" => {
             handle_stats(&args[1..]);
         }
@@ -119,7 +116,9 @@ fn print_help() {
     eprintln!("  ci                 Continuous integration utilities");
     eprintln!("    github                 GitHub CI helpers");
     eprintln!("  squash-authorship  Generate authorship log for squashed commits");
-    eprintln!("    <base_branch> <new_sha> <old_sha>  Required: base branch, new commit SHA, old commit SHA");
+    eprintln!(
+        "    <base_branch> <new_sha> <old_sha>  Required: base branch, new commit SHA, old commit SHA"
+    );
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("  git-path           Print the path to the underlying git executable");
     eprintln!("  version, -v, --version     Print the git-ai version");
@@ -372,40 +371,6 @@ fn handle_checkpoint(args: &[String]) {
             observability::log_error(&e, Some(context));
             std::process::exit(1);
         }
-    }
-}
-
-fn handle_stats_delta(args: &[String]) {
-    // Parse stats-delta-specific arguments
-    let mut json_output = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--json" => {
-                json_output = true;
-                i += 1;
-            }
-            _ => {
-                eprintln!("Unknown stats-delta argument: {}", args[i]);
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // TODO: Do we have any 'global' args for the stats-delta?
-    // Find the git repository
-    let repo = match find_repository(&Vec::<String>::new()) {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) = commands::stats_delta::run(&repo, json_output) {
-        eprintln!("Stats delta failed: {}", e);
-        std::process::exit(1);
     }
 }
 

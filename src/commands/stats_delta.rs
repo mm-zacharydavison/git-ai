@@ -1,4 +1,5 @@
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::virtual_attribution::VirtualAttributions;
 use crate::error::GitAiError;
 use crate::git::refs::notes_add;
 use crate::git::refs::show_authorship_note;
@@ -114,14 +115,27 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
         for child_commit in children {
             // Check if authorship log already exists for this child
             if show_authorship_note(repo, child_commit).is_none() {
-                // No authorship log exists, create one
-                let authorship_log =
-                    AuthorshipLog::from_working_log_with_base_commit_and_human_author(
-                        &checkpoints,
-                        commit_hash,
-                        None,
-                        None,
-                    );
+                // No authorship log exists, create one using the new flow
+
+                // Create VirtualAttributions from working log (similar to post_commit flow)
+                let working_va = VirtualAttributions::from_just_working_log(
+                    repo.clone(),
+                    commit_hash.clone(),
+                    None, // No human author specified in backfill
+                )?;
+
+                // Get committed file contents from child commit
+                let pathspecs: Vec<String> = checkpoints
+                    .iter()
+                    .flat_map(|cp| cp.entries.iter().map(|e| e.file.clone()))
+                    .collect();
+                let committed_files = get_committed_files_content(repo, child_commit, &pathspecs)?;
+
+                // Split into committed (authorship log) and uncommitted (INITIAL)
+                let (mut authorship_log, _initial_attributions) =
+                    working_va.to_authorship_log_and_initial_working_log(committed_files)?;
+
+                authorship_log.metadata.base_commit_sha = child_commit.clone();
 
                 // Serialize the authorship log
                 let authorship_json = authorship_log.serialize_to_string().map_err(|_| {
@@ -207,4 +221,33 @@ fn find_working_log_refs(repo: &Repository) -> Result<HashMap<String, usize>, Gi
     }
 
     Ok(working_log_refs)
+}
+
+/// Get file contents from a commit tree for specified pathspecs
+fn get_committed_files_content(
+    repo: &Repository,
+    commit_sha: &str,
+    pathspecs: &[String],
+) -> Result<HashMap<String, String>, GitAiError> {
+    let commit = repo.find_commit(commit_sha.to_string())?;
+    let tree = commit.tree()?;
+
+    let mut files = HashMap::new();
+
+    for file_path in pathspecs {
+        match tree.get_path(std::path::Path::new(file_path)) {
+            Ok(entry) => {
+                if let Ok(blob) = repo.find_blob(entry.id()) {
+                    let blob_content = blob.content().unwrap_or_default();
+                    let content = String::from_utf8_lossy(&blob_content).to_string();
+                    files.insert(file_path.clone(), content);
+                }
+            }
+            Err(_) => {
+                // File doesn't exist in this commit (could be deleted), skip it
+            }
+        }
+    }
+
+    Ok(files)
 }

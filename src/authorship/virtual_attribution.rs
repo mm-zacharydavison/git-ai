@@ -306,6 +306,10 @@ impl VirtualAttributions {
         let mut prompts = BTreeMap::new();
         let mut file_contents: HashMap<String, String> = HashMap::new();
 
+        // Track additions and deletions per session_id for metrics
+        let mut session_additions: HashMap<String, u32> = HashMap::new();
+        let mut session_deletions: HashMap<String, u32> = HashMap::new();
+
         // Add prompts from INITIAL attributions
         for (prompt_id, prompt_record) in &initial_attributions.prompts {
             prompts.insert(prompt_id.clone(), prompt_record.clone());
@@ -353,6 +357,12 @@ impl VirtualAttributions {
                         overriden_lines: 0,
                     }
                 });
+
+                // Track additions and deletions from checkpoint line_stats
+                *session_additions.entry(author_id.clone()).or_insert(0) +=
+                    checkpoint.line_stats.additions;
+                *session_deletions.entry(author_id.clone()).or_insert(0) +=
+                    checkpoint.line_stats.deletions;
             }
 
             // Collect attributions from checkpoint entries
@@ -376,6 +386,14 @@ impl VirtualAttributions {
                 attributions.insert(entry.file.clone(), (char_attrs, line_attrs));
             }
         }
+
+        // Calculate final metrics for each prompt
+        Self::calculate_and_update_prompt_metrics(
+            &mut prompts,
+            &attributions,
+            &session_additions,
+            &session_deletions,
+        );
 
         Ok(VirtualAttributions {
             repo,
@@ -776,6 +794,55 @@ impl VirtualAttributions {
         };
 
         Ok((authorship_log, initial_attributions))
+    }
+
+    /// Calculate and update prompt metrics (accepted_lines, overridden_lines, total_additions, total_deletions)
+    fn calculate_and_update_prompt_metrics(
+        prompts: &mut BTreeMap<String, PromptRecord>,
+        attributions: &HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
+        session_additions: &HashMap<String, u32>,
+        session_deletions: &HashMap<String, u32>,
+    ) {
+        use std::collections::HashSet;
+
+        // Collect all line attributions
+        let all_line_attributions: Vec<&LineAttribution> = attributions
+            .values()
+            .flat_map(|(_, line_attrs)| line_attrs.iter())
+            .collect();
+
+        // Calculate accepted_lines: count lines in final attributions per session
+        let mut session_accepted_lines: HashMap<String, u32> = HashMap::new();
+        for (_file_path, (_char_attrs, line_attrs)) in attributions {
+            for line_attr in line_attrs {
+                let line_count = line_attr.end_line - line_attr.start_line + 1;
+                *session_accepted_lines
+                    .entry(line_attr.author_id.clone())
+                    .or_insert(0) += line_count;
+            }
+        }
+
+        // Calculate overridden_lines: count lines where overrode field matches session_id
+        let mut session_overridden_lines: HashMap<String, u32> = HashMap::new();
+        for line_attr in &all_line_attributions {
+            if let Some(overrode_id) = &line_attr.overrode {
+                let mut overridden_lines: HashSet<u32> = HashSet::new();
+                for line in line_attr.start_line..=line_attr.end_line {
+                    overridden_lines.insert(line);
+                }
+                *session_overridden_lines
+                    .entry(overrode_id.clone())
+                    .or_insert(0) += overridden_lines.len() as u32;
+            }
+        }
+
+        // Update all prompt records with calculated metrics
+        for (session_id, prompt_record) in prompts.iter_mut() {
+            prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
+            prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
+            prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
+            prompt_record.overriden_lines = *session_overridden_lines.get(session_id).unwrap_or(&0);
+        }
     }
 }
 /// Merge two VirtualAttributions, favoring the primary for overlaps
