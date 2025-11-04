@@ -279,7 +279,10 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
     let repo = TestRepo::new();
     let lib_relative_path = "src/lib.rs";
     let lib_file_path = repo.path().join(lib_relative_path);
-    fs::create_dir_all(lib_file_path.parent().unwrap()).unwrap();
+    // Create parent directory - handle Windows paths safely
+    if let Some(parent) = lib_file_path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
     let readme_relative_path = "README.md";
     let readme_file_path = repo.path().join(readme_relative_path);
 
