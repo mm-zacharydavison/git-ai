@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn run(
     repo: &Repository,
@@ -204,31 +204,17 @@ pub fn run(
     // Note: foreign prompts from INITIAL file are read in post_commit.rs
     // when converting working log -> authorship log
 
-    // If this is not the first checkpoint, diff against the last saved state
-    let entries = if checkpoints.is_empty() || reset {
-        // First checkpoint or reset - diff against base commit
-        smol::block_on(get_initial_checkpoint_entries(
-            kind,
-            repo,
-            &working_log,
-            &files,
-            &base_commit,
-            &file_content_hashes,
-            agent_run_result.as_ref(),
-            ts,
-        ))?
-    } else {
-        // Subsequent checkpoint - diff against last saved state
-        get_subsequent_checkpoint_entries(
-            kind,
-            &working_log,
-            &files,
-            &file_content_hashes,
-            &checkpoints,
-            agent_run_result.as_ref(),
-            ts,
-        )?
-    };
+    // Get checkpoint entries using unified function that handles both initial and subsequent checkpoints
+    let entries = smol::block_on(get_checkpoint_entries(
+        kind,
+        repo,
+        &working_log,
+        &files,
+        &file_content_hashes,
+        &checkpoints,
+        agent_run_result.as_ref(),
+        ts,
+    ))?;
 
     // Skip adding checkpoint if there are no changes
     if !entries.is_empty() {
@@ -438,13 +424,191 @@ fn save_current_file_states(
     Ok(file_content_hashes)
 }
 
-async fn get_initial_checkpoint_entries(
+fn get_checkpoint_entry_for_file(
+    file_path: String,
+    kind: CheckpointKind,
+    repo: Repository,
+    working_log: PersistedWorkingLog,
+    previous_checkpoints: Vec<Checkpoint>,
+    file_content_hash: String,
+    author_id: String,
+    head_commit_sha: Option<String>,
+    head_tree_id: Option<String>,
+    initial_attributions: HashMap<String, Vec<LineAttribution>>,
+    ts: u128,
+) -> Result<Option<WorkingLogEntry>, GitAiError> {
+    let abs_path = working_log.repo_root.join(&file_path);
+    let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+
+    // Try to get previous state from checkpoints first
+    let from_checkpoint = previous_checkpoints.iter().rev().find_map(|checkpoint| {
+        checkpoint
+            .entries
+            .iter()
+            .find(|e| e.file == file_path)
+            .map(|entry| {
+                (
+                    working_log
+                        .get_file_version(&entry.blob_sha)
+                        .unwrap_or_default(),
+                    entry.attributions.clone(),
+                )
+            })
+    });
+
+    // Get INITIAL attributions for this file (needed early for the skip check)
+    let initial_attrs_for_file = initial_attributions
+        .get(&file_path)
+        .cloned()
+        .unwrap_or_default();
+
+    let is_from_checkpoint = from_checkpoint.is_some();
+    let (previous_content, prev_attributions) = if let Some((content, attrs)) = from_checkpoint {
+        // File exists in a previous checkpoint - use that
+        (content, attrs)
+    } else {
+        // File doesn't exist in any previous checkpoint - need to initialize from git + INITIAL
+
+        // Get previous content from HEAD tree
+        let previous_content = if let Some(tree_id) = head_tree_id {
+            let head_tree = repo.find_tree(tree_id).ok();
+            if let Some(tree) = head_tree {
+                match tree.get_path(std::path::Path::new(&file_path)) {
+                    Ok(entry) => {
+                        if let Ok(blob) = repo.find_blob(entry.id()) {
+                            let blob_content = blob.content().unwrap_or_default();
+                            String::from_utf8_lossy(&blob_content).to_string()
+                        } else {
+                            String::new()
+                        }
+                    }
+                    Err(_) => String::new(),
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        // Skip if no changes, UNLESS we have INITIAL attributions for this file
+        // (in which case we need to create an entry to record those attributions)
+        if current_content == previous_content && initial_attrs_for_file.is_empty() {
+            return Ok(None);
+        }
+
+        // Build a set of lines covered by INITIAL attributions
+        let mut initial_covered_lines: HashSet<u32> = HashSet::new();
+        for attr in &initial_attrs_for_file {
+            for line in attr.start_line..=attr.end_line {
+                initial_covered_lines.insert(line);
+            }
+        }
+
+        // Get blame for lines not in INITIAL
+        let mut ai_blame_opts = GitAiBlameOptions::default();
+        ai_blame_opts.no_output = true;
+        ai_blame_opts.return_human_authors_as_human = true;
+        ai_blame_opts.use_prompt_hashes_as_names = true;
+        ai_blame_opts.newest_commit = head_commit_sha.clone();
+        let ai_blame = repo.blame(&file_path, &ai_blame_opts);
+
+        // Start with INITIAL attributions (they win)
+        let mut prev_line_attributions = initial_attrs_for_file.clone();
+
+        // Add blame results for lines NOT covered by INITIAL
+        let mut blamed_lines: HashSet<u32> = HashSet::new();
+        if let Ok((blames, _)) = ai_blame {
+            for (line, author) in blames {
+                blamed_lines.insert(line);
+                // Skip if INITIAL already has this line
+                if initial_covered_lines.contains(&line) {
+                    continue;
+                }
+
+                // Skip human-authored lines - they should remain human
+                if author == CheckpointKind::Human.to_str() {
+                    continue;
+                }
+
+                prev_line_attributions.push(LineAttribution {
+                    start_line: line,
+                    end_line: line,
+                    author_id: author.clone(),
+                    overrode: None,
+                });
+            }
+        }
+
+        // For AI checkpoints, attribute any lines NOT in INITIAL and NOT returned by ai_blame
+        if kind != CheckpointKind::Human {
+            let total_lines = current_content.lines().count() as u32;
+            for line_num in 1..=total_lines {
+                if !initial_covered_lines.contains(&line_num) && !blamed_lines.contains(&line_num) {
+                    prev_line_attributions.push(LineAttribution {
+                        start_line: line_num,
+                        end_line: line_num,
+                        author_id: author_id.clone(),
+                        overrode: None,
+                    });
+                }
+            }
+        }
+
+        // For INITIAL attributions, we need to use current_content (not previous_content)
+        // because INITIAL line numbers refer to the current state of the file
+        let content_for_line_conversion = if !initial_attrs_for_file.is_empty() {
+            &current_content
+        } else {
+            &previous_content
+        };
+
+        // Convert any line attributions to character attributions
+        let prev_attributions =
+            crate::authorship::attribution_tracker::line_attributions_to_attributions(
+                &prev_line_attributions,
+                content_for_line_conversion,
+                ts,
+            );
+
+        // When we have INITIAL attributions, they describe the current state of the file.
+        // We need to pass current_content as previous_content so the attributions are preserved.
+        // The tracker will see no changes and preserve the INITIAL attributions.
+        let adjusted_previous = if !initial_attrs_for_file.is_empty() {
+            current_content.clone()
+        } else {
+            previous_content
+        };
+
+        (adjusted_previous, prev_attributions)
+    };
+
+    // Skip if no changes (but we already checked this earlier, accounting for INITIAL attributions)
+    // For files from previous checkpoints, check if content has changed
+    if is_from_checkpoint && current_content == previous_content {
+        return Ok(None);
+    }
+
+    let entry = make_entry_for_file(
+        &file_path,
+        &file_content_hash,
+        &author_id,
+        &previous_content,
+        &prev_attributions,
+        &current_content,
+        ts,
+    )?;
+
+    Ok(Some(entry))
+}
+
+async fn get_checkpoint_entries(
     kind: CheckpointKind,
     repo: &Repository,
     working_log: &PersistedWorkingLog,
     files: &[String],
-    _base_commit: &str,
     file_content_hashes: &HashMap<String, String>,
+    previous_checkpoints: &[Checkpoint],
     agent_run_result: Option<&AgentRunResult>,
     ts: u128,
 ) -> Result<Vec<WorkingLogEntry>, GitAiError> {
@@ -468,7 +632,7 @@ async fn get_initial_checkpoint_entries(
         kind.to_str()
     };
 
-    // Diff working directory against HEAD tree for each file
+    // Get HEAD commit info for git operations
     let head_commit = repo
         .head()
         .ok()
@@ -478,7 +642,7 @@ async fn get_initial_checkpoint_entries(
     let head_tree_id = head_commit
         .as_ref()
         .and_then(|c| c.tree().ok())
-        .map(|t| t.id());
+        .map(|t| t.id().to_string());
 
     const MAX_CONCURRENT: usize = 30;
 
@@ -491,6 +655,8 @@ async fn get_initial_checkpoint_entries(
     for file_path in files {
         let file_path = file_path.clone();
         let repo = repo.clone();
+        let working_log = working_log.clone();
+        let previous_checkpoints = previous_checkpoints.to_vec();
         let author_id = author_id.clone();
         let head_commit_sha = head_commit_sha.clone();
         let head_tree_id = head_tree_id.clone();
@@ -498,13 +664,9 @@ async fn get_initial_checkpoint_entries(
             .get(&file_path)
             .cloned()
             .unwrap_or_default();
+        let initial_attributions = initial_attributions.clone();
         let semaphore = Arc::clone(&semaphore);
-
-        // Get INITIAL attributions for this file (if any)
-        let initial_attrs_for_file = initial_attributions
-            .get(&file_path)
-            .cloned()
-            .unwrap_or_default();
+        let kind = kind.clone();
 
         let task = smol::spawn(async move {
             // Acquire semaphore permit to limit concurrency
@@ -512,145 +674,19 @@ async fn get_initial_checkpoint_entries(
 
             // Wrap all the blocking git operations in smol::unblock
             smol::unblock(move || {
-                let repo_workdir = repo.workdir().unwrap();
-                let abs_path = repo_workdir.join(&file_path);
-
-                // Previous content from HEAD tree if present, otherwise empty
-                let previous_content = if let Some(tree_id) = &head_tree_id {
-                    let head_tree = repo.find_tree(tree_id.clone()).ok();
-                    if let Some(tree) = head_tree {
-                        match tree.get_path(std::path::Path::new(&file_path)) {
-                            Ok(entry) => {
-                                if let Ok(blob) = repo.find_blob(entry.id()) {
-                                    let blob_content = blob.content().unwrap_or_default();
-                                    String::from_utf8_lossy(&blob_content).to_string()
-                                } else {
-                                    String::new()
-                                }
-                            }
-                            Err(_) => String::new(),
-                        }
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
-
-                // Current content from filesystem
-                let current_content =
-                    std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
-
-                // Skip if no changes, UNLESS we have INITIAL attributions for this file
-                // (in which case we need to create an entry to record those attributions)
-                if current_content == previous_content && initial_attrs_for_file.is_empty() {
-                    // No changes, no need to add entries
-                    return Ok(None);
-                }
-
-                // Build a set of lines covered by INITIAL attributions for this file
-                let mut initial_covered_lines: HashSet<u32> = HashSet::new();
-                for attr in &initial_attrs_for_file {
-                    for line in attr.start_line..=attr.end_line {
-                        initial_covered_lines.insert(line);
-                    }
-                }
-
-                // Get the previous line attributions from ai blame
-                let mut ai_blame_opts = GitAiBlameOptions::default();
-                ai_blame_opts.no_output = true;
-                ai_blame_opts.return_human_authors_as_human = true;
-                ai_blame_opts.use_prompt_hashes_as_names = true;
-                ai_blame_opts.newest_commit = head_commit_sha.clone();
-                let ai_blame = repo.blame(&file_path, &ai_blame_opts);
-
-                // Start with INITIAL attributions (they win)
-                let mut prev_line_attributions = initial_attrs_for_file.clone();
-
-                // Add blame results for lines NOT covered by INITIAL
-                let mut blamed_lines: HashSet<u32> = HashSet::new();
-                if let Ok((blames, _)) = ai_blame {
-                    for (line, author) in blames {
-                        blamed_lines.insert(line);
-                        // Skip if INITIAL already has this line
-                        if initial_covered_lines.contains(&line) {
-                            continue;
-                        }
-
-                        // Skip human-authored lines - they should remain human
-                        if author == CheckpointKind::Human.to_str() {
-                            // Human lines stay human, don't add them to prev_line_attributions
-                            // They'll be filled in by attribute_unattributed_ranges later if needed
-                            continue;
-                        }
-
-                        prev_line_attributions.push(
-                            crate::authorship::attribution_tracker::LineAttribution {
-                                start_line: line,
-                                end_line: line,
-                                author_id: author.clone(),
-                                overrode: None,
-                            },
-                        );
-                    }
-                }
-
-                // For AI checkpoints, attribute any lines NOT in INITIAL and NOT returned by ai_blame
-                if kind != CheckpointKind::Human {
-                    let total_lines = current_content.lines().count() as u32;
-                    for line_num in 1..=total_lines {
-                        if !initial_covered_lines.contains(&line_num)
-                            && !blamed_lines.contains(&line_num)
-                        {
-                            prev_line_attributions.push(
-                                crate::authorship::attribution_tracker::LineAttribution {
-                                    start_line: line_num,
-                                    end_line: line_num,
-                                    author_id: author_id.clone(),
-                                    overrode: None,
-                                },
-                            );
-                        }
-                    }
-                }
-
-                // For INITIAL attributions, we need to use current_content (not previous_content)
-                // because INITIAL line numbers refer to the current state of the file
-                let content_for_line_conversion = if !initial_attrs_for_file.is_empty() {
-                    &current_content
-                } else {
-                    &previous_content
-                };
-
-                // Convert any line attributions to character attributions
-                let prev_attributions =
-                    crate::authorship::attribution_tracker::line_attributions_to_attributions(
-                        &prev_line_attributions,
-                        content_for_line_conversion,
-                        ts,
-                    );
-
-                // When we have INITIAL attributions, they describe the current state of the file.
-                // We need to pass current_content as previous_content so the attributions are preserved.
-                // The tracker will see no changes and preserve the INITIAL attributions.
-                let (prev_content_for_entry, curr_content_for_entry) =
-                    if !initial_attrs_for_file.is_empty() {
-                        (&current_content, &current_content)
-                    } else {
-                        (&previous_content, &current_content)
-                    };
-
-                let entry = make_entry_for_file(
-                    &file_path,
-                    &blob_sha,
-                    &author_id,
-                    prev_content_for_entry,
-                    &prev_attributions,
-                    curr_content_for_entry,
+                get_checkpoint_entry_for_file(
+                    file_path,
+                    kind,
+                    repo,
+                    working_log,
+                    previous_checkpoints,
+                    blob_sha,
+                    author_id,
+                    head_commit_sha,
+                    head_tree_id,
+                    initial_attributions,
                     ts,
-                )?;
-
-                Ok(Some(entry))
+                )
             })
             .await
         });
@@ -658,7 +694,7 @@ async fn get_initial_checkpoint_entries(
         tasks.push(task);
     }
 
-    // Await all tasks concurrently (Promise.all() behavior)
+    // Await all tasks concurrently
     let results = futures::future::join_all(tasks).await;
 
     // Process results
@@ -669,91 +705,6 @@ async fn get_initial_checkpoint_entries(
             Ok(None) => {} // File had no changes
             Err(e) => return Err(e),
         }
-    }
-
-    Ok(entries)
-}
-
-fn get_subsequent_checkpoint_entries(
-    kind: CheckpointKind,
-    working_log: &PersistedWorkingLog,
-    files: &[String],
-    file_content_hashes: &HashMap<String, String>,
-    previous_checkpoints: &Vec<Checkpoint>,
-    agent_run_result: Option<&AgentRunResult>,
-    ts: u128,
-) -> Result<Vec<WorkingLogEntry>, GitAiError> {
-    let mut entries = Vec::new();
-
-    // Determine author_id based on checkpoint kind and agent_id
-    let author_id = if kind != CheckpointKind::Human {
-        // For AI checkpoints, use session hash
-        agent_run_result
-            .map(|result| {
-                crate::authorship::authorship_log_serialization::generate_short_hash(
-                    &result.agent_id.id,
-                    &result.agent_id.tool,
-                )
-            })
-            .unwrap_or_else(|| kind.to_str())
-    } else {
-        // For human checkpoints, use checkpoint kind string
-        kind.to_str()
-    };
-
-    // Build a map of file path -> (blob_sha, attributions) by iterating through previous checkpoints to get the latest
-    let mut previous_file_hashes_with_attributions: HashMap<String, (String, Vec<Attribution>)> =
-        HashMap::new();
-    for checkpoint in previous_checkpoints {
-        for entry in &checkpoint.entries {
-            previous_file_hashes_with_attributions.insert(
-                entry.file.clone(),
-                (entry.blob_sha.clone(), entry.attributions.clone()),
-            );
-        }
-    }
-
-    for file_path in files {
-        let abs_path = working_log.repo_root.join(file_path);
-
-        // Read current content directly from the file system
-        let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
-
-        // Read the previous content from the blob storage using the previous checkpoint's blob_sha
-        let (previous_content, prev_attributions) = if let Some((prev_content_hash, prev_attrs)) =
-            previous_file_hashes_with_attributions.get(file_path)
-        {
-            (
-                working_log
-                    .get_file_version(prev_content_hash)
-                    .unwrap_or_default(),
-                prev_attrs.clone(),
-            )
-        } else {
-            (String::new(), Vec::new()) // No previous version, treat as empty
-        };
-
-        if current_content == previous_content {
-            // No changes, no need to add entries
-            continue;
-        }
-
-        // Get the blob SHA for this file from the pre-computed hashes
-        let blob_sha = file_content_hashes
-            .get(file_path)
-            .cloned()
-            .unwrap_or_default();
-
-        let entry = make_entry_for_file(
-            file_path,
-            &blob_sha,
-            &author_id,
-            &previous_content,
-            &prev_attributions,
-            &current_content,
-            ts,
-        )?;
-        entries.push(entry);
     }
 
     Ok(entries)

@@ -117,6 +117,7 @@ impl RepoStorage {
     }
 }
 
+#[derive(Clone)]
 pub struct PersistedWorkingLog {
     pub dir: PathBuf,
     #[allow(dead_code)]
