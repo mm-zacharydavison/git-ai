@@ -22,6 +22,7 @@ pub fn run(
     reset: bool,
     quiet: bool,
     agent_run_result: Option<AgentRunResult>,
+    is_pre_commit: bool,
 ) -> Result<(usize, usize, usize), GitAiError> {
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
@@ -317,6 +318,7 @@ fn get_status_of_files(
         Some(&edited_filepaths)
     };
 
+    println!("get status of files {:?}", edited_filepaths_option);
     let statuses = repo.status(edited_filepaths_option)?;
 
     for entry in statuses {
