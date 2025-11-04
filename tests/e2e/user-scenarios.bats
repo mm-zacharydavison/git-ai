@@ -9,6 +9,29 @@ setup() {
     export ORIGINAL_DIR="$(pwd)"
     cd "$TEST_TEMP_DIR"
     
+    # Set up git-ai binary path - use debug build by default, fallback to release
+    if [ -f "$ORIGINAL_DIR/target/debug/git-ai" ]; then
+        export GIT_AI_BINARY="$ORIGINAL_DIR/target/debug/git-ai"
+    elif [ -f "$ORIGINAL_DIR/target/release/git-ai" ]; then
+        export GIT_AI_BINARY="$ORIGINAL_DIR/target/release/git-ai"
+    else
+        echo "ERROR: git-ai binary not found in target/debug or target/release" >&3
+        echo "Please run 'cargo build' or 'cargo build --release' first" >&3
+        exit 1
+    fi
+    
+    # Create shell functions to alias git-ai and git commands
+    git-ai() {
+        "$GIT_AI_BINARY" "$@"
+    }
+    export -f git-ai
+
+    git() {
+        GIT_AI=git "$GIT_AI_BINARY" "$@"
+    }
+    
+    export -f git
+    
     # Initialize a git repo
     git init
     git config user.email "test@example.com"
