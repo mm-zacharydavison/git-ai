@@ -53,6 +53,10 @@ jobs:
         run: |
           sudo apt-get install -y jq
 
+      - name: Install taskfile
+        run: |
+          sudo apt-get install -y task
+
       - name: Configure Git
         run: |
           git config --global user.name "GitHub Actions"
