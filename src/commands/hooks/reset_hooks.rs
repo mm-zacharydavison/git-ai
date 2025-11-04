@@ -19,6 +19,7 @@ pub fn pre_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Reposi
         false,
         true,
         None,
+        true,
     );
 
     // Capture HEAD before reset happens
@@ -414,12 +415,22 @@ fn extract_pathspecs(parsed_args: &ParsedGitInvocation) -> Result<Vec<String>, s
     // Extract from command line arguments
     let mut pathspecs = Vec::new();
     let mut found_separator = false;
-    let mut skip_first_positional = false;
+
+    // Count total positional arguments (excluding flags)
+    let total_positional_args = parsed_args
+        .command_args
+        .iter()
+        .filter(|arg| !arg.starts_with('-') && *arg != "--")
+        .count();
 
     // Determine if we should skip the first positional (it's the tree-ish)
-    if has_reset_mode_flag(parsed_args) || parsed_args.pos_command(1).is_some() {
-        skip_first_positional = true;
-    }
+    // Skip if:
+    // 1. There's a mode flag (--hard, --soft, etc.) - first pos is always tree-ish
+    // 2. There are 2+ positional args - first is tree-ish, rest are pathspecs
+    // 3. There's exactly 1 positional arg and NO separator - it's a tree-ish, not a pathspec
+    let skip_first_positional = has_reset_mode_flag(parsed_args)
+        || total_positional_args >= 2
+        || (total_positional_args == 1 && !parsed_args.command_args.contains(&"--".to_string()));
 
     let mut positional_count = 0;
     for arg in &parsed_args.command_args {

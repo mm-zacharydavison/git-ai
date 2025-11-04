@@ -190,8 +190,7 @@ fn test_amend_with_unstaged_ai_code_in_other_file() {
 }
 
 /// Test that unstaged AI code in the tree is attributed after amending HEAD with a different file
-/// Note: This test is currently ignored because the TestFile API automatically stages files,
-/// making it difficult to test scenarios with precise staging control
+
 #[test]
 fn test_amend_preserves_unstaged_ai_attribution() {
     let repo = TestRepo::new();
@@ -229,8 +228,7 @@ fn test_amend_preserves_unstaged_ai_attribution() {
 }
 
 /// Test amending with multiple files where some have unstaged AI changes
-/// Note: This test is currently ignored because the TestFile API automatically stages files,
-/// making it difficult to test scenarios with precise staging control
+
 #[test]
 fn test_amend_with_multiple_files_mixed_staging() {
     let repo = TestRepo::new();

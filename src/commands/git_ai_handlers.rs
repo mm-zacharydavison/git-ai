@@ -1,6 +1,6 @@
 use crate::authorship::range_authorship;
 use crate::authorship::stats::stats_command;
-use crate::authorship::working_log::{AgentId, CheckpointKind};
+use crate::authorship::working_log::{AgentId, Checkpoint, CheckpointKind};
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
@@ -8,6 +8,7 @@ use crate::commands::checkpoint_agent::agent_presets::{
 };
 use crate::commands::checkpoint_agent::agent_v1_preset::AgentV1Preset;
 use crate::config;
+use crate::error::GitAiError;
 use crate::git::find_repository;
 use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
@@ -47,9 +48,6 @@ pub fn handle_git_ai(args: &[String]) {
                 println!(env!("CARGO_PKG_VERSION"));
             }
             std::process::exit(0);
-        }
-        "stats-delta" => {
-            handle_stats_delta(&args[1..]);
         }
         "stats" => {
             handle_stats(&args[1..]);
@@ -268,7 +266,12 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     if paths.is_empty() { None } else { Some(paths) }
                 } else {
-                    None
+                    let working_dir = agent_run_result
+                        .as_ref()
+                        .and_then(|r| r.repo_working_dir.clone())
+                        .unwrap_or(repository_working_dir.clone());
+                    // Find the git repository
+                    Some(get_all_files_for_mock_ai(&working_dir))
                 };
 
                 agent_run_result = Some(AgentRunResult {
@@ -306,6 +309,31 @@ fn handle_checkpoint(args: &[String]) {
         .map(|r| r.checkpoint_kind)
         .unwrap_or(CheckpointKind::Human);
 
+    if CheckpointKind::Human == checkpoint_kind {
+        println!(
+            "get_all_files_for_mock_ai HUMAN Checkpoints: {:?}",
+            get_all_files_for_mock_ai(&final_working_dir)
+        );
+        agent_run_result = Some(AgentRunResult {
+            agent_id: AgentId {
+                tool: "mock_ai".to_string(),
+                id: format!(
+                    "ai-thread-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or_else(|_| 0)
+                ),
+                model: "unknown".to_string(),
+            },
+            checkpoint_kind: CheckpointKind::Human,
+            transcript: None,
+            will_edit_filepaths: Some(get_all_files_for_mock_ai(&final_working_dir)),
+            edited_filepaths: None,
+            repo_working_dir: Some(final_working_dir),
+        });
+    }
+
     // Get the current user name from git config
     let default_user_name = match repo.config_get_str("user.name") {
         Ok(Some(name)) if !name.trim().is_empty() => name,
@@ -325,6 +353,7 @@ fn handle_checkpoint(args: &[String]) {
         reset,
         false,
         agent_run_result,
+        false,
     );
     match checkpoint_result {
         Ok((_, files_edited, _)) => {
@@ -344,40 +373,6 @@ fn handle_checkpoint(args: &[String]) {
             observability::log_error(&e, Some(context));
             std::process::exit(1);
         }
-    }
-}
-
-fn handle_stats_delta(args: &[String]) {
-    // Parse stats-delta-specific arguments
-    let mut json_output = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--json" => {
-                json_output = true;
-                i += 1;
-            }
-            _ => {
-                eprintln!("Unknown stats-delta argument: {}", args[i]);
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // TODO: Do we have any 'global' args for the stats-delta?
-    // Find the git repository
-    let repo = match find_repository(&Vec::<String>::new()) {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Failed to find repository: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) = commands::stats_delta::run(&repo, json_output) {
-        eprintln!("Stats delta failed: {}", e);
-        std::process::exit(1);
     }
 }
 
@@ -511,5 +506,23 @@ fn handle_stats(args: &[String]) {
             }
         }
         std::process::exit(1);
+    }
+}
+
+fn get_all_files_for_mock_ai(working_dir: &str) -> Vec<String> {
+    // Find the git repository
+    let repo = match find_repository_in_path(&working_dir) {
+        Ok(repo) => repo,
+        Err(e) => {
+            eprintln!("Failed to find repository: {}", e);
+            return Vec::new();
+        }
+    };
+    match repo.get_staged_and_unstaged_filenames() {
+        Ok(filenames) => {
+            println!("filenames for mock_ai: {:?}", filenames);
+            filenames.into_iter().collect()
+        }
+        Err(_) => Vec::new(),
     }
 }
