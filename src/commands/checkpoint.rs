@@ -429,12 +429,12 @@ fn get_checkpoint_entry_for_file(
     kind: CheckpointKind,
     repo: Repository,
     working_log: PersistedWorkingLog,
-    previous_checkpoints: Vec<Checkpoint>,
+    previous_checkpoints: Arc<Vec<Checkpoint>>,
     file_content_hash: String,
-    author_id: String,
-    head_commit_sha: Option<String>,
-    head_tree_id: Option<String>,
-    initial_attributions: HashMap<String, Vec<LineAttribution>>,
+    author_id: Arc<String>,
+    head_commit_sha: Arc<Option<String>>,
+    head_tree_id: Arc<Option<String>>,
+    initial_attributions: Arc<HashMap<String, Vec<LineAttribution>>>,
     ts: u128,
 ) -> Result<Option<WorkingLogEntry>, GitAiError> {
     let abs_path = working_log.repo_root.join(&file_path);
@@ -470,8 +470,8 @@ fn get_checkpoint_entry_for_file(
         // File doesn't exist in any previous checkpoint - need to initialize from git + INITIAL
 
         // Get previous content from HEAD tree
-        let previous_content = if let Some(tree_id) = head_tree_id {
-            let head_tree = repo.find_tree(tree_id).ok();
+        let previous_content = if let Some(tree_id) = head_tree_id.as_ref().as_ref() {
+            let head_tree = repo.find_tree(tree_id.clone()).ok();
             if let Some(tree) = head_tree {
                 match tree.get_path(std::path::Path::new(&file_path)) {
                     Ok(entry) => {
@@ -510,7 +510,7 @@ fn get_checkpoint_entry_for_file(
         ai_blame_opts.no_output = true;
         ai_blame_opts.return_human_authors_as_human = true;
         ai_blame_opts.use_prompt_hashes_as_names = true;
-        ai_blame_opts.newest_commit = head_commit_sha.clone();
+        ai_blame_opts.newest_commit = head_commit_sha.as_ref().clone();
         let ai_blame = repo.blame(&file_path, &ai_blame_opts);
 
         // Start with INITIAL attributions (they win)
@@ -548,7 +548,7 @@ fn get_checkpoint_entry_for_file(
                     prev_line_attributions.push(LineAttribution {
                         start_line: line_num,
                         end_line: line_num,
-                        author_id: author_id.clone(),
+                        author_id: author_id.as_ref().clone(),
                         overrode: None,
                     });
                 }
@@ -592,7 +592,7 @@ fn get_checkpoint_entry_for_file(
     let entry = make_entry_for_file(
         &file_path,
         &file_content_hash,
-        &author_id,
+        author_id.as_ref(),
         &previous_content,
         &prev_attributions,
         &current_content,
@@ -649,6 +649,15 @@ async fn get_checkpoint_entries(
     // Create a semaphore to limit concurrent tasks
     let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
 
+    // Move checkpoint data to Arc once, outside the loop to avoid repeated allocations
+    let previous_checkpoints = Arc::new(previous_checkpoints.to_vec());
+
+    // Move other repeated allocations outside the loop
+    let author_id = Arc::new(author_id);
+    let head_commit_sha = Arc::new(head_commit_sha);
+    let head_tree_id = Arc::new(head_tree_id);
+    let initial_attributions = Arc::new(initial_attributions);
+
     // Spawn tasks for each file
     let mut tasks = Vec::new();
 
@@ -656,15 +665,15 @@ async fn get_checkpoint_entries(
         let file_path = file_path.clone();
         let repo = repo.clone();
         let working_log = working_log.clone();
-        let previous_checkpoints = previous_checkpoints.to_vec();
-        let author_id = author_id.clone();
-        let head_commit_sha = head_commit_sha.clone();
-        let head_tree_id = head_tree_id.clone();
+        let previous_checkpoints = Arc::clone(&previous_checkpoints);
+        let author_id = Arc::clone(&author_id);
+        let head_commit_sha = Arc::clone(&head_commit_sha);
+        let head_tree_id = Arc::clone(&head_tree_id);
         let blob_sha = file_content_hashes
             .get(&file_path)
             .cloned()
             .unwrap_or_default();
-        let initial_attributions = initial_attributions.clone();
+        let initial_attributions = Arc::clone(&initial_attributions);
         let semaphore = Arc::clone(&semaphore);
         let kind = kind.clone();
 
@@ -681,10 +690,10 @@ async fn get_checkpoint_entries(
                     working_log,
                     previous_checkpoints,
                     blob_sha,
-                    author_id,
-                    head_commit_sha,
-                    head_tree_id,
-                    initial_attributions,
+                    author_id.clone(),
+                    head_commit_sha.clone(),
+                    head_tree_id.clone(),
+                    initial_attributions.clone(),
                     ts,
                 )
             })

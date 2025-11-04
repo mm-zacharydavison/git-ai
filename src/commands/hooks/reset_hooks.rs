@@ -428,7 +428,7 @@ fn extract_pathspecs(parsed_args: &ParsedGitInvocation) -> Result<Vec<String>, s
     // 1. There's a mode flag (--hard, --soft, etc.) - first pos is always tree-ish
     // 2. There are 2+ positional args - first is tree-ish, rest are pathspecs
     // 3. There's exactly 1 positional arg and NO separator - it's a tree-ish, not a pathspec
-    let skip_first_positional = has_reset_mode_flag(parsed_args) 
+    let skip_first_positional = has_reset_mode_flag(parsed_args)
         || total_positional_args >= 2
         || (total_positional_args == 1 && !parsed_args.command_args.contains(&"--".to_string()));
 
