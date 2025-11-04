@@ -1068,103 +1068,105 @@ mod tests {
         assert_eq!(entry.line_ranges[1], LineRange::Range(8, 10));
     }
 
-    #[test]
-    fn test_metrics_calculation() {
-        use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
-        use crate::authorship::transcript::{AiTranscript, Message};
-        use crate::authorship::working_log::{
-            AgentId, Checkpoint, CheckpointKind, WorkingLogEntry,
-        };
-        use std::time::{SystemTime, UNIX_EPOCH};
+    // Commenting out because working log to authorship helper deprecated in favor
+    // of virtual attribution
+    // #[test]
+    // fn test_metrics_calculation() {
+    //     use crate::authorship::attribution_tracker::{Attribution, LineAttribution};
+    //     use crate::authorship::transcript::{AiTranscript, Message};
+    //     use crate::authorship::working_log::{
+    //         AgentId, Checkpoint, CheckpointKind, WorkingLogEntry,
+    //     };
+    //     use std::time::{SystemTime, UNIX_EPOCH};
 
-        // Create an agent ID
-        let agent_id = AgentId {
-            tool: "cursor".to_string(),
-            id: "test_session".to_string(),
-            model: "claude-3-sonnet".to_string(),
-        };
+    //     // Create an agent ID
+    //     let agent_id = AgentId {
+    //         tool: "cursor".to_string(),
+    //         id: "test_session".to_string(),
+    //         model: "claude-3-sonnet".to_string(),
+    //     };
 
-        let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
+    //     let session_hash = generate_short_hash(&agent_id.id, &agent_id.tool);
 
-        // Create a transcript
-        let mut transcript = AiTranscript::new();
-        transcript.add_message(Message::user("Add a function".to_string(), None));
-        transcript.add_message(Message::assistant("Here's the function".to_string(), None));
+    //     // Create a transcript
+    //     let mut transcript = AiTranscript::new();
+    //     transcript.add_message(Message::user("Add a function".to_string(), None));
+    //     transcript.add_message(Message::assistant("Here's the function".to_string(), None));
 
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
+    //     let ts = SystemTime::now()
+    //         .duration_since(UNIX_EPOCH)
+    //         .unwrap_or_default()
+    //         .as_millis();
 
-        // Create working log entries
-        // First checkpoint: add 10 lines
-        let line_attributions1 = vec![LineAttribution::new(1, 10, session_hash.clone(), None)];
-        let attributions1 = vec![Attribution::new(0, 100, session_hash.clone(), ts)];
-        let entry1 = WorkingLogEntry::new(
-            "src/test.rs".to_string(),
-            "blob_sha_1".to_string(),
-            attributions1,
-            line_attributions1,
-        );
-        let mut checkpoint1 = Checkpoint::new(
-            CheckpointKind::AiAgent,
-            "".to_string(),
-            "ai".to_string(),
-            vec![entry1],
-        );
-        checkpoint1.agent_id = Some(agent_id.clone());
-        checkpoint1.transcript = Some(transcript.clone());
-        // First checkpoint stats: 10 additions, 0 deletions
-        checkpoint1.line_stats.additions = 10;
-        checkpoint1.line_stats.deletions = 0;
+    //     // Create working log entries
+    //     // First checkpoint: add 10 lines
+    //     let line_attributions1 = vec![LineAttribution::new(1, 10, session_hash.clone(), None)];
+    //     let attributions1 = vec![Attribution::new(0, 100, session_hash.clone(), ts)];
+    //     let entry1 = WorkingLogEntry::new(
+    //         "src/test.rs".to_string(),
+    //         "blob_sha_1".to_string(),
+    //         attributions1,
+    //         line_attributions1,
+    //     );
+    //     let mut checkpoint1 = Checkpoint::new(
+    //         CheckpointKind::AiAgent,
+    //         "".to_string(),
+    //         "ai".to_string(),
+    //         vec![entry1],
+    //     );
+    //     checkpoint1.agent_id = Some(agent_id.clone());
+    //     checkpoint1.transcript = Some(transcript.clone());
+    //     // First checkpoint stats: 10 additions, 0 deletions
+    //     checkpoint1.line_stats.additions = 10;
+    //     checkpoint1.line_stats.deletions = 0;
 
-        // Second checkpoint: modify lines (delete 3, add 5)
-        // This represents the final state after both checkpoints
-        let line_attributions2 = vec![
-            LineAttribution::new(1, 4, session_hash.clone(), None),
-            LineAttribution::new(5, 9, session_hash.clone(), None),
-        ];
-        let attributions2 = vec![
-            Attribution::new(0, 50, session_hash.clone(), ts),
-            Attribution::new(50, 150, session_hash.clone(), ts),
-        ];
-        let entry2 = WorkingLogEntry::new(
-            "src/test.rs".to_string(),
-            "blob_sha_2".to_string(),
-            attributions2,
-            line_attributions2,
-        );
-        let mut checkpoint2 = Checkpoint::new(
-            CheckpointKind::AiAgent,
-            "".to_string(),
-            "ai".to_string(),
-            vec![entry2],
-        );
-        checkpoint2.agent_id = Some(agent_id.clone());
-        checkpoint2.transcript = Some(transcript);
-        // Second checkpoint stats: 5 new lines added, 3 deleted
-        checkpoint2.line_stats.additions = 5;
-        checkpoint2.line_stats.deletions = 3;
+    //     // Second checkpoint: modify lines (delete 3, add 5)
+    //     // This represents the final state after both checkpoints
+    //     let line_attributions2 = vec![
+    //         LineAttribution::new(1, 4, session_hash.clone(), None),
+    //         LineAttribution::new(5, 9, session_hash.clone(), None),
+    //     ];
+    //     let attributions2 = vec![
+    //         Attribution::new(0, 50, session_hash.clone(), ts),
+    //         Attribution::new(50, 150, session_hash.clone(), ts),
+    //     ];
+    //     let entry2 = WorkingLogEntry::new(
+    //         "src/test.rs".to_string(),
+    //         "blob_sha_2".to_string(),
+    //         attributions2,
+    //         line_attributions2,
+    //     );
+    //     let mut checkpoint2 = Checkpoint::new(
+    //         CheckpointKind::AiAgent,
+    //         "".to_string(),
+    //         "ai".to_string(),
+    //         vec![entry2],
+    //     );
+    //     checkpoint2.agent_id = Some(agent_id.clone());
+    //     checkpoint2.transcript = Some(transcript);
+    //     // Second checkpoint stats: 5 new lines added, 3 deleted
+    //     checkpoint2.line_stats.additions = 5;
+    //     checkpoint2.line_stats.deletions = 3;
 
-        // Convert to authorship log
-        let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
-            &[checkpoint1, checkpoint2],
-            "base123",
-            None,
-            None,
-        );
+    //     // Convert to authorship log
+    //     let authorship_log = AuthorshipLog::from_working_log_with_base_commit_and_human_author(
+    //         &[checkpoint1, checkpoint2],
+    //         "base123",
+    //         None,
+    //         None,
+    //     );
 
-        // Get the prompt record
-        let prompt_record = authorship_log.metadata.prompts.get(&session_hash).unwrap();
+    //     // Get the prompt record
+    //     let prompt_record = authorship_log.metadata.prompts.get(&session_hash).unwrap();
 
-        // Verify metrics
-        // total_additions: accumulated from line_stats
-        assert_eq!(prompt_record.total_additions, 15);
-        // total_deletions: accumulated from line_stats
-        assert_eq!(prompt_record.total_deletions, 3);
-        // accepted_lines: lines 1-4 and 5-9 = 9 lines
-        assert_eq!(prompt_record.accepted_lines, 9);
-    }
+    //     // Verify metrics
+    //     // total_additions: accumulated from line_stats
+    //     assert_eq!(prompt_record.total_additions, 15);
+    //     // total_deletions: accumulated from line_stats
+    //     assert_eq!(prompt_record.total_deletions, 3);
+    //     // accepted_lines: lines 1-4 and 5-9 = 9 lines
+    //     assert_eq!(prompt_record.accepted_lines, 9);
+    // }
 
     #[test]
     fn test_convert_authorship_log_to_checkpoints() {
