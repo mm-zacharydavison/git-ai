@@ -55,7 +55,7 @@ jobs:
 
       - name: Install taskfile
         run: |
-          sudo apt-get install -y task
+          curl -sL https://github.com/go-task/task/releases/latest/download/task_linux_amd64.tar.gz | tar xz -C ~/.local/bin task
 
       - name: Configure Git
         run: |
