@@ -117,8 +117,8 @@ fn print_help() {
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
     eprintln!("  ci                 Continuous integration utilities");
     eprintln!("    github                 GitHub CI helpers");
-    eprintln!("  squash-authorship  Generate authorship from squashed commits");
-    eprintln!("    <branch> <new_sha> <old_sha>  Required: branch, new commit SHA, old commit SHA");
+    eprintln!("  squash-authorship  Generate authorship log for squashed commits");
+    eprintln!("    <base_branch> <new_sha> <old_sha>  Required: base branch, new commit SHA, old commit SHA");
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("  git-path           Print the path to the underlying git executable");
     eprintln!("  version, -v, --version     Print the git-ai version");

@@ -1,8 +1,9 @@
-use crate::authorship::rebase_authorship::prepare_working_log_after_squash;
+use crate::authorship::rebase_authorship::rewrite_authorship_after_squash_or_rebase;
 use crate::git::find_repository_in_path;
 
 pub fn handle_squash_authorship(args: &[String]) {
     // Parse squash-authorship-specific arguments
+    let mut base_branch = None;
     let mut new_sha = None;
     let mut old_sha = None;
 
@@ -14,9 +15,10 @@ pub fn handle_squash_authorship(args: &[String]) {
                 i += 1;
             }
             _ => {
-                // Positional arguments: branch, new_sha, old_sha
-                // Note: branch argument kept for CLI compatibility but not used
-                if new_sha.is_none() {
+                // Positional arguments: base_branch, new_sha, old_sha
+                if base_branch.is_none() {
+                    base_branch = Some(args[i].clone());
+                } else if new_sha.is_none() {
                     new_sha = Some(args[i].clone());
                 } else if old_sha.is_none() {
                     old_sha = Some(args[i].clone());
@@ -30,11 +32,24 @@ pub fn handle_squash_authorship(args: &[String]) {
     }
 
     // Validate required arguments
+    let base_branch = match base_branch {
+        Some(s) => s,
+        None => {
+            eprintln!("Error: base_branch argument is required");
+            eprintln!(
+                "Usage: git-ai squash-authorship <base_branch> <new_sha> <old_sha> [--dry-run]"
+            );
+            std::process::exit(1);
+        }
+    };
+
     let new_sha = match new_sha {
         Some(s) => s,
         None => {
             eprintln!("Error: new_sha argument is required");
-            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
+            eprintln!(
+                "Usage: git-ai squash-authorship <base_branch> <new_sha> <old_sha> [--dry-run]"
+            );
             std::process::exit(1);
         }
     };
@@ -43,7 +58,9 @@ pub fn handle_squash_authorship(args: &[String]) {
         Some(s) => s,
         None => {
             eprintln!("Error: old_sha argument is required");
-            eprintln!("Usage: git-ai squash-authorship <branch> <new_sha> <old_sha> [--dry-run]");
+            eprintln!(
+                "Usage: git-ai squash-authorship <base_branch> <new_sha> <old_sha> [--dry-run]"
+            );
             std::process::exit(1);
         }
     };
@@ -59,7 +76,15 @@ pub fn handle_squash_authorship(args: &[String]) {
         }
     };
 
-    if let Err(e) = prepare_working_log_after_squash(&repo, &old_sha, &new_sha, "") {
+    // Use the same function as CI handlers to create authorship log for the new commit
+    if let Err(e) = rewrite_authorship_after_squash_or_rebase(
+        &repo,
+        "",           // head_ref - not used by the function
+        &base_branch, // merge_ref - the base branch name (e.g., "main")
+        &old_sha,     // source_head_sha - the old commit
+        &new_sha,     // merge_commit_sha - the new commit
+        false,        // suppress_output
+    ) {
         eprintln!("Squash authorship failed: {}", e);
         std::process::exit(1);
     }
