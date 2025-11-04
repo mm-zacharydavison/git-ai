@@ -41,7 +41,11 @@ pub fn handle_git_ai(args: &[String]) {
             print_help();
         }
         "version" | "--version" | "-v" => {
-            println!(env!("CARGO_PKG_VERSION"));
+            if cfg!(debug_assertions) {
+                println!("{} (debug)", env!("CARGO_PKG_VERSION"));
+            } else {
+                println!(env!("CARGO_PKG_VERSION"));
+            }
             std::process::exit(0);
         }
         "stats-delta" => {
