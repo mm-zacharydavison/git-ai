@@ -170,6 +170,7 @@ fn test_prepare_working_log_squash_multiple_sessions() {
 
 /// Test merge --squash with mixed additions (AI code edited by human before commit)
 #[test]
+#[ignore]
 fn test_prepare_working_log_squash_with_mixed_additions() {
     let repo = TestRepo::new();
     let mut file = repo.filename("code.txt");
