@@ -49,7 +49,7 @@ jobs:
 
       - name: Install taskfile
         run: |
-          curl -sL https://github.com/go-task/task/releases/latest/download/task_linux_amd64.tar.gz | tar xz -C ~/.local/bin task
+          curl -1sLf 'https://dl.cloudsmith.io/public/task/task/setup.deb.sh' | sudo -E bash
 
       - name: Configure Git
         run: |
