@@ -7,7 +7,6 @@ use crate::error::GitAiError;
 use crate::git::refs::notes_add;
 use crate::git::repository::Repository;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 pub fn post_commit(
     repo: &Repository,
@@ -34,15 +33,11 @@ pub fn post_commit(
     // ));
 
     // Filter out untracked files from the working log
-    let untracked_filter = Instant::now();
     let mut filtered_working_log =
         filter_untracked_files(repo, &parent_working_log, &commit_sha, None)?;
 
-    println!("untracked filter {:?}", untracked_filter.elapsed());
     // mutates inline
     CursorPreset::update_cursor_conversations_to_latest(&mut filtered_working_log)?;
-
-    let timer = Instant::now();
 
     // Create VirtualAttributions from working log (fast path - no blame)
     // We don't need to run blame because we only care about the working log data
@@ -53,9 +48,6 @@ pub fn post_commit(
         Some(human_author.clone()),
     )?;
 
-    println!("virtual attributions created {:?}", timer.elapsed());
-
-    let committed_files_time = Instant::now();
     // Get committed file contents from commit tree
     let pathspecs: Vec<String> = filtered_working_log
         .iter()
@@ -63,16 +55,11 @@ pub fn post_commit(
         .collect();
     let committed_files = get_committed_files_content(repo, &commit_sha, &pathspecs)?;
 
-    println!("committed files read {:?}", committed_files_time.elapsed());
-
-    let split_time = Instant::now();
     // Split VirtualAttributions into committed (authorship log) and uncommitted (INITIAL)
     let (mut authorship_log, initial_attributions) =
         working_va.to_authorship_log_and_initial_working_log(committed_files)?;
 
     authorship_log.metadata.base_commit_sha = commit_sha.clone();
-
-    println!("split completed {:?}", split_time.elapsed());
 
     // Serialize the authorship log
     let authorship_json = authorship_log

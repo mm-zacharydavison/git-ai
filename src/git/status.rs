@@ -2,7 +2,6 @@ use crate::error::GitAiError;
 use crate::git::repository::{Repository, exec_git};
 use std::collections::HashSet;
 use std::str;
-use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusCode {
@@ -113,9 +112,7 @@ impl Repository {
         pathspecs: Option<&HashSet<String>>,
         skip_untracked: bool,
     ) -> Result<Vec<StatusEntry>, GitAiError> {
-        let timer = Instant::now();
         let staged_filenames = self.get_staged_filenames()?;
-        println!("get_staged_filenames {:?}", timer.elapsed());
 
         let combined_pathspecs: HashSet<String> = if let Some(paths) = pathspecs {
             staged_filenames.union(paths).cloned().collect()
@@ -127,7 +124,6 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let timer = Instant::now();
         let mut args = self.global_args_for_exec();
         args.push("status".to_string());
         args.push("--porcelain=v2".to_string());
@@ -146,7 +142,6 @@ impl Repository {
         }
 
         let output = exec_git(&args)?;
-        println!("exec_git {:?}", timer.elapsed());
 
         if !output.status.success() {
             return Err(GitAiError::Generic(format!(
