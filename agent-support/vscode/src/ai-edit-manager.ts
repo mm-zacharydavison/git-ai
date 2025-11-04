@@ -286,8 +286,9 @@ export class AIEditManager {
           resolve(false);
         } else {
           const stdoutTrimmed = stdout.trim();
-          const versionMatch = stdoutTrimmed.match(/\d+(?:\.\d+)*/);
-          const detectedVersion = versionMatch ? versionMatch[0] : stdoutTrimmed;
+          // Extract strict semver (major.minor.patch) and ignore any trailing labels like "(debug)"
+          const semverMatch = stdoutTrimmed.match(/\b\d+\.\d+\.\d+\b/);
+          const detectedVersion = semverMatch ? semverMatch[0] : stdoutTrimmed.replace(/\s*\(.+\)\s*$/, "");
 
           if (!isVersionSatisfied(detectedVersion, MIN_GIT_AI_VERSION)) {
             if (!this.hasShownGitAiErrorMessage) {
