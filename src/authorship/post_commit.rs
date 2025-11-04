@@ -88,10 +88,10 @@ pub fn post_commit(
             .write_initial_attributions(initial_attributions.files, initial_attributions.prompts)?;
     }
 
-    // Clean up old working log
-    if !cfg!(debug_assertions) {
-        repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
-    }
+    // // Clean up old working log
+    // if !cfg!(debug_assertions) {
+    repo_storage.delete_working_log_for_base_commit(&parent_sha)?;
+    // }
 
     if !supress_output {
         let refname = repo.head()?.name().unwrap().to_string();
