@@ -352,6 +352,7 @@ fn handle_checkpoint(args: &[String]) {
         reset,
         false,
         agent_run_result,
+        false,
     );
     match checkpoint_result {
         Ok((_, files_edited, _)) => {

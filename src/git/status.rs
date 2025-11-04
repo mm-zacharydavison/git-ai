@@ -2,6 +2,7 @@ use crate::error::GitAiError;
 use crate::git::repository::{Repository, exec_git};
 use std::collections::HashSet;
 use std::str;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusCode {
@@ -110,8 +111,11 @@ impl Repository {
     pub fn status(
         &self,
         pathspecs: Option<&HashSet<String>>,
+        skip_untracked: bool,
     ) -> Result<Vec<StatusEntry>, GitAiError> {
+        let timer = Instant::now();
         let staged_filenames = self.get_staged_filenames()?;
+        println!("get_staged_filenames {:?}", timer.elapsed());
 
         let combined_pathspecs: HashSet<String> = if let Some(paths) = pathspecs {
             staged_filenames.union(paths).cloned().collect()
@@ -123,20 +127,26 @@ impl Repository {
             return Ok(Vec::new());
         }
 
+        let timer = Instant::now();
         let mut args = self.global_args_for_exec();
         args.push("status".to_string());
         args.push("--porcelain=v2".to_string());
         args.push("-z".to_string());
 
-        // Add pathspecs if provided
-        if let Some(paths) = pathspecs {
+        if skip_untracked {
+            args.push("--untracked-files=no".to_string());
+        }
+
+        // Add combined pathspecs (staged files + provided paths)
+        if !combined_pathspecs.is_empty() {
             args.push("--".to_string());
-            for path in paths {
+            for path in &combined_pathspecs {
                 args.push(path.clone());
             }
         }
 
         let output = exec_git(&args)?;
+        println!("exec_git {:?}", timer.elapsed());
 
         if !output.status.success() {
             return Err(GitAiError::Generic(format!(

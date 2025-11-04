@@ -116,7 +116,13 @@ pub fn run(
         })
     });
 
-    let files = get_all_tracked_files(repo, &base_commit, &working_log, pathspec_filter)?;
+    let files = get_all_tracked_files(
+        repo,
+        &base_commit,
+        &working_log,
+        pathspec_filter,
+        is_pre_commit,
+    )?;
 
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
@@ -307,6 +313,7 @@ pub fn run(
 fn get_status_of_files(
     repo: &Repository,
     edited_filepaths: HashSet<String>,
+    skip_untracked: bool,
 ) -> Result<Vec<String>, GitAiError> {
     let mut files = Vec::new();
 
@@ -318,8 +325,7 @@ fn get_status_of_files(
         Some(&edited_filepaths)
     };
 
-    println!("get status of files {:?}", edited_filepaths_option);
-    let statuses = repo.status(edited_filepaths_option)?;
+    let statuses = repo.status(edited_filepaths_option, skip_untracked)?;
 
     for entry in statuses {
         // Skip ignored files
@@ -364,6 +370,7 @@ fn get_all_tracked_files(
     _base_commit: &str,
     working_log: &PersistedWorkingLog,
     edited_filepaths: Option<&Vec<String>>,
+    is_pre_commit: bool,
 ) -> Result<Vec<String>, GitAiError> {
     let mut files: HashSet<String> = edited_filepaths
         .map(|paths| paths.iter().cloned().collect())
@@ -388,7 +395,19 @@ fn get_all_tracked_files(
         }
     }
 
-    let results_for_tracked_files = get_status_of_files(repo, files)?;
+    let has_ai_checkpoints = if let Ok(working_log_data) = working_log.read_all_checkpoints() {
+        working_log_data.iter().any(|checkpoint| {
+            checkpoint.kind == CheckpointKind::AiAgent || checkpoint.kind == CheckpointKind::AiTab
+        })
+    } else {
+        false
+    };
+
+    let results_for_tracked_files = if is_pre_commit && !has_ai_checkpoints {
+        get_status_of_files(repo, files, true)?
+    } else {
+        get_status_of_files(repo, files, false)?
+    };
 
     Ok(results_for_tracked_files)
 }

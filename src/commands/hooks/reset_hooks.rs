@@ -19,6 +19,7 @@ pub fn pre_reset_hook(parsed_args: &ParsedGitInvocation, repository: &mut Reposi
         false,
         true,
         None,
+        true,
     );
 
     // Capture HEAD before reset happens
