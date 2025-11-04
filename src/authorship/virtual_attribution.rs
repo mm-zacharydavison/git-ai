@@ -283,6 +283,128 @@ impl VirtualAttributions {
         Self::new_for_base_commit(repo, head_sha, pathspecs).await
     }
 
+    /// Create VirtualAttributions from just the working log (no blame)
+    ///
+    /// This is a fast path that skips the expensive blame operation.
+    /// Use this when you only care about working log data and don't need historical blame.
+    ///
+    /// This function:
+    /// 1. Loads INITIAL attributions (unstaged AI code from previous working state)
+    /// 2. Applies working log checkpoints on top
+    /// 3. Returns VirtualAttributions with just the working log data
+    pub fn from_just_working_log(
+        repo: Repository,
+        base_commit: String,
+        human_author: Option<String>,
+    ) -> Result<Self, GitAiError> {
+        let working_log = repo.storage.working_log_for_base_commit(&base_commit);
+        let initial_attributions = working_log.read_initial_attributions();
+        let checkpoints = working_log.read_all_checkpoints().unwrap_or_default();
+
+        let mut attributions: HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)> =
+            HashMap::new();
+        let mut prompts = BTreeMap::new();
+        let mut file_contents: HashMap<String, String> = HashMap::new();
+
+        // Track additions and deletions per session_id for metrics
+        let mut session_additions: HashMap<String, u32> = HashMap::new();
+        let mut session_deletions: HashMap<String, u32> = HashMap::new();
+
+        // Add prompts from INITIAL attributions
+        for (prompt_id, prompt_record) in &initial_attributions.prompts {
+            prompts.insert(prompt_id.clone(), prompt_record.clone());
+        }
+
+        // Process INITIAL attributions
+        for (file_path, line_attrs) in &initial_attributions.files {
+            // Get the latest file content from working directory
+            if let Ok(workdir) = repo.workdir() {
+                let abs_path = workdir.join(file_path);
+                let file_content = if abs_path.exists() {
+                    std::fs::read_to_string(&abs_path).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                file_contents.insert(file_path.clone(), file_content.clone());
+
+                // Convert line attributions to character attributions
+                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, 0);
+                attributions.insert(file_path.clone(), (char_attrs, line_attrs.clone()));
+            }
+        }
+
+        // Collect attributions from all checkpoints (later checkpoints override earlier ones)
+        for checkpoint in &checkpoints {
+            // Add prompts from checkpoint
+            if let Some(agent_id) = &checkpoint.agent_id {
+                let author_id =
+                    crate::authorship::authorship_log_serialization::generate_short_hash(
+                        &agent_id.id,
+                        &agent_id.tool,
+                    );
+                prompts.entry(author_id.clone()).or_insert_with(|| {
+                    crate::authorship::authorship_log::PromptRecord {
+                        agent_id: agent_id.clone(),
+                        human_author: human_author.clone(),
+                        messages: checkpoint
+                            .transcript
+                            .as_ref()
+                            .map(|t| t.messages().to_vec())
+                            .unwrap_or_default(),
+                        total_additions: 0,
+                        total_deletions: 0,
+                        accepted_lines: 0,
+                        overriden_lines: 0,
+                    }
+                });
+
+                // Track additions and deletions from checkpoint line_stats
+                *session_additions.entry(author_id.clone()).or_insert(0) +=
+                    checkpoint.line_stats.additions;
+                *session_deletions.entry(author_id.clone()).or_insert(0) +=
+                    checkpoint.line_stats.deletions;
+            }
+
+            // Collect attributions from checkpoint entries
+            for entry in &checkpoint.entries {
+                // Get the latest file content from working directory
+                if let Ok(workdir) = repo.workdir() {
+                    let abs_path = workdir.join(&entry.file);
+                    let file_content = if abs_path.exists() {
+                        std::fs::read_to_string(&abs_path).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    file_contents.insert(entry.file.clone(), file_content);
+                }
+
+                // Use the line attributions from the checkpoint
+                let line_attrs = entry.line_attributions.clone();
+                let file_content = file_contents.get(&entry.file).cloned().unwrap_or_default();
+                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, 0);
+
+                attributions.insert(entry.file.clone(), (char_attrs, line_attrs));
+            }
+        }
+
+        // Calculate final metrics for each prompt
+        Self::calculate_and_update_prompt_metrics(
+            &mut prompts,
+            &attributions,
+            &session_additions,
+            &session_deletions,
+        );
+
+        Ok(VirtualAttributions {
+            repo,
+            base_commit,
+            attributions,
+            file_contents,
+            prompts,
+            ts: 0,
+        })
+    }
+
     /// Create VirtualAttributions from working log checkpoints for a specific base commit
     ///
     /// This function:
@@ -300,111 +422,18 @@ impl VirtualAttributions {
         let blame_va =
             Self::new_for_base_commit(repo.clone(), base_commit.clone(), pathspecs).await?;
 
-        // Step 2: Load INITIAL attributions (unstaged AI code from previous working state)
-        let working_log = repo.storage.working_log_for_base_commit(&base_commit);
-        let initial_attributions = working_log.read_initial_attributions();
+        // Step 2: Build VirtualAttributions from just working log
+        let checkpoint_va =
+            Self::from_just_working_log(repo.clone(), base_commit.clone(), human_author)?;
 
-        // Step 3: Load and apply working log checkpoints to get checkpoint-based attributions
-        let checkpoints = working_log.read_all_checkpoints().unwrap_or_default();
-
-        if checkpoints.is_empty() && initial_attributions.files.is_empty() {
-            // No checkpoints or initial attributions, just return blame-based attributions
+        // If checkpoint_va is empty, just return blame_va
+        if checkpoint_va.attributions.is_empty() {
             return Ok(blame_va);
         }
 
-        // Step 4: Build VirtualAttributions from INITIAL and checkpoints
-        let mut checkpoint_attributions: HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)> =
-            HashMap::new();
-        let mut checkpoint_prompts = blame_va.prompts.clone();
-        let mut checkpoint_file_contents: HashMap<String, String> = HashMap::new();
-
-        // First, add prompts from INITIAL attributions
-        for (prompt_id, prompt_record) in &initial_attributions.prompts {
-            checkpoint_prompts.insert(prompt_id.clone(), prompt_record.clone());
-        }
-
-        // Process INITIAL attributions
-        for (file_path, line_attrs) in &initial_attributions.files {
-            // Get the latest file content from working directory
-            if let Ok(workdir) = repo.workdir() {
-                let abs_path = workdir.join(file_path);
-                let file_content = if abs_path.exists() {
-                    std::fs::read_to_string(&abs_path).unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                checkpoint_file_contents.insert(file_path.clone(), file_content.clone());
-
-                // Convert line attributions to character attributions
-                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, 0);
-                checkpoint_attributions.insert(file_path.clone(), (char_attrs, line_attrs.clone()));
-            }
-        }
-
-        // Collect attributions from all checkpoints (later checkpoints override earlier ones)
-        for checkpoint in &checkpoints {
-            // Add prompts from checkpoint
-            if let Some(agent_id) = &checkpoint.agent_id {
-                let author_id =
-                    crate::authorship::authorship_log_serialization::generate_short_hash(
-                        &agent_id.id,
-                        &agent_id.tool,
-                    );
-                checkpoint_prompts
-                    .entry(author_id.clone())
-                    .or_insert_with(|| crate::authorship::authorship_log::PromptRecord {
-                        agent_id: agent_id.clone(),
-                        human_author: human_author.clone(),
-                        messages: checkpoint
-                            .transcript
-                            .as_ref()
-                            .map(|t| t.messages().to_vec())
-                            .unwrap_or_default(),
-                        total_additions: 0,
-                        total_deletions: 0,
-                        accepted_lines: 0,
-                        overriden_lines: 0,
-                    });
-            }
-
-            // Collect attributions from checkpoint entries
-            for entry in &checkpoint.entries {
-                // Get the latest file content from working directory
-                if let Ok(workdir) = repo.workdir() {
-                    let abs_path = workdir.join(&entry.file);
-                    let file_content = if abs_path.exists() {
-                        std::fs::read_to_string(&abs_path).unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-                    checkpoint_file_contents.insert(entry.file.clone(), file_content);
-                }
-
-                // Use the line attributions from the checkpoint
-                let line_attrs = entry.line_attributions.clone();
-                let file_content = checkpoint_file_contents
-                    .get(&entry.file)
-                    .cloned()
-                    .unwrap_or_default();
-                let char_attrs = line_attributions_to_attributions(&line_attrs, &file_content, 0);
-
-                checkpoint_attributions.insert(entry.file.clone(), (char_attrs, line_attrs));
-            }
-        }
-
-        // Step 5: Merge blame and checkpoint attributions
+        // Step 3: Merge blame and checkpoint attributions
         // Checkpoint attributions should override blame attributions for overlapping lines
-        let checkpoint_va = VirtualAttributions {
-            repo: repo.clone(),
-            base_commit: base_commit.clone(),
-            attributions: checkpoint_attributions,
-            file_contents: checkpoint_file_contents.clone(),
-            prompts: checkpoint_prompts.clone(),
-            ts: 0,
-        };
-
-        // Merge: checkpoint VA (primary) wins over blame VA (secondary) for overlaps
-        let final_state = checkpoint_file_contents;
+        let final_state = checkpoint_va.file_contents.clone();
         let merged_va = merge_attributions_favoring_first(checkpoint_va, blame_va, final_state)?;
 
         Ok(merged_va)
@@ -765,6 +794,55 @@ impl VirtualAttributions {
         };
 
         Ok((authorship_log, initial_attributions))
+    }
+
+    /// Calculate and update prompt metrics (accepted_lines, overridden_lines, total_additions, total_deletions)
+    fn calculate_and_update_prompt_metrics(
+        prompts: &mut BTreeMap<String, PromptRecord>,
+        attributions: &HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
+        session_additions: &HashMap<String, u32>,
+        session_deletions: &HashMap<String, u32>,
+    ) {
+        use std::collections::HashSet;
+
+        // Collect all line attributions
+        let all_line_attributions: Vec<&LineAttribution> = attributions
+            .values()
+            .flat_map(|(_, line_attrs)| line_attrs.iter())
+            .collect();
+
+        // Calculate accepted_lines: count lines in final attributions per session
+        let mut session_accepted_lines: HashMap<String, u32> = HashMap::new();
+        for (_file_path, (_char_attrs, line_attrs)) in attributions {
+            for line_attr in line_attrs {
+                let line_count = line_attr.end_line - line_attr.start_line + 1;
+                *session_accepted_lines
+                    .entry(line_attr.author_id.clone())
+                    .or_insert(0) += line_count;
+            }
+        }
+
+        // Calculate overridden_lines: count lines where overrode field matches session_id
+        let mut session_overridden_lines: HashMap<String, u32> = HashMap::new();
+        for line_attr in &all_line_attributions {
+            if let Some(overrode_id) = &line_attr.overrode {
+                let mut overridden_lines: HashSet<u32> = HashSet::new();
+                for line in line_attr.start_line..=line_attr.end_line {
+                    overridden_lines.insert(line);
+                }
+                *session_overridden_lines
+                    .entry(overrode_id.clone())
+                    .or_insert(0) += overridden_lines.len() as u32;
+            }
+        }
+
+        // Update all prompt records with calculated metrics
+        for (session_id, prompt_record) in prompts.iter_mut() {
+            prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
+            prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
+            prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
+            prompt_record.overriden_lines = *session_overridden_lines.get(session_id).unwrap_or(&0);
+        }
     }
 }
 /// Merge two VirtualAttributions, favoring the primary for overlaps

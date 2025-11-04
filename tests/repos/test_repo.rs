@@ -1,4 +1,5 @@
 use git_ai::authorship::authorship_log_serialization::AuthorshipLog;
+use git_ai::authorship::stats::CommitStats;
 use git_ai::git::repo_storage::PersistedWorkingLog;
 use git_ai::git::repository as GitAiRepository;
 use git2::Repository;
@@ -36,6 +37,13 @@ impl TestRepo {
 
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    pub fn stats(&self) -> Result<CommitStats, String> {
+        let mut stats = self.git_ai(&["stats", "--json"]).unwrap();
+        stats = stats.split("}}}").next().unwrap().to_string() + "}}}";
+        let stats: CommitStats = serde_json::from_str(&stats).unwrap();
+        Ok(stats)
     }
 
     pub fn current_branch(&self) -> String {
