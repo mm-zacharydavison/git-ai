@@ -33,11 +33,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build git-ai
-        run: cargo build --release
-        env:
-          CARGO_INCREMENTAL: 0
-
       - name: Install BATS
         run: |
           sudo apt-get update
