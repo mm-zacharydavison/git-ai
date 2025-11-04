@@ -3,8 +3,8 @@ use crate::authorship::stats::stats_command;
 use crate::authorship::working_log::{AgentId, Checkpoint, CheckpointKind};
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_presets::{
-    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, ClaudePreset, CursorPreset,
-    GithubCopilotPreset,
+    AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, AiTabPreset, ClaudePreset,
+    CursorPreset, GithubCopilotPreset,
 };
 use crate::commands::checkpoint_agent::agent_v1_preset::AgentV1Preset;
 use crate::config;
@@ -101,7 +101,7 @@ fn print_help() {
     eprintln!("");
     eprintln!("Commands:");
     eprintln!("  checkpoint         Checkpoint working changes and attribute author");
-    eprintln!("    Presets: claude, cursor, github-copilot, mock_ai");
+    eprintln!("    Presets: claude, cursor, github-copilot, ai_tab, mock_ai");
     eprintln!(
         "    --hook-input <json|stdin>   JSON payload required by presets, or 'stdin' to read from stdin"
     );
@@ -233,6 +233,22 @@ fn handle_checkpoint(args: &[String]) {
                     }
                 }
             }
+            "ai_tab" => {
+                match AiTabPreset.run(AgentCheckpointFlags {
+                    hook_input: hook_input.clone(),
+                }) {
+                    Ok(agent_run) => {
+                        if agent_run.repo_working_dir.is_some() {
+                            repository_working_dir = agent_run.repo_working_dir.clone().unwrap();
+                        }
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("ai_tab preset error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
             "agent-v1" => {
                 match AgentV1Preset.run(AgentCheckpointFlags {
                     hook_input: hook_input.clone(),
@@ -332,6 +348,7 @@ fn handle_checkpoint(args: &[String]) {
             will_edit_filepaths: Some(get_all_files_for_mock_ai(&final_working_dir)),
             edited_filepaths: None,
             repo_working_dir: Some(final_working_dir),
+            dirty_files: None,
         });
     }
 

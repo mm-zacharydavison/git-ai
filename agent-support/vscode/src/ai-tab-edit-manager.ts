@@ -9,6 +9,8 @@ export class AITabEditManager {
   private aiEditManager: AIEditManager;
   private registration: vscode.Disposable | undefined;
   private restoring = false; // guards against re-entrancy during re-register
+  private beforeCompletionFileStates: {[filePath: string]: string} | null = null;
+  private lastDocumentChangeEvent: vscode.TextDocumentChangeEvent | null = null;
 
   constructor(context: vscode.ExtensionContext, ideHostConfig: IDEHostConfiguration, aiEditManager: AIEditManager) {
     this.context = context;
@@ -16,23 +18,84 @@ export class AITabEditManager {
     this.aiEditManager = aiEditManager;
   }
 
-  enableIfSupported(): void {
+  enableIfSupported(): boolean {
     if (this.isSupportedIDEHost()) {
       console.log(`[git-ai] Enabling AI tab detection for ${this.ideHostConfig.kind}`);
-      this.registerOverride();
-      return;
+      this.registration = this.registerOverride();
+      return true;
     }
     console.log(`[git-ai] AI tab detection not supported for ${this.ideHostConfig.kind}`);
+    return false;
+  }
+
+  handleDocumentContentChangeEvent(event: vscode.TextDocumentChangeEvent): void {
+    console.log('[git-ai] Document content change event', event);
+    // TODO Apply some basic filtering against events that are not relevant to AI tab completion
+    this.lastDocumentChangeEvent = event;
   }
 
   beforeHook(args: any[]) {
-    // e.g., remember cursor position / active doc
-    console.debug('[acceptCursorTabSuggestion] before', args);
+    // TODO Anything we should track here?
+    console.log('[git-ai] before ai tab completion accepted', args);
+    this.beforeCompletionFileStates = {};
+    for (const doc of vscode.workspace.textDocuments) {
+      if (doc.uri.scheme != "file") {
+        continue;
+      }
+      this.beforeCompletionFileStates[doc.uri.fsPath] = doc.getText();
+    }
   }
 
-  afterHook(result: unknown) {
-    // e.g., inspect last edit or fire your own event
-    console.debug('[acceptCursorTabSuggestion] after', result);
+  async afterHook(result: unknown) {
+    console.log('[git-ai] after ai tab completion accepted', result);
+    const last = this.lastDocumentChangeEvent;
+    if (!last) {
+      console.log('[git-ai] No last document change event to inspect');
+      return;
+    }
+    if (!this.beforeCompletionFileStates) {
+      console.log('[git-ai] No before completion file states to inspect');
+      return;
+    }
+    const afterContent = last.document.getText();
+    let beforeContent: string | null = null;
+
+    for (const [filePath, content] of Object.entries(this.beforeCompletionFileStates)) {
+      if (filePath == last.document.uri.fsPath) {
+        beforeContent = content;
+        break;
+      }
+    }
+    if (!beforeContent) {
+      console.log('[git-ai] No before content found for', last.document.uri.fsPath);
+      return;
+    }
+
+    // Before edit checkpoint
+    await this.aiEditManager.checkpoint("ai_tab", JSON.stringify({
+      hook_event_name: 'before_edit',
+      tool: 'github-copilot-tab',
+      model: 'default',
+      will_edit_filepaths: [last.document.uri.fsPath],
+      dirty_files: {
+        ...this.aiEditManager.getDirtyFiles(),
+        [last.document.uri.fsPath]: beforeContent,
+      }
+    }));
+
+    // After edit checkpoint
+    await this.aiEditManager.checkpoint("ai_tab", JSON.stringify({
+      hook_event_name: 'after_edit',
+      tool: 'github-copilot-tab',
+      model: 'default',
+      edited_filepaths: [last.document.uri.fsPath],
+      dirty_files: {
+        ...this.aiEditManager.getDirtyFiles(),
+        [last.document.uri.fsPath]: afterContent,
+      }
+    }));
+
+    this.beforeCompletionFileStates = null;
   }
 
   registerOverride() {
@@ -49,12 +112,12 @@ export class AITabEditManager {
       } catch { /* ignore */ }
 
       try {
-        await this.beforeHook(args);
+        this.beforeHook(args);
 
         // Call the "original" command implementation (the previously registered handler).
         const result = await vscode.commands.executeCommand(this.getTabAcceptedCommand(), ...args);
 
-        await this.afterHook(result);
+        this.afterHook(result);
         return result;
       } finally {
         // Always restore our override so future executions flow through us again.

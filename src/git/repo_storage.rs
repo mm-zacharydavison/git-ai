@@ -73,7 +73,7 @@ impl RepoStorage {
         fs::create_dir_all(&working_log_dir).unwrap();
         // The repo_path is the .git directory, so we need to go up one level to get the actual repo root
         let repo_root = self.repo_path.parent().unwrap().to_path_buf();
-        PersistedWorkingLog::new(working_log_dir, sha, repo_root)
+        PersistedWorkingLog::new(working_log_dir, sha, repo_root, None)
     }
 
     #[allow(dead_code)]
@@ -123,15 +123,32 @@ pub struct PersistedWorkingLog {
     #[allow(dead_code)]
     pub base_commit: String,
     pub repo_root: PathBuf,
+    pub dirty_files: Option<HashMap<String, String>>,
 }
 
 impl PersistedWorkingLog {
-    pub fn new(dir: PathBuf, base_commit: &str, repo_root: PathBuf) -> Self {
+    pub fn new(
+        dir: PathBuf,
+        base_commit: &str,
+        repo_root: PathBuf,
+        dirty_files: Option<HashMap<String, String>>,
+    ) -> Self {
         Self {
             dir,
             base_commit: base_commit.to_string(),
             repo_root,
+            dirty_files,
         }
+    }
+
+    pub fn set_dirty_files(&mut self, dirty_files: Option<HashMap<String, String>>) {
+        self.dirty_files = dirty_files.map(|map| {
+            map.into_iter()
+                .map(|(file_path, content)| {
+                    (self.normalize_file_path(&file_path), content)
+                })
+                .collect()
+        });
     }
 
     pub fn reset_working_log(&self) -> Result<(), GitAiError> {
@@ -171,8 +188,25 @@ impl PersistedWorkingLog {
         Ok(sha)
     }
 
+    pub fn normalize_file_path(&self, file_path: &str) -> String {
+        if Path::new(file_path).is_absolute() {
+            return file_path.to_string();
+        }
+        self.repo_root.join(file_path).to_string_lossy().to_string()
+    }
+
     pub fn read_current_file_content(&self, file_path: &str) -> Result<String, GitAiError> {
-        match fs::read(self.repo_root.join(file_path)) {
+        let file_path = self.normalize_file_path(file_path);
+
+        // First try to read from dirty_files
+        if let Some(ref dirty_files) = self.dirty_files {
+            if let Some(content) = dirty_files.get(file_path.as_str()) {
+                return Ok(content.clone());
+            }
+        }
+
+        // Fall back to reading from filesystem
+        match fs::read(&file_path) {
             Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).to_string()),
             Err(_) => Ok(String::new()),
         }

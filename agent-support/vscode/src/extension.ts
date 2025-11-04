@@ -12,9 +12,19 @@ export function activate(context: vscode.ExtensionContext) {
 
   const aiTabEditManager = new AITabEditManager(context, ideHostCfg, aiEditManager);
 
-  aiTabEditManager.enableIfSupported();
+  const aiTabTrackingEnabled = aiTabEditManager.enableIfSupported();
+
+  if (aiTabTrackingEnabled) {
+    console.log('[git-ai] Tracking document content changes for AI tab completion detection');
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        aiTabEditManager.handleDocumentContentChangeEvent(event);
+      })
+    );
+  }
 
   if (ideHostCfg.kind == IDEHostKindVSCode) {
+    console.log('[git-ai] Using VS Code/Copilot detection strategy');
     // Trigger initial human checkpoint
     aiEditManager.triggerInitialHumanCheckpoint();
 

@@ -80,6 +80,15 @@ export class AIEditManager {
     }
   }
 
+  public getDirtyFiles(): { [filePath: string]: string } {
+    // Return a map of absolute file paths to string content of any dirty files in the workspace
+    const dirtyFiles = vscode.workspace.textDocuments.filter(doc => doc.isDirty && doc.uri.scheme == "file");
+    return dirtyFiles.reduce((acc, doc) => {
+      acc[doc.uri.fsPath] = doc.getText();
+      return acc;
+    }, {} as { [filePath: string]: string });
+  }
+
   private evaluateSaveForCheckpoint(filePath: string): void {
     const saveInfo = this.pendingSaves.get(filePath);
     if (!saveInfo) {
@@ -115,6 +124,7 @@ export class AIEditManager {
                 sessionId,
                 requestId,
                 workspaceFolder: workspaceFolder.uri.fsPath,
+                dirtyFiles: this.getDirtyFiles(),
               }));
               checkpointTriggered = true;
             }
@@ -140,7 +150,7 @@ export class AIEditManager {
     this.checkpoint("human");
   }
 
-  async checkpoint(author: "human" | "ai", hookInput?: string): Promise<boolean> {
+  async checkpoint(author: "human" | "ai" | "ai_tab", hookInput?: string): Promise<boolean> {
     if (!(await this.checkGitAi())) {
       return false;
     }

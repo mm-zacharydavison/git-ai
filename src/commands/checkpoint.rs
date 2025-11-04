@@ -43,7 +43,15 @@ pub fn run(
 
     // Initialize the new storage system
     let repo_storage = RepoStorage::for_repo_path(repo.path());
-    let working_log = repo_storage.working_log_for_base_commit(&base_commit);
+    let mut working_log = repo_storage.working_log_for_base_commit(&base_commit);
+
+    // Set dirty files if available
+    if let Some(dirty_files) = agent_run_result
+        .as_ref()
+        .and_then(|result| result.dirty_files.clone())
+    {
+        working_log.set_dirty_files(Some(dirty_files));
+    }
 
     // Get the current timestamp in milliseconds since the Unix epoch
     let ts = SystemTime::now()
@@ -390,11 +398,24 @@ fn get_all_tracked_files(
         false
     };
 
-    let results_for_tracked_files = if is_pre_commit && !has_ai_checkpoints {
+    let mut results_for_tracked_files = if is_pre_commit && !has_ai_checkpoints {
         get_status_of_files(repo, working_log, files, true)?
     } else {
         get_status_of_files(repo, working_log, files, false)?
     };
+
+    // Ensure to always include all dirty files
+    if let Some(ref dirty_files) = working_log.dirty_files {
+        for file_path in dirty_files.keys() {
+            // Only add if not already in the files list
+            if !results_for_tracked_files.contains(&file_path) {
+                // Check if it's a text file before adding
+                if is_text_file(working_log, &file_path) {
+                    results_for_tracked_files.push(file_path.clone());
+                }
+            }
+        }
+    }
 
     Ok(results_for_tracked_files)
 }
@@ -406,16 +427,10 @@ fn save_current_file_states(
     let mut file_content_hashes = HashMap::new();
 
     for file_path in files {
-        let abs_path = working_log.repo_root.join(file_path);
-        let content = if abs_path.exists() {
-            // Read file as bytes first, then convert to string with UTF-8 lossy conversion
-            match std::fs::read(&abs_path) {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                Err(_) => String::new(), // If we can't read the file, treat as empty
-            }
-        } else {
-            String::new()
-        };
+        // Read file content using working_log, which respects dirty_files
+        let content = working_log
+            .read_current_file_content(file_path)
+            .unwrap_or_else(|_| String::new());
 
         // Persist the file content and get the content hash
         let content_hash = working_log.persist_file_version(&content)?;
@@ -1223,9 +1238,7 @@ mod tests {
 }
 
 fn is_text_file(working_log: &PersistedWorkingLog, path: &str) -> bool {
-    let abs_path = working_log.repo_root.join(path);
-
-    if let Ok(metadata) = std::fs::metadata(&abs_path) {
+    if let Ok(metadata) = std::fs::metadata(working_log.normalize_file_path(path)) {
         if !metadata.is_file() {
             return false;
         }
