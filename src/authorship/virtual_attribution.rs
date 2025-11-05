@@ -629,16 +629,17 @@ fn collect_unstaged_hunks(
     pathspecs: Option<&HashSet<String>>,
 ) -> Result<HashMap<String, Vec<LineRange>>, GitAiError> {
     let mut unstaged_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
-
+    
     // Use git diff to get added lines in working directory vs commit
     let added_lines = repo.diff_workdir_added_lines(commit_sha, pathspecs)?;
-
+    
+    
     for (file_path, lines) in added_lines {
         if !lines.is_empty() {
             unstaged_hunks.insert(file_path, LineRange::compress_lines(&lines));
         }
     }
-
+    
     Ok(unstaged_hunks)
 }
 
@@ -664,6 +665,10 @@ impl VirtualAttributions {
         use crate::authorship::authorship_log_serialization::AuthorshipLog;
         use crate::git::repo_storage::InitialAttributions;
         use std::collections::{HashMap as StdHashMap, HashSet};
+        
+        println!("\n\n=== to_authorship_log_and_initial_working_log CALLED ===");
+        println!("parent_sha: {}, commit_sha: {}", parent_sha, commit_sha);
+        println!("self.attributions has {} files", self.attributions.len());
 
         let mut authorship_log = AuthorshipLog::new();
         authorship_log.metadata.base_commit_sha = self.base_commit.clone();
@@ -685,7 +690,40 @@ impl VirtualAttributions {
 
         // Get committed hunks (in commit coordinates) and unstaged hunks (in working directory coordinates)
         let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
-        let unstaged_hunks = collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
+        let mut unstaged_hunks = collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
+        
+        // If a line appears in both committed_hunks and unstaged_hunks, it means the line was
+        // committed in this commit and then modified again in the working directory.
+        // We should treat it as committed (remove it from unstaged_hunks) since the attribution
+        // belongs to this commit, even if there are subsequent unstaged modifications.
+        for (file_path, committed_ranges) in &committed_hunks {
+            if let Some(unstaged_ranges) = unstaged_hunks.get_mut(file_path) {
+                // Expand both to line numbers for easier comparison
+                let committed_lines: std::collections::HashSet<u32> = committed_ranges
+                    .iter()
+                    .flat_map(|r| r.expand())
+                    .collect();
+                
+                // Filter out any unstaged lines that were also committed
+                let mut filtered_unstaged_lines: Vec<u32> = unstaged_ranges
+                    .iter()
+                    .flat_map(|r| r.expand())
+                    .filter(|line| !committed_lines.contains(line))
+                    .collect();
+                
+                if filtered_unstaged_lines.is_empty() {
+                    unstaged_ranges.clear();
+                } else {
+                    filtered_unstaged_lines.sort_unstable();
+                    filtered_unstaged_lines.dedup();
+                    *unstaged_ranges = LineRange::compress_lines(&filtered_unstaged_lines);
+                }
+            }
+        }
+        
+        // Remove files with no unstaged hunks
+        unstaged_hunks.retain(|_, ranges| !ranges.is_empty());
+        
 
         // Process each file
         for (file_path, (_, line_attrs)) in &self.attributions {
@@ -711,9 +749,19 @@ impl VirtualAttributions {
             // Get the committed hunks for this file (if any) - these are in commit coordinates
             let file_committed_hunks = committed_hunks.get(file_path);
 
+            println!(
+                "DEBUG: Processing file {}: {} line attrs",
+                file_path,
+                line_attrs.len()
+            );
+
             for line_attr in line_attrs {
                 // Check each line individually
                 for workdir_line_num in line_attr.start_line..=line_attr.end_line {
+                    println!(
+                        "DEBUG:   Line {} (workdir), author_id: {}",
+                        workdir_line_num, line_attr.author_id
+                    );
                     // Check if this line is unstaged (in working directory but not in commit)
                     let is_unstaged = unstaged_lines.binary_search(&workdir_line_num).is_ok();
 
@@ -732,6 +780,10 @@ impl VirtualAttributions {
                             .filter(|&&l| l < workdir_line_num)
                             .count() as u32;
                         let commit_line_num = workdir_line_num - adjustment;
+                        println!(
+                            "DEBUG:     -> Not unstaged, commit_line_num: {}",
+                            commit_line_num
+                        );
 
                         // Check if this commit line number is in any committed hunk
                         let is_committed = if let Some(hunks) = file_committed_hunks {
@@ -747,13 +799,9 @@ impl VirtualAttributions {
                                 .or_default()
                                 .push(commit_line_num);
                         } else {
-                            // Line was not added in this commit (use working directory coordinates for INITIAL)
-                            uncommitted_lines_map
-                                .entry(line_attr.author_id.clone())
-                                .or_default()
-                                .push(workdir_line_num);
-                            referenced_prompts.insert(line_attr.author_id.clone());
                         }
+                        // Note: Lines that are neither unstaged nor in committed_hunks are lines that
+                        // already existed in the parent commit. They are discarded (not added to uncommitted).
                     }
                 }
             }

@@ -177,6 +177,7 @@ impl TestRepo {
     pub fn commit(&self, message: &str) -> Result<NewCommit, String> {
         let output = self.git(&["commit", "-m", message]);
 
+        println!("commit output: {:?}", output);
         if output.is_ok() {
             let combined = output.unwrap();
 

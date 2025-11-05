@@ -1636,6 +1636,7 @@ impl Repository {
 
         let output = exec_git(&args)?;
         let diff_output = String::from_utf8(output.stdout)?;
+        
 
         parse_diff_added_lines(&diff_output)
     }
