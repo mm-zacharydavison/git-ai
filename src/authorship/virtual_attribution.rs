@@ -622,6 +622,26 @@ fn collect_committed_hunks(
     Ok(committed_hunks)
 }
 
+/// Helper function to collect unstaged line ranges (lines in working directory but not in commit)
+fn collect_unstaged_hunks(
+    repo: &Repository,
+    commit_sha: &str,
+    pathspecs: Option<&HashSet<String>>,
+) -> Result<HashMap<String, Vec<LineRange>>, GitAiError> {
+    let mut unstaged_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
+
+    // Use git diff to get added lines in working directory vs commit
+    let added_lines = repo.diff_workdir_added_lines(commit_sha, pathspecs)?;
+
+    for (file_path, lines) in added_lines {
+        if !lines.is_empty() {
+            unstaged_hunks.insert(file_path, LineRange::compress_lines(&lines));
+        }
+    }
+
+    Ok(unstaged_hunks)
+}
+
 impl VirtualAttributions {
     /// Split VirtualAttributions into committed and uncommitted buckets
     ///
@@ -663,8 +683,9 @@ impl VirtualAttributions {
         let mut initial_files: StdHashMap<String, Vec<LineAttribution>> = StdHashMap::new();
         let mut referenced_prompts: HashSet<String> = HashSet::new();
 
-        // Get committed hunks from git diff
+        // Get committed hunks (in commit coordinates) and unstaged hunks (in working directory coordinates)
         let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
+        let unstaged_hunks = collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
 
         // Process each file
         for (file_path, (_, line_attrs)) in &self.attributions {
@@ -672,37 +693,67 @@ impl VirtualAttributions {
                 continue;
             }
 
+            // Get unstaged lines for this file (in working directory coordinates)
+            let mut unstaged_lines: Vec<u32> = Vec::new();
+            if let Some(unstaged_ranges) = unstaged_hunks.get(file_path) {
+                for range in unstaged_ranges {
+                    unstaged_lines.extend(range.expand());
+                }
+                unstaged_lines.sort_unstable();
+            }
+
             // Split line attributions into committed and uncommitted
-            // based on whether they fall within committed hunks
+            // VirtualAttributions has line numbers in working directory coordinates,
+            // so we need to convert to commit coordinates before comparing with committed hunks
             let mut committed_lines_map: StdHashMap<String, Vec<u32>> = StdHashMap::new();
             let mut uncommitted_lines_map: StdHashMap<String, Vec<u32>> = StdHashMap::new();
 
-            // Get the committed hunks for this file (if any)
+            // Get the committed hunks for this file (if any) - these are in commit coordinates
             let file_committed_hunks = committed_hunks.get(file_path);
 
             for line_attr in line_attrs {
                 // Check each line individually
-                for line_num in line_attr.start_line..=line_attr.end_line {
-                    // Check if this line is in any committed hunk
-                    let is_committed = if let Some(hunks) = file_committed_hunks {
-                        hunks.iter().any(|hunk| hunk.contains(line_num))
-                    } else {
-                        false
-                    };
+                for workdir_line_num in line_attr.start_line..=line_attr.end_line {
+                    // Check if this line is unstaged (in working directory but not in commit)
+                    let is_unstaged = unstaged_lines.binary_search(&workdir_line_num).is_ok();
 
-                    if is_committed {
-                        // Line was committed in this commit
-                        committed_lines_map
-                            .entry(line_attr.author_id.clone())
-                            .or_default()
-                            .push(line_num);
-                    } else {
-                        // Line was not committed (either doesn't exist or was already there)
+                    if is_unstaged {
+                        // Line is unstaged, mark as uncommitted
                         uncommitted_lines_map
                             .entry(line_attr.author_id.clone())
                             .or_default()
-                            .push(line_num);
+                            .push(workdir_line_num);
                         referenced_prompts.insert(line_attr.author_id.clone());
+                    } else {
+                        // Convert working directory line number to commit line number
+                        // by subtracting the count of unstaged lines before this line
+                        let adjustment = unstaged_lines
+                            .iter()
+                            .filter(|&&l| l < workdir_line_num)
+                            .count() as u32;
+                        let commit_line_num = workdir_line_num - adjustment;
+
+                        // Check if this commit line number is in any committed hunk
+                        let is_committed = if let Some(hunks) = file_committed_hunks {
+                            hunks.iter().any(|hunk| hunk.contains(commit_line_num))
+                        } else {
+                            false
+                        };
+
+                        if is_committed {
+                            // Line was committed in this commit (use commit coordinates)
+                            committed_lines_map
+                                .entry(line_attr.author_id.clone())
+                                .or_default()
+                                .push(commit_line_num);
+                        } else {
+                            // Line was not added in this commit (use working directory coordinates for INITIAL)
+                            uncommitted_lines_map
+                                .entry(line_attr.author_id.clone())
+                                .or_default()
+                                .push(workdir_line_num);
+                            referenced_prompts.insert(line_attr.author_id.clone());
+                        }
                     }
                 }
             }
