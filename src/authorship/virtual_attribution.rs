@@ -17,8 +17,9 @@ pub struct VirtualAttributions {
     pub attributions: HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
     // Maps file path -> file content
     file_contents: HashMap<String, String>,
-    // Prompt records mapping session ID -> PromptRecord
-    pub prompts: BTreeMap<String, PromptRecord>,
+    // Prompt records mapping prompt_id -> (commit_sha -> PromptRecord)
+    // Same prompt can appear in multiple commits, allowing us to track and sort them
+    pub prompts: BTreeMap<String, BTreeMap<String, PromptRecord>>,
     // Timestamp to use for attributions
     ts: u128,
 }
@@ -68,6 +69,7 @@ impl VirtualAttributions {
         }
 
         // Find missing author_ids (not in prompts map)
+        // An author_id is missing if it doesn't exist as a key in the outer prompts map
         let missing_ids: Vec<String> = all_author_ids
             .into_iter()
             .filter(|id| !self.prompts.contains_key(id))
@@ -81,8 +83,12 @@ impl VirtualAttributions {
         let prompts = smol::block_on(async { self.load_prompts_concurrent(&missing_ids).await })?;
 
         // Insert loaded prompts into our map
-        for (id, prompt) in prompts {
-            self.prompts.insert(id, prompt);
+        // Each prompt is associated with the commit it was found in
+        for (id, commit_sha, prompt) in prompts {
+            self.prompts
+                .entry(id)
+                .or_insert_with(BTreeMap::new)
+                .insert(commit_sha, prompt);
         }
 
         Ok(())
@@ -92,7 +98,7 @@ impl VirtualAttributions {
     async fn load_prompts_concurrent(
         &self,
         missing_ids: &[String],
-    ) -> Result<Vec<(String, PromptRecord)>, GitAiError> {
+    ) -> Result<Vec<(String, String, PromptRecord)>, GitAiError> {
         const MAX_CONCURRENT: usize = 30;
 
         let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
@@ -110,7 +116,7 @@ impl VirtualAttributions {
                 // Wrap blocking git operations in smol::unblock
                 smol::unblock(move || {
                     Self::find_prompt_in_history_static(&repo, &missing_id)
-                        .map(|prompt| (missing_id.clone(), prompt))
+                        .map(|(commit_sha, prompt)| (missing_id.clone(), commit_sha, prompt))
                 })
                 .await
             });
@@ -125,7 +131,7 @@ impl VirtualAttributions {
         let mut prompts = Vec::new();
         for result in results {
             match result {
-                Ok((id, prompt)) => prompts.push((id, prompt)),
+                Ok((id, commit_sha, prompt)) => prompts.push((id, commit_sha, prompt)),
                 Err(_) => {
                     // Error finding prompt, skip it
                 }
@@ -136,10 +142,11 @@ impl VirtualAttributions {
     }
 
     /// Static version of find_prompt_in_history for use in async context
+    /// Returns (commit_sha, PromptRecord) for the most recent commit containing this prompt
     fn find_prompt_in_history_static(
         repo: &Repository,
         prompt_id: &str,
-    ) -> Result<crate::authorship::authorship_log::PromptRecord, GitAiError> {
+    ) -> Result<(String, crate::authorship::authorship_log::PromptRecord), GitAiError> {
         // Use git grep to search for the prompt ID in authorship notes
         let shas = crate::git::refs::grep_ai_notes(&repo, &format!("\"{}\"", prompt_id))
             .unwrap_or_default();
@@ -149,7 +156,7 @@ impl VirtualAttributions {
             if let Ok(log) = crate::git::refs::get_reference_as_authorship_log_v3(&repo, latest_sha)
             {
                 if let Some(prompt) = log.metadata.prompts.get(prompt_id) {
-                    return Ok(prompt.clone());
+                    return Ok((latest_sha.clone(), prompt.clone()));
                 }
             }
         }
@@ -253,8 +260,8 @@ impl VirtualAttributions {
         self.ts
     }
 
-    /// Get the prompts metadata
-    pub fn prompts(&self) -> &BTreeMap<String, PromptRecord> {
+    /// Get the prompts metadata (prompt_id -> commit_sha -> PromptRecord)
+    pub fn prompts(&self) -> &BTreeMap<String, BTreeMap<String, PromptRecord>> {
         &self.prompts
     }
 
@@ -311,8 +318,12 @@ impl VirtualAttributions {
         let mut session_deletions: HashMap<String, u32> = HashMap::new();
 
         // Add prompts from INITIAL attributions
+        // These are uncommitted prompts, so we use an empty string as the commit_sha
         for (prompt_id, prompt_record) in &initial_attributions.prompts {
-            prompts.insert(prompt_id.clone(), prompt_record.clone());
+            prompts
+                .entry(prompt_id.clone())
+                .or_insert_with(BTreeMap::new)
+                .insert(String::new(), prompt_record.clone());
         }
 
         // Process INITIAL attributions
@@ -342,8 +353,12 @@ impl VirtualAttributions {
                         &agent_id.id,
                         &agent_id.tool,
                     );
-                prompts.entry(author_id.clone()).or_insert_with(|| {
-                    crate::authorship::authorship_log::PromptRecord {
+                // For working log checkpoints, use empty string as commit_sha since they're uncommitted
+                prompts
+                    .entry(author_id.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .entry(String::new())
+                    .or_insert_with(|| crate::authorship::authorship_log::PromptRecord {
                         agent_id: agent_id.clone(),
                         human_author: human_author.clone(),
                         messages: checkpoint
@@ -355,8 +370,7 @@ impl VirtualAttributions {
                         total_deletions: 0,
                         accepted_lines: 0,
                         overriden_lines: 0,
-                    }
-                });
+                    });
 
                 // Track additions and deletions from checkpoint line_stats
                 *session_additions.entry(author_id.clone()).or_insert(0) +=
@@ -462,7 +476,7 @@ impl VirtualAttributions {
         base_commit: String,
         attributions: HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
         file_contents: HashMap<String, String>,
-        prompts: BTreeMap<String, PromptRecord>,
+        prompts: BTreeMap<String, BTreeMap<String, PromptRecord>>,
         ts: u128,
     ) -> Self {
         VirtualAttributions {
@@ -483,7 +497,18 @@ impl VirtualAttributions {
 
         let mut authorship_log = AuthorshipLog::new();
         authorship_log.metadata.base_commit_sha = self.base_commit.clone();
-        authorship_log.metadata.prompts = self.prompts.clone();
+        // Flatten the nested prompts map: take the most recent (first) prompt for each prompt_id
+        authorship_log.metadata.prompts = self
+            .prompts
+            .iter()
+            .filter_map(|(prompt_id, commits)| {
+                // Get the first (most recent) commit's PromptRecord
+                commits
+                    .values()
+                    .next()
+                    .map(|record| (prompt_id.clone(), record.clone()))
+            })
+            .collect();
 
         // Process each file
         for (file_path, (_, line_attrs)) in &self.attributions {
@@ -583,7 +608,18 @@ impl VirtualAttributions {
 
         let mut authorship_log = AuthorshipLog::new();
         authorship_log.metadata.base_commit_sha = self.base_commit.clone();
-        authorship_log.metadata.prompts = self.prompts.clone();
+        // Flatten the nested prompts map: take the most recent (first) prompt for each prompt_id
+        authorship_log.metadata.prompts = self
+            .prompts
+            .iter()
+            .filter_map(|(prompt_id, commits)| {
+                // Get the first (most recent) commit's PromptRecord
+                commits
+                    .values()
+                    .next()
+                    .map(|record| (prompt_id.clone(), record.clone()))
+            })
+            .collect();
 
         let mut initial_files: StdHashMap<String, Vec<LineAttribution>> = StdHashMap::new();
         let mut referenced_prompts: HashSet<String> = HashSet::new();
@@ -783,8 +819,11 @@ impl VirtualAttributions {
         // Build prompts map for INITIAL (only prompts referenced by uncommitted lines)
         let mut initial_prompts = StdHashMap::new();
         for prompt_id in referenced_prompts {
-            if let Some(prompt) = self.prompts.get(&prompt_id) {
-                initial_prompts.insert(prompt_id, prompt.clone());
+            if let Some(commits) = self.prompts.get(&prompt_id) {
+                // Get the most recent (first) prompt for this prompt_id
+                if let Some(prompt) = commits.values().next() {
+                    initial_prompts.insert(prompt_id, prompt.clone());
+                }
             }
         }
 
@@ -798,7 +837,7 @@ impl VirtualAttributions {
 
     /// Calculate and update prompt metrics (accepted_lines, overridden_lines, total_additions, total_deletions)
     fn calculate_and_update_prompt_metrics(
-        prompts: &mut BTreeMap<String, PromptRecord>,
+        prompts: &mut BTreeMap<String, BTreeMap<String, PromptRecord>>,
         attributions: &HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
         session_additions: &HashMap<String, u32>,
         session_deletions: &HashMap<String, u32>,
@@ -837,11 +876,15 @@ impl VirtualAttributions {
         }
 
         // Update all prompt records with calculated metrics
-        for (session_id, prompt_record) in prompts.iter_mut() {
-            prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
-            prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
-            prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
-            prompt_record.overriden_lines = *session_overridden_lines.get(session_id).unwrap_or(&0);
+        for (session_id, commits) in prompts.iter_mut() {
+            for prompt_record in commits.values_mut() {
+                prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
+                prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
+                prompt_record.accepted_lines =
+                    *session_accepted_lines.get(session_id).unwrap_or(&0);
+                prompt_record.overriden_lines =
+                    *session_overridden_lines.get(session_id).unwrap_or(&0);
+            }
         }
     }
 }
@@ -860,10 +903,15 @@ pub fn merge_attributions_favoring_first(
 
     // Merge prompts from both VAs
     let mut merged_prompts = primary.prompts.clone();
-    for (key, value) in &secondary.prompts {
-        merged_prompts
-            .entry(key.clone())
-            .or_insert_with(|| value.clone());
+    for (prompt_id, commits) in &secondary.prompts {
+        let entry = merged_prompts
+            .entry(prompt_id.clone())
+            .or_insert_with(BTreeMap::new);
+        for (commit_sha, prompt_record) in commits {
+            entry
+                .entry(commit_sha.clone())
+                .or_insert_with(|| prompt_record.clone());
+        }
     }
 
     let mut merged = VirtualAttributions {
