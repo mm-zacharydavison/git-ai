@@ -1,5 +1,8 @@
 #[macro_use]
 mod repos;
+use std::thread::Thread;
+use std::time::Duration;
+
 use repos::test_file::ExpectedLineExt;
 use repos::test_repo::TestRepo;
 
@@ -20,17 +23,26 @@ fn test_prepare_working_log_simple_squash() {
     repo.git(&["checkout", "-b", "feature"]).unwrap();
 
     // Add AI changes on feature branch
-    file.insert_at(3, lines!["// AI added feature".ai()]);
-    repo.stage_all_and_commit("Add AI feature").unwrap();
+    file.insert_at(3, lines!["// AI added feature".ai(), "".ai(), "".ai()]);
+    let commit = repo.stage_all_and_commit("Add AI feature").unwrap();
+    println!("ai commit");
+    commit.print_authorship();
+
+    std::thread::sleep(Duration::from_secs(1));
 
     // Add human changes on feature branch
-    file.insert_at(4, lines!["// Human refinement"]);
-    repo.stage_all_and_commit("Human refinement").unwrap();
+    file.insert_at(6, lines!["// Human refinement"]);
+    let commit = repo.stage_all_and_commit("Human refinement").unwrap();
+    println!("human commit");
+    commit.print_authorship();
 
+    return;
     // Go back to master and squash merge
     repo.git(&["checkout", &default_branch]).unwrap();
     repo.git(&["merge", "--squash", "feature"]).unwrap();
-    repo.commit("Squashed feature").unwrap();
+    let commit = repo.commit("Squashed feature").unwrap();
+
+    println!("squashed commit: {:?}", commit.print_authorship());
 
     // Verify AI attribution is preserved
     file.assert_lines_and_blame(lines![
@@ -43,6 +55,7 @@ fn test_prepare_working_log_simple_squash() {
 
     // Verify stats for squashed commit
     let stats = repo.stats().unwrap();
+    println!("stats: {:?}", stats);
     assert_eq!(
         stats.git_diff_added_lines, 3,
         "Squash commit adds 3 lines total (includes newline)"

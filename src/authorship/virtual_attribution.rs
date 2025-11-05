@@ -1,12 +1,12 @@
 use crate::authorship::attribution_tracker::{
     Attribution, LineAttribution, line_attributions_to_attributions,
 };
-use crate::authorship::authorship_log::PromptRecord;
+use crate::authorship::authorship_log::{LineRange, PromptRecord};
 use crate::authorship::working_log::CheckpointKind;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
 use crate::git::repository::Repository;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
