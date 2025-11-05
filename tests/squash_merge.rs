@@ -1,8 +1,8 @@
 #[macro_use]
 mod repos;
-use std::time::Duration;
 use repos::test_file::ExpectedLineExt;
 use repos::test_repo::TestRepo;
+use std::time::Duration;
 
 /// Test merge --squash with a simple feature branch containing AI and human edits
 #[test]
@@ -21,13 +21,13 @@ fn test_prepare_working_log_simple_squash() {
     repo.git(&["checkout", "-b", "feature"]).unwrap();
 
     // Add AI changes on feature branch
-    file.insert_at(3, lines!["// AI added feature".ai(), "".ai(), "".ai()]);
+    file.insert_at(3, lines!["// AI added feature".ai()]);
     repo.stage_all_and_commit("Add AI feature").unwrap();
 
     std::thread::sleep(Duration::from_secs(1));
 
     // Add human changes on feature branch
-    file.insert_at(6, lines!["// Human refinement"]);
+    file.insert_at(4, lines!["// Human refinement"]);
     repo.stage_all_and_commit("Human refinement").unwrap();
 
     // Go back to master and squash merge
