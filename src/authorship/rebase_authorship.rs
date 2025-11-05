@@ -5,7 +5,7 @@ use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::{Commit, Repository};
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::utils::debug_log;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Process events in the rewrite log and call the correct rewrite functions in this file
 pub fn rewrite_authorship_if_needed(
@@ -113,7 +113,6 @@ pub fn prepare_working_log_after_squash(
     use crate::authorship::virtual_attribution::{
         VirtualAttributions, merge_attributions_favoring_first,
     };
-    use std::collections::HashMap;
 
     // Step 1: Get list of changed files between the two branches
     let changed_files = repo.diff_changed_files(source_head_sha, target_branch_head_sha)?;
@@ -151,10 +150,14 @@ pub fn prepare_working_log_after_squash(
     let merged_va = merge_attributions_favoring_first(target_va, source_va, staged_files)?;
 
     // Step 5: Convert to INITIAL (everything is uncommitted in a squash)
-    // Pass empty committed_files since nothing has been committed yet
-    let empty_committed_files: HashMap<String, String> = HashMap::new();
+    // Pass same SHA for parent and commit to get empty diff (no committed hunks)
     let (_authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(empty_committed_files)?;
+        merged_va.to_authorship_log_and_initial_working_log(
+            repo,
+            target_branch_head_sha,
+            target_branch_head_sha,
+            None,
+        )?;
 
     // Step 6: Write INITIAL file
     if !initial_attributions.files.is_empty() {
@@ -753,12 +756,25 @@ pub fn rewrite_authorship_after_commit_amend(
         .await
     })?;
 
-    // Phase 2: Read committed content from amended commit
-    let committed_files = get_committed_files_content(repo, amended_commit, &pathspecs)?;
+    // Phase 2: Get parent of amended commit for diff calculation
+    let amended_commit_obj = repo.find_commit(amended_commit.to_string())?;
+    let parent_sha = if amended_commit_obj.parent_count()? > 0 {
+        amended_commit_obj.parent(0)?.id().to_string()
+    } else {
+        "initial".to_string()
+    };
+
+    // Convert pathspecs to HashSet
+    let pathspecs_set: HashSet<String> = pathspecs.iter().cloned().collect();
 
     // Phase 3: Split into committed (authorship log) vs uncommitted (INITIAL)
     let (mut authorship_log, initial_attributions) =
-        working_va.to_authorship_log_and_initial_working_log(committed_files)?;
+        working_va.to_authorship_log_and_initial_working_log(
+            repo,
+            &parent_sha,
+            amended_commit,
+            Some(&pathspecs_set),
+        )?;
 
     // Update base commit SHA
     authorship_log.metadata.base_commit_sha = amended_commit.to_string();
@@ -932,10 +948,14 @@ pub fn reconstruct_working_log_after_reset(
     ));
 
     // Step 6: Convert to INITIAL (everything is uncommitted after reset)
-    // Pass empty committed_files since nothing has been committed yet
-    let empty_committed_files: HashMap<String, String> = HashMap::new();
+    // Pass same SHA for parent and commit to get empty diff (no committed hunks)
     let (authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(empty_committed_files)?;
+        merged_va.to_authorship_log_and_initial_working_log(
+            repo,
+            target_commit_sha,
+            target_commit_sha,
+            None,
+        )?;
 
     debug_log(&format!(
         "Generated INITIAL attributions for {} files, {} attestations, {} prompts",

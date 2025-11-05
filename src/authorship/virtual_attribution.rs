@@ -585,16 +585,55 @@ impl VirtualAttributions {
 
         Ok(authorship_log)
     }
+}
 
+/// Helper function to collect committed line ranges from git diff
+fn collect_committed_hunks(
+    repo: &Repository,
+    parent_sha: &str,
+    commit_sha: &str,
+    pathspecs: Option<&HashSet<String>>,
+) -> Result<HashMap<String, Vec<LineRange>>, GitAiError> {
+    let mut committed_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
+
+    // Handle initial commit (no parent)
+    if parent_sha == "initial" {
+        // For initial commit, use git diff against the empty tree
+        let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // Git's empty tree hash
+        let added_lines = repo.diff_added_lines(empty_tree, commit_sha, pathspecs)?;
+
+        for (file_path, lines) in added_lines {
+            if !lines.is_empty() {
+                committed_hunks.insert(file_path, LineRange::compress_lines(&lines));
+            }
+        }
+        return Ok(committed_hunks);
+    }
+
+    // Use git diff to get added lines directly
+    let added_lines = repo.diff_added_lines(parent_sha, commit_sha, pathspecs)?;
+
+    for (file_path, lines) in added_lines {
+        if !lines.is_empty() {
+            committed_hunks.insert(file_path, LineRange::compress_lines(&lines));
+        }
+    }
+
+    Ok(committed_hunks)
+}
+
+impl VirtualAttributions {
     /// Split VirtualAttributions into committed and uncommitted buckets
     ///
-    /// This method compares the working directory content (in self) with the committed content
-    /// to determine which line attributions belong in:
-    /// - Bucket 1 (committed): Lines present in committed content → AuthorshipLog
-    /// - Bucket 2 (uncommitted): Lines NOT in committed content → InitialAttributions
+    /// This method uses git diff to determine which line attributions belong in:
+    /// - Bucket 1 (committed): Lines added in this commit → AuthorshipLog
+    /// - Bucket 2 (uncommitted): Lines NOT added in this commit → InitialAttributions
     pub fn to_authorship_log_and_initial_working_log(
         &self,
-        committed_files: HashMap<String, String>,
+        repo: &Repository,
+        parent_sha: &str,
+        commit_sha: &str,
+        pathspecs: Option<&HashSet<String>>,
     ) -> Result<
         (
             crate::authorship::authorship_log_serialization::AuthorshipLog,
@@ -624,87 +663,41 @@ impl VirtualAttributions {
         let mut initial_files: StdHashMap<String, Vec<LineAttribution>> = StdHashMap::new();
         let mut referenced_prompts: HashSet<String> = HashSet::new();
 
+        // Get committed hunks from git diff
+        let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
+
         // Process each file
         for (file_path, (_, line_attrs)) in &self.attributions {
             if line_attrs.is_empty() {
                 continue;
             }
 
-            let empty_string = String::new();
-            let working_content = self.get_file_content(file_path).unwrap_or(&empty_string);
-            let committed_content = committed_files.get(file_path);
-
-            // Split working content into lines for comparison
-            let working_lines: Vec<&str> = working_content.lines().collect();
-
-            // If file doesn't exist in commit, all lines are uncommitted
-            if committed_content.is_none() {
-                // All attributions go to INITIAL
-                for line_attr in line_attrs {
-                    referenced_prompts.insert(line_attr.author_id.clone());
-                }
-                initial_files.insert(file_path.clone(), line_attrs.clone());
-                continue;
-            }
-
-            let committed_content = committed_content.unwrap();
-            let committed_lines: Vec<&str> = committed_content.lines().collect();
-
             // Split line attributions into committed and uncommitted
-            // We need to do this line-by-line, not range-by-range, because a single attribution
-            // range might have some lines committed and some uncommitted
+            // based on whether they fall within committed hunks
             let mut committed_lines_map: StdHashMap<String, Vec<u32>> = StdHashMap::new();
             let mut uncommitted_lines_map: StdHashMap<String, Vec<u32>> = StdHashMap::new();
 
-            // Build a mapping from line content to committed line numbers (for content-based matching)
-            // When there are multiple lines with the same content, track all positions
-            let mut committed_content_to_lines: StdHashMap<&str, Vec<u32>> = StdHashMap::new();
-            for (idx, content) in committed_lines.iter().enumerate() {
-                committed_content_to_lines
-                    .entry(*content)
-                    .or_default()
-                    .push((idx + 1) as u32); // Line numbers are 1-indexed
-            }
-
-            // Track which committed lines we've already matched to avoid duplicates
-            let mut used_committed_lines: HashSet<u32> = HashSet::new();
+            // Get the committed hunks for this file (if any)
+            let file_committed_hunks = committed_hunks.get(file_path);
 
             for line_attr in line_attrs {
                 // Check each line individually
                 for line_num in line_attr.start_line..=line_attr.end_line {
-                    let idx = (line_num as usize).saturating_sub(1);
-
-                    // If line is beyond working content, skip it
-                    if idx >= working_lines.len() {
-                        continue;
-                    }
-
-                    let line_content = working_lines[idx];
-
-                    // Find the committed line number for this content
-                    if let Some(committed_line_nums) = committed_content_to_lines.get(line_content)
-                    {
-                        // Find the first unused committed line with this content
-                        if let Some(&committed_line_num) = committed_line_nums
-                            .iter()
-                            .find(|&&ln| !used_committed_lines.contains(&ln))
-                        {
-                            // Mark this line as committed, using the committed tree's line number
-                            used_committed_lines.insert(committed_line_num);
-                            committed_lines_map
-                                .entry(line_attr.author_id.clone())
-                                .or_default()
-                                .push(committed_line_num);
-                        } else {
-                            // All instances of this content are already matched, mark as uncommitted
-                            uncommitted_lines_map
-                                .entry(line_attr.author_id.clone())
-                                .or_default()
-                                .push(line_num);
-                            referenced_prompts.insert(line_attr.author_id.clone());
-                        }
+                    // Check if this line is in any committed hunk
+                    let is_committed = if let Some(hunks) = file_committed_hunks {
+                        hunks.iter().any(|hunk| hunk.contains(line_num))
                     } else {
-                        // Content not in committed tree, mark as uncommitted
+                        false
+                    };
+
+                    if is_committed {
+                        // Line was committed in this commit
+                        committed_lines_map
+                            .entry(line_attr.author_id.clone())
+                            .or_default()
+                            .push(line_num);
+                    } else {
+                        // Line was not committed (either doesn't exist or was already there)
                         uncommitted_lines_map
                             .entry(line_attr.author_id.clone())
                             .or_default()

@@ -48,16 +48,20 @@ pub fn post_commit(
         Some(human_author.clone()),
     )?;
 
-    // Get committed file contents from commit tree
-    let pathspecs: Vec<String> = filtered_working_log
+    // Get pathspecs for files in the working log
+    let pathspecs: HashSet<String> = filtered_working_log
         .iter()
         .flat_map(|cp| cp.entries.iter().map(|e| e.file.clone()))
         .collect();
-    let committed_files = get_committed_files_content(repo, &commit_sha, &pathspecs)?;
 
     // Split VirtualAttributions into committed (authorship log) and uncommitted (INITIAL)
-    let (mut authorship_log, initial_attributions) =
-        working_va.to_authorship_log_and_initial_working_log(committed_files)?;
+    let (mut authorship_log, initial_attributions) = working_va
+        .to_authorship_log_and_initial_working_log(
+            repo,
+            &parent_sha,
+            &commit_sha,
+            Some(&pathspecs),
+        )?;
 
     authorship_log.metadata.base_commit_sha = commit_sha.clone();
 
