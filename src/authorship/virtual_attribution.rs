@@ -639,6 +639,42 @@ fn collect_unstaged_hunks(
         }
     }
 
+    // Check for untracked files in pathspecs that git diff didn't find
+    // These are files that exist in the working directory but aren't tracked by git
+    if let Some(paths) = pathspecs {
+        if let Ok(workdir) = repo.workdir() {
+            for pathspec in paths {
+                // Skip if we already found this file in git diff
+                if unstaged_hunks.contains_key(pathspec) {
+                    continue;
+                }
+
+                // Check if file exists in the commit - if it does, it's tracked and git diff should handle it
+                // Only process truly untracked files (files that don't exist in the commit tree)
+                if file_exists_in_commit(repo, commit_sha, pathspec).unwrap_or(false) {
+                    continue;
+                }
+
+                // Check if file exists in working directory
+                let file_path = workdir.join(pathspec);
+                if file_path.exists() && file_path.is_file() {
+                    // Try to read the file
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                        // Count the lines - all lines are "unstaged" since the file is untracked
+                        let line_count = content.lines().count() as u32;
+                        if line_count > 0 {
+                            // Create a range covering all lines (1-indexed)
+                            unstaged_hunks.insert(
+                                pathspec.clone(),
+                                vec![LineRange::Range(1, line_count)],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(unstaged_hunks)
 }
 
@@ -686,6 +722,9 @@ impl VirtualAttributions {
         // Get committed hunks (in commit coordinates) and unstaged hunks (in working directory coordinates)
         let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
         let mut unstaged_hunks = collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
+        
+        eprintln!("DEBUG: committed_hunks: {:?}", committed_hunks);
+        eprintln!("DEBUG: unstaged_hunks: {:?}", unstaged_hunks);
 
         // IMPORTANT: If a line appears in both committed_hunks and unstaged_hunks, it means:
         // - The line was committed in this commit (in commit coordinates)
@@ -1220,6 +1259,17 @@ fn get_file_content_at_commit(
         }
         Err(_) => Ok(String::new()),
     }
+}
+
+/// Check if a file exists in a commit's tree
+fn file_exists_in_commit(
+    repo: &Repository,
+    commit_sha: &str,
+    file_path: &str,
+) -> Result<bool, GitAiError> {
+    let commit = repo.find_commit(commit_sha.to_string())?;
+    let tree = commit.tree()?;
+    Ok(tree.get_path(std::path::Path::new(file_path)).is_ok())
 }
 
 #[cfg(test)]

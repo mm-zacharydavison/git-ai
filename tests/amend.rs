@@ -226,15 +226,23 @@ fn test_amend_preserves_unstaged_ai_attribution() {
     ]);
 
     // Amend HEAD with fileA (fileB remains unstaged)
-    println!(
-        "amend output: {:?}",
-        repo.git(&["commit", "--amend", "-m", "Amended commit"])
-            .unwrap()
-    );
+    repo.git(&["commit", "--amend", "-m", "Amended commit"])
+        .unwrap();
 
+    // Verify that fileB's AI attribution was saved in INITIAL attributions
     let initial = repo.current_working_logs().read_initial_attributions();
-    println!("initial after ammended commit: {:?}", initial);
-    return;
+    assert!(
+        initial.files.contains_key("fileB.txt"),
+        "fileB.txt should be in initial attributions"
+    );
+    let file_b_attrs = &initial.files["fileB.txt"];
+    assert_eq!(
+        file_b_attrs.len(),
+        1,
+        "fileB should have 1 attribution range"
+    );
+    assert_eq!(file_b_attrs[0].start_line, 1);
+    assert_eq!(file_b_attrs[0].end_line, 3);
 
     // Now stage and commit fileB
     repo.stage_all_and_commit("Add fileB").unwrap();
