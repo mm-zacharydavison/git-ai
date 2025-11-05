@@ -1044,15 +1044,52 @@ pub fn merge_attributions_favoring_first(
     let base_commit = primary.base_commit.clone();
 
     // Merge prompts from both VAs
-    let mut merged_prompts = primary.prompts.clone();
-    for (prompt_id, commits) in &secondary.prompts {
-        let entry = merged_prompts
-            .entry(prompt_id.clone())
-            .or_insert_with(BTreeMap::new);
-        for (commit_sha, prompt_record) in commits {
-            entry
-                .entry(commit_sha.clone())
-                .or_insert_with(|| prompt_record.clone());
+    // For each prompt_id, collect all PromptRecords across all commits from both sources,
+    // sort them (oldest to newest), and take the last (newest) one
+    let mut merged_prompts = BTreeMap::new();
+
+    // Collect all unique prompt_ids
+    let mut all_prompt_ids: std::collections::HashSet<String> =
+        primary.prompts.keys().cloned().collect();
+    all_prompt_ids.extend(secondary.prompts.keys().cloned());
+
+    for prompt_id in all_prompt_ids {
+        // Collect all PromptRecords for this prompt_id from both sources
+        let mut all_records = Vec::new();
+
+        if let Some(commits) = primary.prompts.get(&prompt_id) {
+            for (_commit_sha, prompt_record) in commits {
+                all_records.push(prompt_record.clone());
+            }
+        }
+
+        if let Some(commits) = secondary.prompts.get(&prompt_id) {
+            for (_commit_sha, prompt_record) in commits {
+                all_records.push(prompt_record.clone());
+            }
+        }
+
+        // Sort records oldest to newest using the Ord implementation
+        all_records.sort();
+
+        // Take the last (newest) record
+        if let Some(newest_record) = all_records.last() {
+            let mut prompt_commits = BTreeMap::new();
+            // Use a synthetic commit sha or the last commit from either source
+            let commit_sha = primary
+                .prompts
+                .get(&prompt_id)
+                .and_then(|commits| commits.keys().last().cloned())
+                .or_else(|| {
+                    secondary
+                        .prompts
+                        .get(&prompt_id)
+                        .and_then(|commits| commits.keys().last().cloned())
+                })
+                .unwrap_or_else(|| "merged".to_string());
+
+            prompt_commits.insert(commit_sha, newest_record.clone());
+            merged_prompts.insert(prompt_id.clone(), prompt_commits);
         }
     }
 
@@ -1120,6 +1157,35 @@ pub fn merge_attributions_favoring_first(
         merged
             .file_contents
             .insert(file_path, final_content.clone());
+    }
+
+    // Save total_additions and total_deletions from the newest PromptRecord
+    let mut saved_totals: HashMap<String, (u32, u32)> = HashMap::new();
+    for (prompt_id, commits) in &merged.prompts {
+        for prompt_record in commits.values() {
+            saved_totals.insert(
+                prompt_id.clone(),
+                (prompt_record.total_additions, prompt_record.total_deletions),
+            );
+        }
+    }
+
+    // Calculate and update prompt metrics (will set accepted_lines and overridden_lines)
+    VirtualAttributions::calculate_and_update_prompt_metrics(
+        &mut merged.prompts,
+        &merged.attributions,
+        &HashMap::new(), // Empty - will result in total_additions = 0
+        &HashMap::new(), // Empty - will result in total_deletions = 0
+    );
+
+    // Restore the saved total_additions and total_deletions
+    for (prompt_id, commits) in merged.prompts.iter_mut() {
+        if let Some(&(additions, deletions)) = saved_totals.get(prompt_id) {
+            for prompt_record in commits.values_mut() {
+                prompt_record.total_additions = additions;
+                prompt_record.total_deletions = deletions;
+            }
+        }
     }
 
     Ok(merged)
