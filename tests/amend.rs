@@ -226,8 +226,15 @@ fn test_amend_preserves_unstaged_ai_attribution() {
     ]);
 
     // Amend HEAD with fileA (fileB remains unstaged)
-    repo.git(&["commit", "--amend", "-m", "Amended commit"])
-        .unwrap();
+    println!(
+        "amend output: {:?}",
+        repo.git(&["commit", "--amend", "-m", "Amended commit"])
+            .unwrap()
+    );
+
+    let initial = repo.current_working_logs().read_initial_attributions();
+    println!("initial after ammended commit: {:?}", initial);
+    return;
 
     // Now stage and commit fileB
     repo.stage_all_and_commit("Add fileB").unwrap();

@@ -1,12 +1,12 @@
 use crate::authorship::attribution_tracker::LineAttribution;
 use crate::authorship::authorship_log::PromptRecord;
-use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint};
+use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
 use crate::utils::debug_log;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -223,6 +223,36 @@ impl PersistedWorkingLog {
         }
 
         Ok(checkpoints)
+    }
+
+    pub fn all_touched_files(&self) -> Result<HashSet<String>, GitAiError> {
+        let checkpoints = self.read_all_checkpoints()?;
+        let mut touched_files = HashSet::new();
+        for checkpoint in checkpoints {
+            for entry in checkpoint.entries {
+                touched_files.insert(entry.file);
+            }
+        }
+        Ok(touched_files)
+    }
+
+    pub fn all_ai_touched_files(&self) -> Result<HashSet<String>, GitAiError> {
+        let checkpoints = self.read_all_checkpoints()?;
+        let mut touched_files = HashSet::new();
+        for checkpoint in checkpoints {
+            // Only include files from AI checkpoints (AiAgent or AiTab)
+            match checkpoint.kind {
+                CheckpointKind::AiAgent | CheckpointKind::AiTab => {
+                    for entry in checkpoint.entries {
+                        touched_files.insert(entry.file);
+                    }
+                }
+                CheckpointKind::Human => {
+                    // Skip human checkpoints
+                }
+            }
+        }
+        Ok(touched_files)
     }
 
     /* INITIAL attributions file */

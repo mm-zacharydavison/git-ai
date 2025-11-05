@@ -151,8 +151,8 @@ pub fn prepare_working_log_after_squash(
 
     // Step 5: Convert to INITIAL (everything is uncommitted in a squash)
     // Pass same SHA for parent and commit to get empty diff (no committed hunks)
-    let (_authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(
+    let (_authorship_log, initial_attributions) = merged_va
+        .to_authorship_log_and_initial_working_log(
             repo,
             target_branch_head_sha,
             target_branch_head_sha,
@@ -704,32 +704,13 @@ pub fn rewrite_authorship_after_commit_amend(
 
     // Get the files that changed between original and amended commit
     let changed_files = repo.list_commit_files(amended_commit, None)?;
-    let pathspecs: Vec<String> = changed_files.into_iter().collect();
+    let mut pathspecs: HashSet<String> = changed_files.into_iter().collect();
 
-    if pathspecs.is_empty() {
-        // No files changed, just update the base commit SHA
-        let mut authorship_log = match get_reference_as_authorship_log_v3(repo, original_commit) {
-            Ok(log) => log,
-            Err(_) => {
-                let mut log = AuthorshipLog::new();
-                log.metadata.base_commit_sha = amended_commit.to_string();
-                log
-            }
-        };
-        authorship_log.metadata.base_commit_sha = amended_commit.to_string();
+    let working_log = repo.storage.working_log_for_base_commit(original_commit);
+    let touched_files = working_log.all_touched_files()?;
+    pathspecs.extend(touched_files);
 
-        // Save the updated log
-        let authorship_json = authorship_log
-            .serialize_to_string()
-            .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
-        crate::git::refs::notes_add(repo, amended_commit, &authorship_json)?;
-
-        // Clean up working log
-        repo.storage
-            .delete_working_log_for_base_commit(original_commit)?;
-
-        return Ok(authorship_log);
-    }
+    println!("pathspecs to handle: {:?}", pathspecs);
 
     // Check if original commit has an authorship log with prompts
     let has_existing_log = get_reference_as_authorship_log_v3(repo, original_commit).is_ok();
@@ -742,11 +723,12 @@ pub fn rewrite_authorship_after_commit_amend(
 
     // Phase 1: Load all attributions (committed + uncommitted)
     let repo_clone = repo.clone();
+    let pathspecs_vec: Vec<String> = pathspecs.iter().cloned().collect();
     let working_va = smol::block_on(async {
         VirtualAttributions::from_working_log_for_commit(
             repo_clone,
             original_commit.to_string(),
-            &pathspecs,
+            &pathspecs_vec,
             if has_existing_prompts {
                 None
             } else {
@@ -764,12 +746,12 @@ pub fn rewrite_authorship_after_commit_amend(
         "initial".to_string()
     };
 
-    // Convert pathspecs to HashSet
-    let pathspecs_set: HashSet<String> = pathspecs.iter().cloned().collect();
+    // pathspecs is already a HashSet
+    let pathspecs_set = pathspecs;
 
     // Phase 3: Split into committed (authorship log) vs uncommitted (INITIAL)
-    let (mut authorship_log, initial_attributions) =
-        working_va.to_authorship_log_and_initial_working_log(
+    let (mut authorship_log, initial_attributions) = working_va
+        .to_authorship_log_and_initial_working_log(
             repo,
             &parent_sha,
             amended_commit,
@@ -949,8 +931,8 @@ pub fn reconstruct_working_log_after_reset(
 
     // Step 6: Convert to INITIAL (everything is uncommitted after reset)
     // Pass same SHA for parent and commit to get empty diff (no committed hunks)
-    let (authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(
+    let (authorship_log, initial_attributions) = merged_va
+        .to_authorship_log_and_initial_working_log(
             repo,
             target_commit_sha,
             target_commit_sha,
