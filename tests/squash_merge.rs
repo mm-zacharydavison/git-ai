@@ -253,4 +253,47 @@ fn test_prepare_working_log_squash_with_mixed_additions() {
         stats.human_additions, 1,
         "1 human addition (the overridden AI line)"
     );
+
+    // Verify prompt records have correct stats
+    let prompts = &squash_commit.authorship_log.metadata.prompts;
+    assert!(
+        !prompts.is_empty(),
+        "Should have at least one prompt record"
+    );
+
+    // Check each prompt record has updated stats
+    for (prompt_id, prompt_record) in prompts {
+        println!(
+            "Prompt {}: accepted_lines={}, overridden_lines={}, total_additions={}, total_deletions={}",
+            prompt_id,
+            prompt_record.accepted_lines,
+            prompt_record.overriden_lines,
+            prompt_record.total_additions,
+            prompt_record.total_deletions
+        );
+
+        // accepted_lines should match the number of lines attributed to this prompt in final commit
+        assert!(
+            prompt_record.accepted_lines > 0,
+            "Prompt {} should have accepted_lines > 0",
+            prompt_id
+        );
+
+        // overridden_lines should be 0 for squash merge (we don't track overrides in merge context)
+        assert_eq!(
+            prompt_record.overriden_lines, 0,
+            "Prompt {} should have overridden_lines = 0 in squash merge",
+            prompt_id
+        );
+
+        // Total additions/deletions should be preserved from the newest prompt version
+        // (they may be 0 if not tracked in the original prompt)
+    }
+
+    // Verify that the sum of accepted_lines across all prompts matches ai_accepted in stats
+    let total_accepted: u32 = prompts.values().map(|p| p.accepted_lines).sum();
+    assert_eq!(
+        total_accepted, stats.ai_accepted,
+        "Sum of accepted_lines across prompts should match ai_accepted stat"
+    );
 }

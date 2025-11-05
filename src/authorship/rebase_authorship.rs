@@ -1097,8 +1097,43 @@ fn transform_attributions_to_final_state(
         file_contents.insert(file_path, final_content);
     }
 
-    // Preserve prompts from source VA
-    let prompts = source_va.prompts().clone();
+    // Merge prompts from source VA and original_head_state, picking the newest version of each
+    let mut prompts = if let Some(original_state) = original_head_state {
+        crate::authorship::virtual_attribution::VirtualAttributions::merge_prompts_picking_newest(
+            &[source_va.prompts(), original_state.prompts()],
+        )
+    } else {
+        source_va.prompts().clone()
+    };
+
+    // Save total_additions and total_deletions from the merged prompts
+    let mut saved_totals: HashMap<String, (u32, u32)> = HashMap::new();
+    for (prompt_id, commits) in &prompts {
+        for prompt_record in commits.values() {
+            saved_totals.insert(
+                prompt_id.clone(),
+                (prompt_record.total_additions, prompt_record.total_deletions),
+            );
+        }
+    }
+
+    // Calculate and update prompt metrics based on transformed attributions
+    crate::authorship::virtual_attribution::VirtualAttributions::calculate_and_update_prompt_metrics(
+        &mut prompts,
+        &attributions,
+        &HashMap::new(), // Empty - will result in total_additions = 0
+        &HashMap::new(), // Empty - will result in total_deletions = 0
+    );
+
+    // Restore the saved total_additions and total_deletions
+    for (prompt_id, commits) in prompts.iter_mut() {
+        if let Some(&(additions, deletions)) = saved_totals.get(prompt_id) {
+            for prompt_record in commits.values_mut() {
+                prompt_record.total_additions = additions;
+                prompt_record.total_deletions = deletions;
+            }
+        }
+    }
 
     Ok(VirtualAttributions::new_with_prompts(
         repo,

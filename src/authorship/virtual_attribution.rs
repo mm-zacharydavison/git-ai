@@ -977,8 +977,60 @@ impl VirtualAttributions {
         Ok((authorship_log, initial_attributions))
     }
 
+    /// Merge prompts from multiple sources, picking the newest PromptRecord for each prompt_id
+    ///
+    /// This function collects all PromptRecords for each unique prompt_id across all sources,
+    /// sorts them by age (oldest to newest), and returns the newest version of each prompt.
+    pub fn merge_prompts_picking_newest(
+        prompt_sources: &[&BTreeMap<String, BTreeMap<String, PromptRecord>>],
+    ) -> BTreeMap<String, BTreeMap<String, PromptRecord>> {
+        let mut merged_prompts = BTreeMap::new();
+
+        // Collect all unique prompt_ids across all sources
+        let mut all_prompt_ids: HashSet<String> = HashSet::new();
+        for source in prompt_sources {
+            all_prompt_ids.extend(source.keys().cloned());
+        }
+
+        for prompt_id in all_prompt_ids {
+            // Collect all PromptRecords for this prompt_id from all sources
+            let mut all_records = Vec::new();
+
+            for source in prompt_sources {
+                if let Some(commits) = source.get(&prompt_id) {
+                    for (_commit_sha, prompt_record) in commits {
+                        all_records.push(prompt_record.clone());
+                    }
+                }
+            }
+
+            // Sort records oldest to newest using the Ord implementation
+            all_records.sort();
+
+            // Take the last (newest) record
+            if let Some(newest_record) = all_records.last() {
+                let mut prompt_commits = BTreeMap::new();
+
+                // Use commit sha from first source that has this prompt, or "merged" if not found
+                let commit_sha = prompt_sources
+                    .iter()
+                    .find_map(|source| {
+                        source
+                            .get(&prompt_id)
+                            .and_then(|commits| commits.keys().last().cloned())
+                    })
+                    .unwrap_or_else(|| "merged".to_string());
+
+                prompt_commits.insert(commit_sha, newest_record.clone());
+                merged_prompts.insert(prompt_id.clone(), prompt_commits);
+            }
+        }
+
+        merged_prompts
+    }
+
     /// Calculate and update prompt metrics (accepted_lines, overridden_lines, total_additions, total_deletions)
-    fn calculate_and_update_prompt_metrics(
+    pub fn calculate_and_update_prompt_metrics(
         prompts: &mut BTreeMap<String, BTreeMap<String, PromptRecord>>,
         attributions: &HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
         session_additions: &HashMap<String, u32>,
@@ -1043,55 +1095,9 @@ pub fn merge_attributions_favoring_first(
     let repo = primary.repo.clone();
     let base_commit = primary.base_commit.clone();
 
-    // Merge prompts from both VAs
-    // For each prompt_id, collect all PromptRecords across all commits from both sources,
-    // sort them (oldest to newest), and take the last (newest) one
-    let mut merged_prompts = BTreeMap::new();
-
-    // Collect all unique prompt_ids
-    let mut all_prompt_ids: std::collections::HashSet<String> =
-        primary.prompts.keys().cloned().collect();
-    all_prompt_ids.extend(secondary.prompts.keys().cloned());
-
-    for prompt_id in all_prompt_ids {
-        // Collect all PromptRecords for this prompt_id from both sources
-        let mut all_records = Vec::new();
-
-        if let Some(commits) = primary.prompts.get(&prompt_id) {
-            for (_commit_sha, prompt_record) in commits {
-                all_records.push(prompt_record.clone());
-            }
-        }
-
-        if let Some(commits) = secondary.prompts.get(&prompt_id) {
-            for (_commit_sha, prompt_record) in commits {
-                all_records.push(prompt_record.clone());
-            }
-        }
-
-        // Sort records oldest to newest using the Ord implementation
-        all_records.sort();
-
-        // Take the last (newest) record
-        if let Some(newest_record) = all_records.last() {
-            let mut prompt_commits = BTreeMap::new();
-            // Use a synthetic commit sha or the last commit from either source
-            let commit_sha = primary
-                .prompts
-                .get(&prompt_id)
-                .and_then(|commits| commits.keys().last().cloned())
-                .or_else(|| {
-                    secondary
-                        .prompts
-                        .get(&prompt_id)
-                        .and_then(|commits| commits.keys().last().cloned())
-                })
-                .unwrap_or_else(|| "merged".to_string());
-
-            prompt_commits.insert(commit_sha, newest_record.clone());
-            merged_prompts.insert(prompt_id.clone(), prompt_commits);
-        }
-    }
+    // Merge prompts from both VAs, picking the newest version of each prompt
+    let merged_prompts =
+        VirtualAttributions::merge_prompts_picking_newest(&[&primary.prompts, &secondary.prompts]);
 
     let mut merged = VirtualAttributions {
         repo,
