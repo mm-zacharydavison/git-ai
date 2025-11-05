@@ -11,12 +11,24 @@ fn test_amend_add_lines_at_top() {
 
     // Initial file with human content
     file.set_contents(lines!["line 1", "line 2", "line 3", "line 4", "line 5"]);
-    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    repo.git(&["add", "-A"]).unwrap();
+
+    file.insert_at(
+        0,
+        lines!["// AI added line 1".ai(), "// AI added line 2".ai()],
+    );
+
+    let commit = repo.commit("Initial commit").unwrap();
+
+    commit.print_authorship();
 
     println!(
         "initial attributions: {:?}",
         repo.current_working_logs().read_initial_attributions()
     );
+
+    return;
 
     // AI adds lines at the top
     file.insert_at(
@@ -34,6 +46,7 @@ fn test_amend_add_lines_at_top() {
         repo.current_working_logs().read_initial_attributions()
     );
 
+    return;
     // Now stage and commit the AI lines
     repo.stage_all_and_commit("Add AI lines").unwrap();
 

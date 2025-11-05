@@ -801,6 +801,14 @@ impl Repository {
         }
         args
     }
+    
+    /// Execute an arbitrary git command and return stdout as string
+    pub fn git(&self, args: &[&str]) -> Result<String, GitAiError> {
+        let mut full_args = self.global_args_for_exec();
+        full_args.extend(args.iter().map(|s| s.to_string()));
+        let output = exec_git(&full_args)?;
+        Ok(String::from_utf8(output.stdout)?)
+    }
 
     pub fn require_pre_command_head(&mut self) {
         if self.pre_command_base_commit.is_some() || self.pre_command_refname.is_some() {

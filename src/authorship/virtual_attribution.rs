@@ -692,19 +692,23 @@ impl VirtualAttributions {
         let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
         let mut unstaged_hunks = collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
         
-        // If a line appears in both committed_hunks and unstaged_hunks, it means the line was
-        // committed in this commit and then modified again in the working directory.
-        // We should treat it as committed (remove it from unstaged_hunks) since the attribution
-        // belongs to this commit, even if there are subsequent unstaged modifications.
+        // IMPORTANT: If a line appears in both committed_hunks and unstaged_hunks, it means:
+        // - The line was committed in this commit (in commit coordinates)
+        // - The line was then modified again in the working directory (in workdir coordinates)
+        // Since both use the same line numbering after the commit (workdir coordinates = commit coordinates
+        // for the committed state), we can directly compare line numbers.
+        // We should treat these lines as committed, not unstaged, because the attribution belongs
+        // to the commit even if there's a subsequent unstaged modification.
         for (file_path, committed_ranges) in &committed_hunks {
             if let Some(unstaged_ranges) = unstaged_hunks.get_mut(file_path) {
-                // Expand both to line numbers for easier comparison
+                // Expand both to line numbers for comparison
                 let committed_lines: std::collections::HashSet<u32> = committed_ranges
                     .iter()
                     .flat_map(|r| r.expand())
                     .collect();
                 
                 // Filter out any unstaged lines that were also committed
+                // (these are lines that were committed, then modified again in workdir)
                 let mut filtered_unstaged_lines: Vec<u32> = unstaged_ranges
                     .iter()
                     .flat_map(|r| r.expand())
