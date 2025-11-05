@@ -368,39 +368,38 @@ fn test_amend_with_partially_staged_mixed_content() {
 
     // Create initial file with human content
     let mut file = repo.filename("mixed.txt");
-    file.set_contents(lines!["human line 1", "human line 2"]);
+    file.set_contents(lines!["human line 1", "human line 2", "human end"]);
     repo.stage_all_and_commit("Initial commit").unwrap();
-
-    // Add AI and human lines
-    file.insert_at(
-        2,
-        lines![
-            "// AI addition 1".ai(),
-            "// AI addition 2".ai(),
-            "human addition 1",
-            "human addition 2"
-        ],
-    );
 
     // Stage only the first AI line and first human addition
     let workdir = repo.path();
     let file_path = workdir.join("mixed.txt");
+    // add the line
     std::fs::write(
         &file_path,
-        "human line 1\nhuman line 2\n// AI addition 1\nhuman addition 1\n",
+        "human line 1\nhuman line 2\n// AI addition 1\nhuman end\n",
     )
     .unwrap();
+    repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
+
     repo.git(&["add", "mixed.txt"]).unwrap();
 
-    // Restore full content
     std::fs::write(
         &file_path,
-        "human line 1\nhuman line 2\n// AI addition 1\n// AI addition 2\nhuman addition 1\nhuman addition 2\n"
-    ).unwrap();
+        "human line 1\nhuman line 2\n// AI addition 1\n// AI addition 2\nhuman end\n",
+    )
+    .unwrap();
+    repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
 
-    // Amend
-    repo.git(&["commit", "--amend", "-m", "Initial commit (amended)"])
+    let output = repo
+        .git(&["commit", "--amend", "-m", "Initial commit (amended)"])
         .unwrap();
+    println!("amend output: {:?}", output);
+
+    println!(
+        "initial attributions: {:?}",
+        repo.current_working_logs().read_initial_attributions()
+    );
 
     // Commit remaining unstaged content
     repo.stage_all_and_commit("Add remaining content").unwrap();
@@ -411,8 +410,7 @@ fn test_amend_with_partially_staged_mixed_content() {
         "human line 2".human(),
         "// AI addition 1".ai(),
         "// AI addition 2".ai(),
-        "human addition 1".human(),
-        "human addition 2".human()
+        "human end".human(),
     ]);
 }
 

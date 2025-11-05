@@ -623,19 +623,35 @@ fn collect_committed_hunks(
 }
 
 /// Helper function to collect unstaged line ranges (lines in working directory but not in commit)
+/// Returns (unstaged_hunks, pure_insertion_hunks)
+/// pure_insertion_hunks contains lines that were purely inserted (old_count=0), not modifications
 fn collect_unstaged_hunks(
     repo: &Repository,
     commit_sha: &str,
     pathspecs: Option<&HashSet<String>>,
-) -> Result<HashMap<String, Vec<LineRange>>, GitAiError> {
+) -> Result<
+    (
+        HashMap<String, Vec<LineRange>>,
+        HashMap<String, Vec<LineRange>>,
+    ),
+    GitAiError,
+> {
     let mut unstaged_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
+    let mut pure_insertion_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
 
-    // Use git diff to get added lines in working directory vs commit
-    let added_lines = repo.diff_workdir_added_lines(commit_sha, pathspecs)?;
+    // Use git diff to get added lines in working directory vs commit, with insertion tracking
+    let (added_lines, insertion_lines) =
+        repo.diff_workdir_added_lines_with_insertions(commit_sha, pathspecs)?;
 
     for (file_path, lines) in added_lines {
         if !lines.is_empty() {
             unstaged_hunks.insert(file_path, LineRange::compress_lines(&lines));
+        }
+    }
+
+    for (file_path, lines) in insertion_lines {
+        if !lines.is_empty() {
+            pure_insertion_hunks.insert(file_path, LineRange::compress_lines(&lines));
         }
     }
 
@@ -664,10 +680,10 @@ fn collect_unstaged_hunks(
                         let line_count = content.lines().count() as u32;
                         if line_count > 0 {
                             // Create a range covering all lines (1-indexed)
-                            unstaged_hunks.insert(
-                                pathspec.clone(),
-                                vec![LineRange::Range(1, line_count)],
-                            );
+                            let range = vec![LineRange::Range(1, line_count)];
+                            unstaged_hunks.insert(pathspec.clone(), range.clone());
+                            // Untracked files are pure insertions (the entire file is new)
+                            pure_insertion_hunks.insert(pathspec.clone(), range);
                         }
                     }
                 }
@@ -675,7 +691,7 @@ fn collect_unstaged_hunks(
         }
     }
 
-    Ok(unstaged_hunks)
+    Ok((unstaged_hunks, pure_insertion_hunks))
 }
 
 impl VirtualAttributions {
@@ -721,10 +737,8 @@ impl VirtualAttributions {
 
         // Get committed hunks (in commit coordinates) and unstaged hunks (in working directory coordinates)
         let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
-        let mut unstaged_hunks = collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
-        
-        eprintln!("DEBUG: committed_hunks: {:?}", committed_hunks);
-        eprintln!("DEBUG: unstaged_hunks: {:?}", unstaged_hunks);
+        let (mut unstaged_hunks, pure_insertion_hunks) =
+            collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
 
         // IMPORTANT: If a line appears in both committed_hunks and unstaged_hunks, it means:
         // - The line was committed in this commit (in commit coordinates)
@@ -733,18 +747,33 @@ impl VirtualAttributions {
         // for the committed state), we can directly compare line numbers.
         // We should treat these lines as committed, not unstaged, because the attribution belongs
         // to the commit even if there's a subsequent unstaged modification.
+        //
+        // HOWEVER: If a line is a PURE INSERTION (old_count=0), it means a new line was inserted
+        // at that position, pushing existing lines down. In this case, the line number overlap
+        // doesn't mean the same line - it's a different line at the same position!
+        // We should NOT filter out pure insertions even if they overlap with committed line numbers.
         for (file_path, committed_ranges) in &committed_hunks {
             if let Some(unstaged_ranges) = unstaged_hunks.get_mut(file_path) {
                 // Expand both to line numbers for comparison
                 let committed_lines: std::collections::HashSet<u32> =
                     committed_ranges.iter().flat_map(|r| r.expand()).collect();
 
+                // Get pure insertion lines for this file (these should NOT be filtered out)
+                let pure_insertion_lines: std::collections::HashSet<u32> = pure_insertion_hunks
+                    .get(file_path)
+                    .map(|ranges| ranges.iter().flat_map(|r| r.expand()).collect())
+                    .unwrap_or_default();
+
                 // Filter out any unstaged lines that were also committed
                 // (these are lines that were committed, then modified again in workdir)
+                // BUT keep pure insertions even if they overlap with committed line numbers
                 let mut filtered_unstaged_lines: Vec<u32> = unstaged_ranges
                     .iter()
                     .flat_map(|r| r.expand())
-                    .filter(|line| !committed_lines.contains(line))
+                    .filter(|line| {
+                        // Keep the line if it's NOT in committed, OR if it's a pure insertion
+                        !committed_lines.contains(line) || pure_insertion_lines.contains(line)
+                    })
                     .collect();
 
                 if filtered_unstaged_lines.is_empty() {
