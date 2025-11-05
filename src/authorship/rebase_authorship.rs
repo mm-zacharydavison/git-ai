@@ -710,8 +710,6 @@ pub fn rewrite_authorship_after_commit_amend(
     let touched_files = working_log.all_touched_files()?;
     pathspecs.extend(touched_files);
 
-    println!("pathspecs to handle: {:?}", pathspecs);
-
     // Check if original commit has an authorship log with prompts
     let has_existing_log = get_reference_as_authorship_log_v3(repo, original_commit).is_ok();
     let has_existing_prompts = if has_existing_log {

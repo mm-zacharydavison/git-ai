@@ -14,21 +14,8 @@ fn test_amend_add_lines_at_top() {
 
     repo.git(&["add", "-A"]).unwrap();
 
-    file.insert_at(
-        0,
-        lines!["// AI added line 1".ai(), "// AI added line 2".ai()],
-    );
 
-    let commit = repo.commit("Initial commit").unwrap();
-
-    commit.print_authorship();
-
-    println!(
-        "initial attributions: {:?}",
-        repo.current_working_logs().read_initial_attributions()
-    );
-
-    return;
+    repo.commit("Initial commit").unwrap();
 
     // AI adds lines at the top
     file.insert_at(
@@ -41,12 +28,6 @@ fn test_amend_add_lines_at_top() {
     repo.git(&["commit", "--amend", "-m", "Initial commit (amended)"])
         .unwrap();
 
-    println!(
-        "initial attributions: {:?}",
-        repo.current_working_logs().read_initial_attributions()
-    );
-
-    return;
     // Now stage and commit the AI lines
     repo.stage_all_and_commit("Add AI lines").unwrap();
 
@@ -391,15 +372,8 @@ fn test_amend_with_partially_staged_mixed_content() {
     .unwrap();
     repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
 
-    let output = repo
-        .git(&["commit", "--amend", "-m", "Initial commit (amended)"])
+    repo.git(&["commit", "--amend", "-m", "Initial commit (amended)"])
         .unwrap();
-    println!("amend output: {:?}", output);
-
-    println!(
-        "initial attributions: {:?}",
-        repo.current_working_logs().read_initial_attributions()
-    );
 
     // Commit remaining unstaged content
     repo.stage_all_and_commit("Add remaining content").unwrap();

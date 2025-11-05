@@ -233,8 +233,6 @@ impl<'a> TestFile<'a> {
             .git_ai(&["blame", filename])
             .expect("git-ai blame should succeed");
 
-        println!("blame output: {:?}", blame_output);
-
         // Parse the blame output to get (author, content) for each line
         let actual_lines: Vec<(String, String)> = blame_output
             .lines()

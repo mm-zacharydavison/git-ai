@@ -464,8 +464,6 @@ mod tests {
             .read_all_checkpoints()
             .expect("Failed to read checkpoints");
 
-        println!("checkpoints: {:?}", checkpoints);
-
         assert_eq!(checkpoints.len(), 1, "Should have one checkpoint");
         assert_eq!(checkpoints[0].author, "test-author");
 
