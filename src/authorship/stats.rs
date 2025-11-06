@@ -457,19 +457,13 @@ pub fn write_stats_to_markdown(stats: &CommitStats) -> String {
     return output;
 }
 
-pub fn stats_for_commit_stats(
-    repo: &Repository,
-    commit_sha: &str,
-    _refname: &str,
-) -> Result<CommitStats, GitAiError> {
-    // Step 1: get the diff between this commit and its parent ON refname (if more than one parent)
-    // If initial than everything is additions
-    // We want the count here git shows +111 -55
-    let (git_diff_added_lines, git_diff_deleted_lines) = get_git_diff_stats(repo, commit_sha)?;
-
-    // Step 2: get the authorship log for this commit
-    let authorship_log = get_authorship(repo, &commit_sha);
-
+/// Calculate commit stats from an authorship log
+/// This helper can work with both fetched and in-memory authorship logs
+pub fn stats_from_authorship_log(
+    authorship_log: Option<&crate::authorship::authorship_log_serialization::AuthorshipLog>,
+    git_diff_added_lines: u32,
+    git_diff_deleted_lines: u32,
+) -> CommitStats {
     let mut commit_stats = CommitStats {
         human_additions: 0,
         mixed_additions: 0,
@@ -483,9 +477,8 @@ pub fn stats_for_commit_stats(
         git_diff_added_lines,
     };
 
-    // Step 3: For prompts with > 1 messages, sum all the time between user messages and AI messages.
-    // if the last message is a human message, don't count anything
-    if let Some(log) = &authorship_log {
+    // Process authorship log if present
+    if let Some(log) = authorship_log {
         // Count lines by author type
         for file_attestation in &log.attestations {
             for entry in &file_attestation.entries {
@@ -555,11 +548,32 @@ pub fn stats_for_commit_stats(
         git_diff_added_lines.saturating_sub(commit_stats.ai_accepted),
     );
 
-    Ok(commit_stats)
+    commit_stats
+}
+
+pub fn stats_for_commit_stats(
+    repo: &Repository,
+    commit_sha: &str,
+    _refname: &str,
+) -> Result<CommitStats, GitAiError> {
+    // Step 1: get the diff between this commit and its parent ON refname (if more than one parent)
+    // If initial than everything is additions
+    // We want the count here git shows +111 -55
+    let (git_diff_added_lines, git_diff_deleted_lines) = get_git_diff_stats(repo, commit_sha)?;
+
+    // Step 2: get the authorship log for this commit
+    let authorship_log = get_authorship(repo, &commit_sha);
+
+    // Step 3: Calculate stats from authorship log
+    Ok(stats_from_authorship_log(
+        authorship_log.as_ref(),
+        git_diff_added_lines,
+        git_diff_deleted_lines,
+    ))
 }
 
 /// Get git diff statistics between commit and its parent
-fn get_git_diff_stats(repo: &Repository, commit_sha: &str) -> Result<(u32, u32), GitAiError> {
+pub fn get_git_diff_stats(repo: &Repository, commit_sha: &str) -> Result<(u32, u32), GitAiError> {
     // Use git show --numstat to get diff statistics
     let mut args = repo.global_args_for_exec();
     args.push("show".to_string());
