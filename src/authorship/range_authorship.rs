@@ -160,7 +160,7 @@ fn create_authorship_log_for_range(
     };
 
     debug_log(&format!(
-        "Creating authorship log for range: {} -> {}",
+        "Calculating authorship log for range: {} -> {}",
         start_sha, end_sha
     ));
 
@@ -331,13 +331,13 @@ fn calculate_range_stats_direct(
 
 pub fn print_range_authorship_stats(stats: &RangeAuthorshipStats) {
     println!("\n");
-    // Check if any commits have authorship logs
-    let has_any_authorship = stats.authorship_stats.commits_with_authorship > 0;
-    let all_have_authorship =
-        stats.authorship_stats.commits_with_authorship == stats.authorship_stats.total_commits;
 
-    // If none of the commits have authorship logs, show the special message
-    if !has_any_authorship {
+    // Check if there's any AI authorship in the range (based on the in-memory squashed authorship log)
+    let has_ai_authorship =
+        stats.range_stats.ai_additions > 0 || stats.range_stats.total_ai_additions > 0;
+
+    // If there's no AI authorship in the range, show the special message
+    if !has_ai_authorship {
         println!("Committers are not using git-ai");
         return;
     }
@@ -345,6 +345,10 @@ pub fn print_range_authorship_stats(stats: &RangeAuthorshipStats) {
     // Use existing stats terminal output
     use crate::authorship::stats::write_stats_to_terminal;
     write_stats_to_terminal(&stats.range_stats, true);
+
+    // Check if all individual commits have authorship logs (for optional breakdown)
+    let all_have_authorship =
+        stats.authorship_stats.commits_with_authorship == stats.authorship_stats.total_commits;
 
     // If not all commits have authorship logs, show the breakdown
     if !all_have_authorship {
