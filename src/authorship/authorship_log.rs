@@ -199,3 +199,82 @@ pub struct PromptRecord {
     #[serde(default)]
     pub overriden_lines: u32,
 }
+
+impl Eq for PromptRecord {}
+
+impl PartialOrd for PromptRecord {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PromptRecord {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Sort oldest to newest based on messages, additions, or deletions
+        if self.messages.len() > other.messages.len()
+            || self.total_additions > other.total_additions
+            || self.total_deletions > other.total_deletions
+        {
+            std::cmp::Ordering::Greater // self is newer
+        } else if other.messages.len() > self.messages.len()
+            || other.total_additions > self.total_additions
+            || other.total_deletions > self.total_deletions
+        {
+            std::cmp::Ordering::Less // other is newer
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_prompt_record(messages: usize, additions: u32, deletions: u32) -> PromptRecord {
+        let agent_id = AgentId {
+            tool: "test".to_string(),
+            id: "test-id".to_string(),
+            model: "test-model".to_string(),
+        };
+
+        let message_list = (0..messages)
+            .map(|_| Message::user("test message".to_string(), None))
+            .collect();
+
+        PromptRecord {
+            agent_id,
+            human_author: None,
+            messages: message_list,
+            total_additions: additions,
+            total_deletions: deletions,
+            accepted_lines: 0,
+            overriden_lines: 0,
+        }
+    }
+
+    #[test]
+    fn test_prompt_record_sorting() {
+        let mut records = vec![
+            create_prompt_record(5, 10, 5), // newest - has messages, additions, deletions
+            create_prompt_record(0, 0, 0),  // oldest - empty
+            create_prompt_record(2, 5, 3),  // middle
+            create_prompt_record(0, 10, 0), // has additions
+            create_prompt_record(0, 0, 5),  // has deletions
+        ];
+
+        records.sort();
+
+        // After sorting, oldest (empty) should be first
+        assert_eq!(records[0].messages.len(), 0);
+        assert_eq!(records[0].total_additions, 0);
+        assert_eq!(records[0].total_deletions, 0);
+
+        // Records with activity should come after
+        assert!(
+            records[1].messages.len() > 0
+                || records[1].total_additions > 0
+                || records[1].total_deletions > 0
+        );
+    }
+}

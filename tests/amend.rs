@@ -11,12 +11,11 @@ fn test_amend_add_lines_at_top() {
 
     // Initial file with human content
     file.set_contents(lines!["line 1", "line 2", "line 3", "line 4", "line 5"]);
-    repo.stage_all_and_commit("Initial commit").unwrap();
 
-    println!(
-        "initial attributions: {:?}",
-        repo.current_working_logs().read_initial_attributions()
-    );
+    repo.git(&["add", "-A"]).unwrap();
+
+
+    repo.commit("Initial commit").unwrap();
 
     // AI adds lines at the top
     file.insert_at(
@@ -28,11 +27,6 @@ fn test_amend_add_lines_at_top() {
     // repo.git(&["add", "-A"]).unwrap();
     repo.git(&["commit", "--amend", "-m", "Initial commit (amended)"])
         .unwrap();
-
-    println!(
-        "initial attributions: {:?}",
-        repo.current_working_logs().read_initial_attributions()
-    );
 
     // Now stage and commit the AI lines
     repo.stage_all_and_commit("Add AI lines").unwrap();
@@ -216,6 +210,21 @@ fn test_amend_preserves_unstaged_ai_attribution() {
     repo.git(&["commit", "--amend", "-m", "Amended commit"])
         .unwrap();
 
+    // Verify that fileB's AI attribution was saved in INITIAL attributions
+    let initial = repo.current_working_logs().read_initial_attributions();
+    assert!(
+        initial.files.contains_key("fileB.txt"),
+        "fileB.txt should be in initial attributions"
+    );
+    let file_b_attrs = &initial.files["fileB.txt"];
+    assert_eq!(
+        file_b_attrs.len(),
+        1,
+        "fileB should have 1 attribution range"
+    );
+    assert_eq!(file_b_attrs[0].start_line, 1);
+    assert_eq!(file_b_attrs[0].end_line, 3);
+
     // Now stage and commit fileB
     repo.stage_all_and_commit("Add fileB").unwrap();
 
@@ -340,37 +349,29 @@ fn test_amend_with_partially_staged_mixed_content() {
 
     // Create initial file with human content
     let mut file = repo.filename("mixed.txt");
-    file.set_contents(lines!["human line 1", "human line 2"]);
+    file.set_contents(lines!["human line 1", "human line 2", "human end"]);
     repo.stage_all_and_commit("Initial commit").unwrap();
-
-    // Add AI and human lines
-    file.insert_at(
-        2,
-        lines![
-            "// AI addition 1".ai(),
-            "// AI addition 2".ai(),
-            "human addition 1",
-            "human addition 2"
-        ],
-    );
 
     // Stage only the first AI line and first human addition
     let workdir = repo.path();
     let file_path = workdir.join("mixed.txt");
+    // add the line
     std::fs::write(
         &file_path,
-        "human line 1\nhuman line 2\n// AI addition 1\nhuman addition 1\n",
+        "human line 1\nhuman line 2\n// AI addition 1\nhuman end\n",
     )
     .unwrap();
+    repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
+
     repo.git(&["add", "mixed.txt"]).unwrap();
 
-    // Restore full content
     std::fs::write(
         &file_path,
-        "human line 1\nhuman line 2\n// AI addition 1\n// AI addition 2\nhuman addition 1\nhuman addition 2\n"
-    ).unwrap();
+        "human line 1\nhuman line 2\n// AI addition 1\n// AI addition 2\nhuman end\n",
+    )
+    .unwrap();
+    repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
 
-    // Amend
     repo.git(&["commit", "--amend", "-m", "Initial commit (amended)"])
         .unwrap();
 
@@ -383,8 +384,7 @@ fn test_amend_with_partially_staged_mixed_content() {
         "human line 2".human(),
         "// AI addition 1".ai(),
         "// AI addition 2".ai(),
-        "human addition 1".human(),
-        "human addition 2".human()
+        "human end".human(),
     ]);
 }
 

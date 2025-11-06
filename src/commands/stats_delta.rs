@@ -124,16 +124,20 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                     None, // No human author specified in backfill
                 )?;
 
-                // Get committed file contents from child commit
-                let pathspecs: Vec<String> = checkpoints
+                // Get pathspecs for files in the working log
+                let pathspecs: HashSet<String> = checkpoints
                     .iter()
                     .flat_map(|cp| cp.entries.iter().map(|e| e.file.clone()))
                     .collect();
-                let committed_files = get_committed_files_content(repo, child_commit, &pathspecs)?;
 
                 // Split into committed (authorship log) and uncommitted (INITIAL)
                 let (mut authorship_log, _initial_attributions) =
-                    working_va.to_authorship_log_and_initial_working_log(committed_files)?;
+                    working_va.to_authorship_log_and_initial_working_log(
+                        repo,
+                        commit_hash,
+                        child_commit,
+                        Some(&pathspecs),
+                    )?;
 
                 authorship_log.metadata.base_commit_sha = child_commit.clone();
 

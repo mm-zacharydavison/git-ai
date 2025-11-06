@@ -177,6 +177,7 @@ impl TestRepo {
     pub fn commit(&self, message: &str) -> Result<NewCommit, String> {
         let output = self.git(&["commit", "-m", message]);
 
+        // println!("commit output: {:?}", output);
         if output.is_ok() {
             let combined = output.unwrap();
 
@@ -237,6 +238,10 @@ pub struct NewCommit {
 impl NewCommit {
     pub fn assert_authorship_snapshot(&self) {
         assert_debug_snapshot!(self.authorship_log);
+    }
+    pub fn print_authorship(&self) {
+        // Debug method to print authorship log
+        println!("{}", self.authorship_log.serialize_to_string().unwrap());
     }
 }
 

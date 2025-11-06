@@ -5,7 +5,7 @@ use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::{Commit, Repository};
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::utils::debug_log;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Process events in the rewrite log and call the correct rewrite functions in this file
 pub fn rewrite_authorship_if_needed(
@@ -113,7 +113,6 @@ pub fn prepare_working_log_after_squash(
     use crate::authorship::virtual_attribution::{
         VirtualAttributions, merge_attributions_favoring_first,
     };
-    use std::collections::HashMap;
 
     // Step 1: Get list of changed files between the two branches
     let changed_files = repo.diff_changed_files(source_head_sha, target_branch_head_sha)?;
@@ -151,10 +150,14 @@ pub fn prepare_working_log_after_squash(
     let merged_va = merge_attributions_favoring_first(target_va, source_va, staged_files)?;
 
     // Step 5: Convert to INITIAL (everything is uncommitted in a squash)
-    // Pass empty committed_files since nothing has been committed yet
-    let empty_committed_files: HashMap<String, String> = HashMap::new();
-    let (_authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(empty_committed_files)?;
+    // Pass same SHA for parent and commit to get empty diff (no committed hunks)
+    let (_authorship_log, initial_attributions) = merged_va
+        .to_authorship_log_and_initial_working_log(
+            repo,
+            target_branch_head_sha,
+            target_branch_head_sha,
+            None,
+        )?;
 
     // Step 6: Write INITIAL file
     if !initial_attributions.files.is_empty() {
@@ -701,32 +704,11 @@ pub fn rewrite_authorship_after_commit_amend(
 
     // Get the files that changed between original and amended commit
     let changed_files = repo.list_commit_files(amended_commit, None)?;
-    let pathspecs: Vec<String> = changed_files.into_iter().collect();
+    let mut pathspecs: HashSet<String> = changed_files.into_iter().collect();
 
-    if pathspecs.is_empty() {
-        // No files changed, just update the base commit SHA
-        let mut authorship_log = match get_reference_as_authorship_log_v3(repo, original_commit) {
-            Ok(log) => log,
-            Err(_) => {
-                let mut log = AuthorshipLog::new();
-                log.metadata.base_commit_sha = amended_commit.to_string();
-                log
-            }
-        };
-        authorship_log.metadata.base_commit_sha = amended_commit.to_string();
-
-        // Save the updated log
-        let authorship_json = authorship_log
-            .serialize_to_string()
-            .map_err(|_| GitAiError::Generic("Failed to serialize authorship log".to_string()))?;
-        crate::git::refs::notes_add(repo, amended_commit, &authorship_json)?;
-
-        // Clean up working log
-        repo.storage
-            .delete_working_log_for_base_commit(original_commit)?;
-
-        return Ok(authorship_log);
-    }
+    let working_log = repo.storage.working_log_for_base_commit(original_commit);
+    let touched_files = working_log.all_touched_files()?;
+    pathspecs.extend(touched_files);
 
     // Check if original commit has an authorship log with prompts
     let has_existing_log = get_reference_as_authorship_log_v3(repo, original_commit).is_ok();
@@ -739,11 +721,12 @@ pub fn rewrite_authorship_after_commit_amend(
 
     // Phase 1: Load all attributions (committed + uncommitted)
     let repo_clone = repo.clone();
+    let pathspecs_vec: Vec<String> = pathspecs.iter().cloned().collect();
     let working_va = smol::block_on(async {
         VirtualAttributions::from_working_log_for_commit(
             repo_clone,
             original_commit.to_string(),
-            &pathspecs,
+            &pathspecs_vec,
             if has_existing_prompts {
                 None
             } else {
@@ -753,12 +736,25 @@ pub fn rewrite_authorship_after_commit_amend(
         .await
     })?;
 
-    // Phase 2: Read committed content from amended commit
-    let committed_files = get_committed_files_content(repo, amended_commit, &pathspecs)?;
+    // Phase 2: Get parent of amended commit for diff calculation
+    let amended_commit_obj = repo.find_commit(amended_commit.to_string())?;
+    let parent_sha = if amended_commit_obj.parent_count()? > 0 {
+        amended_commit_obj.parent(0)?.id().to_string()
+    } else {
+        "initial".to_string()
+    };
+
+    // pathspecs is already a HashSet
+    let pathspecs_set = pathspecs;
 
     // Phase 3: Split into committed (authorship log) vs uncommitted (INITIAL)
-    let (mut authorship_log, initial_attributions) =
-        working_va.to_authorship_log_and_initial_working_log(committed_files)?;
+    let (mut authorship_log, initial_attributions) = working_va
+        .to_authorship_log_and_initial_working_log(
+            repo,
+            &parent_sha,
+            amended_commit,
+            Some(&pathspecs_set),
+        )?;
 
     // Update base commit SHA
     authorship_log.metadata.base_commit_sha = amended_commit.to_string();
@@ -932,10 +928,14 @@ pub fn reconstruct_working_log_after_reset(
     ));
 
     // Step 6: Convert to INITIAL (everything is uncommitted after reset)
-    // Pass empty committed_files since nothing has been committed yet
-    let empty_committed_files: HashMap<String, String> = HashMap::new();
-    let (authorship_log, initial_attributions) =
-        merged_va.to_authorship_log_and_initial_working_log(empty_committed_files)?;
+    // Pass same SHA for parent and commit to get empty diff (no committed hunks)
+    let (authorship_log, initial_attributions) = merged_va
+        .to_authorship_log_and_initial_working_log(
+            repo,
+            target_commit_sha,
+            target_commit_sha,
+            None,
+        )?;
 
     debug_log(&format!(
         "Generated INITIAL attributions for {} files, {} attestations, {} prompts",
@@ -1097,8 +1097,43 @@ fn transform_attributions_to_final_state(
         file_contents.insert(file_path, final_content);
     }
 
-    // Preserve prompts from source VA
-    let prompts = source_va.prompts().clone();
+    // Merge prompts from source VA and original_head_state, picking the newest version of each
+    let mut prompts = if let Some(original_state) = original_head_state {
+        crate::authorship::virtual_attribution::VirtualAttributions::merge_prompts_picking_newest(
+            &[source_va.prompts(), original_state.prompts()],
+        )
+    } else {
+        source_va.prompts().clone()
+    };
+
+    // Save total_additions and total_deletions from the merged prompts
+    let mut saved_totals: HashMap<String, (u32, u32)> = HashMap::new();
+    for (prompt_id, commits) in &prompts {
+        for prompt_record in commits.values() {
+            saved_totals.insert(
+                prompt_id.clone(),
+                (prompt_record.total_additions, prompt_record.total_deletions),
+            );
+        }
+    }
+
+    // Calculate and update prompt metrics based on transformed attributions
+    crate::authorship::virtual_attribution::VirtualAttributions::calculate_and_update_prompt_metrics(
+        &mut prompts,
+        &attributions,
+        &HashMap::new(), // Empty - will result in total_additions = 0
+        &HashMap::new(), // Empty - will result in total_deletions = 0
+    );
+
+    // Restore the saved total_additions and total_deletions
+    for (prompt_id, commits) in prompts.iter_mut() {
+        if let Some(&(additions, deletions)) = saved_totals.get(prompt_id) {
+            for prompt_record in commits.values_mut() {
+                prompt_record.total_additions = additions;
+                prompt_record.total_deletions = deletions;
+            }
+        }
+    }
 
     Ok(VirtualAttributions::new_with_prompts(
         repo,

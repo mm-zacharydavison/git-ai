@@ -1,12 +1,12 @@
 use crate::authorship::attribution_tracker::{
     Attribution, LineAttribution, line_attributions_to_attributions,
 };
-use crate::authorship::authorship_log::PromptRecord;
+use crate::authorship::authorship_log::{LineRange, PromptRecord};
 use crate::authorship::working_log::CheckpointKind;
 use crate::commands::blame::GitAiBlameOptions;
 use crate::error::GitAiError;
 use crate::git::repository::Repository;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,8 +17,9 @@ pub struct VirtualAttributions {
     pub attributions: HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
     // Maps file path -> file content
     file_contents: HashMap<String, String>,
-    // Prompt records mapping session ID -> PromptRecord
-    pub prompts: BTreeMap<String, PromptRecord>,
+    // Prompt records mapping prompt_id -> (commit_sha -> PromptRecord)
+    // Same prompt can appear in multiple commits, allowing us to track and sort them
+    pub prompts: BTreeMap<String, BTreeMap<String, PromptRecord>>,
     // Timestamp to use for attributions
     ts: u128,
 }
@@ -68,6 +69,7 @@ impl VirtualAttributions {
         }
 
         // Find missing author_ids (not in prompts map)
+        // An author_id is missing if it doesn't exist as a key in the outer prompts map
         let missing_ids: Vec<String> = all_author_ids
             .into_iter()
             .filter(|id| !self.prompts.contains_key(id))
@@ -81,8 +83,12 @@ impl VirtualAttributions {
         let prompts = smol::block_on(async { self.load_prompts_concurrent(&missing_ids).await })?;
 
         // Insert loaded prompts into our map
-        for (id, prompt) in prompts {
-            self.prompts.insert(id, prompt);
+        // Each prompt is associated with the commit it was found in
+        for (id, commit_sha, prompt) in prompts {
+            self.prompts
+                .entry(id)
+                .or_insert_with(BTreeMap::new)
+                .insert(commit_sha, prompt);
         }
 
         Ok(())
@@ -92,7 +98,7 @@ impl VirtualAttributions {
     async fn load_prompts_concurrent(
         &self,
         missing_ids: &[String],
-    ) -> Result<Vec<(String, PromptRecord)>, GitAiError> {
+    ) -> Result<Vec<(String, String, PromptRecord)>, GitAiError> {
         const MAX_CONCURRENT: usize = 30;
 
         let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
@@ -110,7 +116,7 @@ impl VirtualAttributions {
                 // Wrap blocking git operations in smol::unblock
                 smol::unblock(move || {
                     Self::find_prompt_in_history_static(&repo, &missing_id)
-                        .map(|prompt| (missing_id.clone(), prompt))
+                        .map(|(commit_sha, prompt)| (missing_id.clone(), commit_sha, prompt))
                 })
                 .await
             });
@@ -125,7 +131,7 @@ impl VirtualAttributions {
         let mut prompts = Vec::new();
         for result in results {
             match result {
-                Ok((id, prompt)) => prompts.push((id, prompt)),
+                Ok((id, commit_sha, prompt)) => prompts.push((id, commit_sha, prompt)),
                 Err(_) => {
                     // Error finding prompt, skip it
                 }
@@ -136,10 +142,11 @@ impl VirtualAttributions {
     }
 
     /// Static version of find_prompt_in_history for use in async context
+    /// Returns (commit_sha, PromptRecord) for the most recent commit containing this prompt
     fn find_prompt_in_history_static(
         repo: &Repository,
         prompt_id: &str,
-    ) -> Result<crate::authorship::authorship_log::PromptRecord, GitAiError> {
+    ) -> Result<(String, crate::authorship::authorship_log::PromptRecord), GitAiError> {
         // Use git grep to search for the prompt ID in authorship notes
         let shas = crate::git::refs::grep_ai_notes(&repo, &format!("\"{}\"", prompt_id))
             .unwrap_or_default();
@@ -149,7 +156,7 @@ impl VirtualAttributions {
             if let Ok(log) = crate::git::refs::get_reference_as_authorship_log_v3(&repo, latest_sha)
             {
                 if let Some(prompt) = log.metadata.prompts.get(prompt_id) {
-                    return Ok(prompt.clone());
+                    return Ok((latest_sha.clone(), prompt.clone()));
                 }
             }
         }
@@ -253,8 +260,8 @@ impl VirtualAttributions {
         self.ts
     }
 
-    /// Get the prompts metadata
-    pub fn prompts(&self) -> &BTreeMap<String, PromptRecord> {
+    /// Get the prompts metadata (prompt_id -> commit_sha -> PromptRecord)
+    pub fn prompts(&self) -> &BTreeMap<String, BTreeMap<String, PromptRecord>> {
         &self.prompts
     }
 
@@ -311,8 +318,12 @@ impl VirtualAttributions {
         let mut session_deletions: HashMap<String, u32> = HashMap::new();
 
         // Add prompts from INITIAL attributions
+        // These are uncommitted prompts, so we use an empty string as the commit_sha
         for (prompt_id, prompt_record) in &initial_attributions.prompts {
-            prompts.insert(prompt_id.clone(), prompt_record.clone());
+            prompts
+                .entry(prompt_id.clone())
+                .or_insert_with(BTreeMap::new)
+                .insert(String::new(), prompt_record.clone());
         }
 
         // Process INITIAL attributions
@@ -342,8 +353,12 @@ impl VirtualAttributions {
                         &agent_id.id,
                         &agent_id.tool,
                     );
-                prompts.entry(author_id.clone()).or_insert_with(|| {
-                    crate::authorship::authorship_log::PromptRecord {
+                // For working log checkpoints, use empty string as commit_sha since they're uncommitted
+                prompts
+                    .entry(author_id.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .entry(String::new())
+                    .or_insert_with(|| crate::authorship::authorship_log::PromptRecord {
                         agent_id: agent_id.clone(),
                         human_author: human_author.clone(),
                         messages: checkpoint
@@ -355,8 +370,7 @@ impl VirtualAttributions {
                         total_deletions: 0,
                         accepted_lines: 0,
                         overriden_lines: 0,
-                    }
-                });
+                    });
 
                 // Track additions and deletions from checkpoint line_stats
                 *session_additions.entry(author_id.clone()).or_insert(0) +=
@@ -462,7 +476,7 @@ impl VirtualAttributions {
         base_commit: String,
         attributions: HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
         file_contents: HashMap<String, String>,
-        prompts: BTreeMap<String, PromptRecord>,
+        prompts: BTreeMap<String, BTreeMap<String, PromptRecord>>,
         ts: u128,
     ) -> Self {
         VirtualAttributions {
@@ -483,7 +497,18 @@ impl VirtualAttributions {
 
         let mut authorship_log = AuthorshipLog::new();
         authorship_log.metadata.base_commit_sha = self.base_commit.clone();
-        authorship_log.metadata.prompts = self.prompts.clone();
+        // Flatten the nested prompts map: take the most recent (first) prompt for each prompt_id
+        authorship_log.metadata.prompts = self
+            .prompts
+            .iter()
+            .filter_map(|(prompt_id, commits)| {
+                // Get the first (most recent) commit's PromptRecord
+                commits
+                    .values()
+                    .next()
+                    .map(|record| (prompt_id.clone(), record.clone()))
+            })
+            .collect();
 
         // Process each file
         for (file_path, (_, line_attrs)) in &self.attributions {
@@ -560,16 +585,127 @@ impl VirtualAttributions {
 
         Ok(authorship_log)
     }
+}
 
+/// Helper function to collect committed line ranges from git diff
+fn collect_committed_hunks(
+    repo: &Repository,
+    parent_sha: &str,
+    commit_sha: &str,
+    pathspecs: Option<&HashSet<String>>,
+) -> Result<HashMap<String, Vec<LineRange>>, GitAiError> {
+    let mut committed_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
+
+    // Handle initial commit (no parent)
+    if parent_sha == "initial" {
+        // For initial commit, use git diff against the empty tree
+        let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // Git's empty tree hash
+        let added_lines = repo.diff_added_lines(empty_tree, commit_sha, pathspecs)?;
+
+        for (file_path, lines) in added_lines {
+            if !lines.is_empty() {
+                committed_hunks.insert(file_path, LineRange::compress_lines(&lines));
+            }
+        }
+        return Ok(committed_hunks);
+    }
+
+    // Use git diff to get added lines directly
+    let added_lines = repo.diff_added_lines(parent_sha, commit_sha, pathspecs)?;
+
+    for (file_path, lines) in added_lines {
+        if !lines.is_empty() {
+            committed_hunks.insert(file_path, LineRange::compress_lines(&lines));
+        }
+    }
+
+    Ok(committed_hunks)
+}
+
+/// Helper function to collect unstaged line ranges (lines in working directory but not in commit)
+/// Returns (unstaged_hunks, pure_insertion_hunks)
+/// pure_insertion_hunks contains lines that were purely inserted (old_count=0), not modifications
+fn collect_unstaged_hunks(
+    repo: &Repository,
+    commit_sha: &str,
+    pathspecs: Option<&HashSet<String>>,
+) -> Result<
+    (
+        HashMap<String, Vec<LineRange>>,
+        HashMap<String, Vec<LineRange>>,
+    ),
+    GitAiError,
+> {
+    let mut unstaged_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
+    let mut pure_insertion_hunks: HashMap<String, Vec<LineRange>> = HashMap::new();
+
+    // Use git diff to get added lines in working directory vs commit, with insertion tracking
+    let (added_lines, insertion_lines) =
+        repo.diff_workdir_added_lines_with_insertions(commit_sha, pathspecs)?;
+
+    for (file_path, lines) in added_lines {
+        if !lines.is_empty() {
+            unstaged_hunks.insert(file_path, LineRange::compress_lines(&lines));
+        }
+    }
+
+    for (file_path, lines) in insertion_lines {
+        if !lines.is_empty() {
+            pure_insertion_hunks.insert(file_path, LineRange::compress_lines(&lines));
+        }
+    }
+
+    // Check for untracked files in pathspecs that git diff didn't find
+    // These are files that exist in the working directory but aren't tracked by git
+    if let Some(paths) = pathspecs {
+        if let Ok(workdir) = repo.workdir() {
+            for pathspec in paths {
+                // Skip if we already found this file in git diff
+                if unstaged_hunks.contains_key(pathspec) {
+                    continue;
+                }
+
+                // Check if file exists in the commit - if it does, it's tracked and git diff should handle it
+                // Only process truly untracked files (files that don't exist in the commit tree)
+                if file_exists_in_commit(repo, commit_sha, pathspec).unwrap_or(false) {
+                    continue;
+                }
+
+                // Check if file exists in working directory
+                let file_path = workdir.join(pathspec);
+                if file_path.exists() && file_path.is_file() {
+                    // Try to read the file
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                        // Count the lines - all lines are "unstaged" since the file is untracked
+                        let line_count = content.lines().count() as u32;
+                        if line_count > 0 {
+                            // Create a range covering all lines (1-indexed)
+                            let range = vec![LineRange::Range(1, line_count)];
+                            unstaged_hunks.insert(pathspec.clone(), range.clone());
+                            // Untracked files are pure insertions (the entire file is new)
+                            pure_insertion_hunks.insert(pathspec.clone(), range);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((unstaged_hunks, pure_insertion_hunks))
+}
+
+impl VirtualAttributions {
     /// Split VirtualAttributions into committed and uncommitted buckets
     ///
-    /// This method compares the working directory content (in self) with the committed content
-    /// to determine which line attributions belong in:
-    /// - Bucket 1 (committed): Lines present in committed content → AuthorshipLog
-    /// - Bucket 2 (uncommitted): Lines NOT in committed content → InitialAttributions
+    /// This method uses git diff to determine which line attributions belong in:
+    /// - Bucket 1 (committed): Lines added in this commit → AuthorshipLog
+    /// - Bucket 2 (uncommitted): Lines NOT added in this commit → InitialAttributions
     pub fn to_authorship_log_and_initial_working_log(
         &self,
-        committed_files: HashMap<String, String>,
+        repo: &Repository,
+        parent_sha: &str,
+        commit_sha: &str,
+        pathspecs: Option<&HashSet<String>>,
     ) -> Result<
         (
             crate::authorship::authorship_log_serialization::AuthorshipLog,
@@ -583,10 +719,75 @@ impl VirtualAttributions {
 
         let mut authorship_log = AuthorshipLog::new();
         authorship_log.metadata.base_commit_sha = self.base_commit.clone();
-        authorship_log.metadata.prompts = self.prompts.clone();
+        // Flatten the nested prompts map: take the most recent (first) prompt for each prompt_id
+        authorship_log.metadata.prompts = self
+            .prompts
+            .iter()
+            .filter_map(|(prompt_id, commits)| {
+                // Get the first (most recent) commit's PromptRecord
+                commits
+                    .values()
+                    .next()
+                    .map(|record| (prompt_id.clone(), record.clone()))
+            })
+            .collect();
 
         let mut initial_files: StdHashMap<String, Vec<LineAttribution>> = StdHashMap::new();
         let mut referenced_prompts: HashSet<String> = HashSet::new();
+
+        // Get committed hunks (in commit coordinates) and unstaged hunks (in working directory coordinates)
+        let committed_hunks = collect_committed_hunks(repo, parent_sha, commit_sha, pathspecs)?;
+        let (mut unstaged_hunks, pure_insertion_hunks) =
+            collect_unstaged_hunks(repo, commit_sha, pathspecs)?;
+
+        // IMPORTANT: If a line appears in both committed_hunks and unstaged_hunks, it means:
+        // - The line was committed in this commit (in commit coordinates)
+        // - The line was then modified again in the working directory (in workdir coordinates)
+        // Since both use the same line numbering after the commit (workdir coordinates = commit coordinates
+        // for the committed state), we can directly compare line numbers.
+        // We should treat these lines as committed, not unstaged, because the attribution belongs
+        // to the commit even if there's a subsequent unstaged modification.
+        //
+        // HOWEVER: If a line is a PURE INSERTION (old_count=0), it means a new line was inserted
+        // at that position, pushing existing lines down. In this case, the line number overlap
+        // doesn't mean the same line - it's a different line at the same position!
+        // We should NOT filter out pure insertions even if they overlap with committed line numbers.
+        for (file_path, committed_ranges) in &committed_hunks {
+            if let Some(unstaged_ranges) = unstaged_hunks.get_mut(file_path) {
+                // Expand both to line numbers for comparison
+                let committed_lines: std::collections::HashSet<u32> =
+                    committed_ranges.iter().flat_map(|r| r.expand()).collect();
+
+                // Get pure insertion lines for this file (these should NOT be filtered out)
+                let pure_insertion_lines: std::collections::HashSet<u32> = pure_insertion_hunks
+                    .get(file_path)
+                    .map(|ranges| ranges.iter().flat_map(|r| r.expand()).collect())
+                    .unwrap_or_default();
+
+                // Filter out any unstaged lines that were also committed
+                // (these are lines that were committed, then modified again in workdir)
+                // BUT keep pure insertions even if they overlap with committed line numbers
+                let mut filtered_unstaged_lines: Vec<u32> = unstaged_ranges
+                    .iter()
+                    .flat_map(|r| r.expand())
+                    .filter(|line| {
+                        // Keep the line if it's NOT in committed, OR if it's a pure insertion
+                        !committed_lines.contains(line) || pure_insertion_lines.contains(line)
+                    })
+                    .collect();
+
+                if filtered_unstaged_lines.is_empty() {
+                    unstaged_ranges.clear();
+                } else {
+                    filtered_unstaged_lines.sort_unstable();
+                    filtered_unstaged_lines.dedup();
+                    *unstaged_ranges = LineRange::compress_lines(&filtered_unstaged_lines);
+                }
+            }
+        }
+
+        // Remove files with no unstaged hunks
+        unstaged_hunks.retain(|_, ranges| !ranges.is_empty());
 
         // Process each file
         for (file_path, (_, line_attrs)) in &self.attributions {
@@ -594,86 +795,63 @@ impl VirtualAttributions {
                 continue;
             }
 
-            let empty_string = String::new();
-            let working_content = self.get_file_content(file_path).unwrap_or(&empty_string);
-            let committed_content = committed_files.get(file_path);
-
-            // Split working content into lines for comparison
-            let working_lines: Vec<&str> = working_content.lines().collect();
-
-            // If file doesn't exist in commit, all lines are uncommitted
-            if committed_content.is_none() {
-                // All attributions go to INITIAL
-                for line_attr in line_attrs {
-                    referenced_prompts.insert(line_attr.author_id.clone());
+            // Get unstaged lines for this file (in working directory coordinates)
+            let mut unstaged_lines: Vec<u32> = Vec::new();
+            if let Some(unstaged_ranges) = unstaged_hunks.get(file_path) {
+                for range in unstaged_ranges {
+                    unstaged_lines.extend(range.expand());
                 }
-                initial_files.insert(file_path.clone(), line_attrs.clone());
-                continue;
+                unstaged_lines.sort_unstable();
             }
 
-            let committed_content = committed_content.unwrap();
-            let committed_lines: Vec<&str> = committed_content.lines().collect();
-
             // Split line attributions into committed and uncommitted
-            // We need to do this line-by-line, not range-by-range, because a single attribution
-            // range might have some lines committed and some uncommitted
+            // VirtualAttributions has line numbers in working directory coordinates,
+            // so we need to convert to commit coordinates before comparing with committed hunks
             let mut committed_lines_map: StdHashMap<String, Vec<u32>> = StdHashMap::new();
             let mut uncommitted_lines_map: StdHashMap<String, Vec<u32>> = StdHashMap::new();
 
-            // Build a mapping from line content to committed line numbers (for content-based matching)
-            // When there are multiple lines with the same content, track all positions
-            let mut committed_content_to_lines: StdHashMap<&str, Vec<u32>> = StdHashMap::new();
-            for (idx, content) in committed_lines.iter().enumerate() {
-                committed_content_to_lines
-                    .entry(*content)
-                    .or_default()
-                    .push((idx + 1) as u32); // Line numbers are 1-indexed
-            }
-
-            // Track which committed lines we've already matched to avoid duplicates
-            let mut used_committed_lines: HashSet<u32> = HashSet::new();
+            // Get the committed hunks for this file (if any) - these are in commit coordinates
+            let file_committed_hunks = committed_hunks.get(file_path);
 
             for line_attr in line_attrs {
                 // Check each line individually
-                for line_num in line_attr.start_line..=line_attr.end_line {
-                    let idx = (line_num as usize).saturating_sub(1);
+                for workdir_line_num in line_attr.start_line..=line_attr.end_line {
+                    // Check if this line is unstaged (in working directory but not in commit)
+                    let is_unstaged = unstaged_lines.binary_search(&workdir_line_num).is_ok();
 
-                    // If line is beyond working content, skip it
-                    if idx >= working_lines.len() {
-                        continue;
-                    }
-
-                    let line_content = working_lines[idx];
-
-                    // Find the committed line number for this content
-                    if let Some(committed_line_nums) = committed_content_to_lines.get(line_content)
-                    {
-                        // Find the first unused committed line with this content
-                        if let Some(&committed_line_num) = committed_line_nums
-                            .iter()
-                            .find(|&&ln| !used_committed_lines.contains(&ln))
-                        {
-                            // Mark this line as committed, using the committed tree's line number
-                            used_committed_lines.insert(committed_line_num);
-                            committed_lines_map
-                                .entry(line_attr.author_id.clone())
-                                .or_default()
-                                .push(committed_line_num);
-                        } else {
-                            // All instances of this content are already matched, mark as uncommitted
-                            uncommitted_lines_map
-                                .entry(line_attr.author_id.clone())
-                                .or_default()
-                                .push(line_num);
-                            referenced_prompts.insert(line_attr.author_id.clone());
-                        }
-                    } else {
-                        // Content not in committed tree, mark as uncommitted
+                    if is_unstaged {
+                        // Line is unstaged, mark as uncommitted
                         uncommitted_lines_map
                             .entry(line_attr.author_id.clone())
                             .or_default()
-                            .push(line_num);
+                            .push(workdir_line_num);
                         referenced_prompts.insert(line_attr.author_id.clone());
+                    } else {
+                        // Convert working directory line number to commit line number
+                        // by subtracting the count of unstaged lines before this line
+                        let adjustment = unstaged_lines
+                            .iter()
+                            .filter(|&&l| l < workdir_line_num)
+                            .count() as u32;
+                        let commit_line_num = workdir_line_num - adjustment;
+
+                        // Check if this commit line number is in any committed hunk
+                        let is_committed = if let Some(hunks) = file_committed_hunks {
+                            hunks.iter().any(|hunk| hunk.contains(commit_line_num))
+                        } else {
+                            false
+                        };
+
+                        if is_committed {
+                            // Line was committed in this commit (use commit coordinates)
+                            committed_lines_map
+                                .entry(line_attr.author_id.clone())
+                                .or_default()
+                                .push(commit_line_num);
+                        } else {
+                        }
+                        // Note: Lines that are neither unstaged nor in committed_hunks are lines that
+                        // already existed in the parent commit. They are discarded (not added to uncommitted).
                     }
                 }
             }
@@ -783,8 +961,11 @@ impl VirtualAttributions {
         // Build prompts map for INITIAL (only prompts referenced by uncommitted lines)
         let mut initial_prompts = StdHashMap::new();
         for prompt_id in referenced_prompts {
-            if let Some(prompt) = self.prompts.get(&prompt_id) {
-                initial_prompts.insert(prompt_id, prompt.clone());
+            if let Some(commits) = self.prompts.get(&prompt_id) {
+                // Get the most recent (first) prompt for this prompt_id
+                if let Some(prompt) = commits.values().next() {
+                    initial_prompts.insert(prompt_id, prompt.clone());
+                }
             }
         }
 
@@ -796,9 +977,61 @@ impl VirtualAttributions {
         Ok((authorship_log, initial_attributions))
     }
 
+    /// Merge prompts from multiple sources, picking the newest PromptRecord for each prompt_id
+    ///
+    /// This function collects all PromptRecords for each unique prompt_id across all sources,
+    /// sorts them by age (oldest to newest), and returns the newest version of each prompt.
+    pub fn merge_prompts_picking_newest(
+        prompt_sources: &[&BTreeMap<String, BTreeMap<String, PromptRecord>>],
+    ) -> BTreeMap<String, BTreeMap<String, PromptRecord>> {
+        let mut merged_prompts = BTreeMap::new();
+
+        // Collect all unique prompt_ids across all sources
+        let mut all_prompt_ids: HashSet<String> = HashSet::new();
+        for source in prompt_sources {
+            all_prompt_ids.extend(source.keys().cloned());
+        }
+
+        for prompt_id in all_prompt_ids {
+            // Collect all PromptRecords for this prompt_id from all sources
+            let mut all_records = Vec::new();
+
+            for source in prompt_sources {
+                if let Some(commits) = source.get(&prompt_id) {
+                    for (_commit_sha, prompt_record) in commits {
+                        all_records.push(prompt_record.clone());
+                    }
+                }
+            }
+
+            // Sort records oldest to newest using the Ord implementation
+            all_records.sort();
+
+            // Take the last (newest) record
+            if let Some(newest_record) = all_records.last() {
+                let mut prompt_commits = BTreeMap::new();
+
+                // Use commit sha from first source that has this prompt, or "merged" if not found
+                let commit_sha = prompt_sources
+                    .iter()
+                    .find_map(|source| {
+                        source
+                            .get(&prompt_id)
+                            .and_then(|commits| commits.keys().last().cloned())
+                    })
+                    .unwrap_or_else(|| "merged".to_string());
+
+                prompt_commits.insert(commit_sha, newest_record.clone());
+                merged_prompts.insert(prompt_id.clone(), prompt_commits);
+            }
+        }
+
+        merged_prompts
+    }
+
     /// Calculate and update prompt metrics (accepted_lines, overridden_lines, total_additions, total_deletions)
-    fn calculate_and_update_prompt_metrics(
-        prompts: &mut BTreeMap<String, PromptRecord>,
+    pub fn calculate_and_update_prompt_metrics(
+        prompts: &mut BTreeMap<String, BTreeMap<String, PromptRecord>>,
         attributions: &HashMap<String, (Vec<Attribution>, Vec<LineAttribution>)>,
         session_additions: &HashMap<String, u32>,
         session_deletions: &HashMap<String, u32>,
@@ -837,11 +1070,15 @@ impl VirtualAttributions {
         }
 
         // Update all prompt records with calculated metrics
-        for (session_id, prompt_record) in prompts.iter_mut() {
-            prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
-            prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
-            prompt_record.accepted_lines = *session_accepted_lines.get(session_id).unwrap_or(&0);
-            prompt_record.overriden_lines = *session_overridden_lines.get(session_id).unwrap_or(&0);
+        for (session_id, commits) in prompts.iter_mut() {
+            for prompt_record in commits.values_mut() {
+                prompt_record.total_additions = *session_additions.get(session_id).unwrap_or(&0);
+                prompt_record.total_deletions = *session_deletions.get(session_id).unwrap_or(&0);
+                prompt_record.accepted_lines =
+                    *session_accepted_lines.get(session_id).unwrap_or(&0);
+                prompt_record.overriden_lines =
+                    *session_overridden_lines.get(session_id).unwrap_or(&0);
+            }
         }
     }
 }
@@ -858,13 +1095,9 @@ pub fn merge_attributions_favoring_first(
     let repo = primary.repo.clone();
     let base_commit = primary.base_commit.clone();
 
-    // Merge prompts from both VAs
-    let mut merged_prompts = primary.prompts.clone();
-    for (key, value) in &secondary.prompts {
-        merged_prompts
-            .entry(key.clone())
-            .or_insert_with(|| value.clone());
-    }
+    // Merge prompts from both VAs, picking the newest version of each prompt
+    let merged_prompts =
+        VirtualAttributions::merge_prompts_picking_newest(&[&primary.prompts, &secondary.prompts]);
 
     let mut merged = VirtualAttributions {
         repo,
@@ -930,6 +1163,35 @@ pub fn merge_attributions_favoring_first(
         merged
             .file_contents
             .insert(file_path, final_content.clone());
+    }
+
+    // Save total_additions and total_deletions from the newest PromptRecord
+    let mut saved_totals: HashMap<String, (u32, u32)> = HashMap::new();
+    for (prompt_id, commits) in &merged.prompts {
+        for prompt_record in commits.values() {
+            saved_totals.insert(
+                prompt_id.clone(),
+                (prompt_record.total_additions, prompt_record.total_deletions),
+            );
+        }
+    }
+
+    // Calculate and update prompt metrics (will set accepted_lines and overridden_lines)
+    VirtualAttributions::calculate_and_update_prompt_metrics(
+        &mut merged.prompts,
+        &merged.attributions,
+        &HashMap::new(), // Empty - will result in total_additions = 0
+        &HashMap::new(), // Empty - will result in total_deletions = 0
+    );
+
+    // Restore the saved total_additions and total_deletions
+    for (prompt_id, commits) in merged.prompts.iter_mut() {
+        if let Some(&(additions, deletions)) = saved_totals.get(prompt_id) {
+            for prompt_record in commits.values_mut() {
+                prompt_record.total_additions = additions;
+                prompt_record.total_deletions = deletions;
+            }
+        }
     }
 
     Ok(merged)
@@ -1098,6 +1360,17 @@ fn get_file_content_at_commit(
         }
         Err(_) => Ok(String::new()),
     }
+}
+
+/// Check if a file exists in a commit's tree
+fn file_exists_in_commit(
+    repo: &Repository,
+    commit_sha: &str,
+    file_path: &str,
+) -> Result<bool, GitAiError> {
+    let commit = repo.find_commit(commit_sha.to_string())?;
+    let tree = commit.tree()?;
+    Ok(tree.get_path(std::path::Path::new(file_path)).is_ok())
 }
 
 #[cfg(test)]
