@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "git-ai"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "assert_cmd",
  "chrono",
