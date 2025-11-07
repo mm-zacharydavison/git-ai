@@ -1472,4 +1472,160 @@ EOF
     echo "✓ AI attribution successfully preserved after conflict resolution during rebase" >&3
 }
 
+@test "git-ai stats range command works correctly" {
+    # Get the base commit (initial commit from setup)
+    base_commit=$(git rev-parse HEAD)
+    
+    # COMMIT 1: Human adds 3 lines to a file
+    cat > example.txt <<'EOF'
+H: Human Line 1
+H: Human Line 2
+H: Human Line 3
+EOF
+    
+    git-ai checkpoint
+    git add example.txt
+    git commit -m "Commit 1: Human adds 3 lines"
+    
+    commit1_sha=$(git rev-parse HEAD)
+    
+    echo "=== Commit 1 SHA: $commit1_sha ===" >&3
+    
+    # COMMIT 2: AI adds 5 more lines to the same file
+    cat > example.txt <<'EOF'
+H: Human Line 1
+H: Human Line 2
+H: Human Line 3
+AI: AI Line 1
+AI: AI Line 2
+AI: AI Line 3
+AI: AI Line 4
+AI: AI Line 5
+EOF
+    
+    git-ai checkpoint mock_ai example.txt
+    git add example.txt
+    git commit -m "Commit 2: AI adds 5 lines"
+    
+    commit2_sha=$(git rev-parse HEAD)
+    
+    echo "=== Commit 2 SHA: $commit2_sha ===" >&3
+    
+    # Test the range command: base_commit..commit2_sha
+    # This should include both commit1 and commit2
+    echo "=== Testing range: $base_commit..$commit2_sha ===" >&3
+    
+    stats_output=$(git-ai stats "$base_commit..$commit2_sha" --json 2>&1)
+    stats_json=$(echo "$stats_output" | grep -v '^\[DEBUG\]' | grep '^{')
+    
+    echo "=== Stats JSON for range ===" >&3
+    echo "$stats_json" >&3
+    
+    # Verify JSON is valid
+    if ! command -v jq &> /dev/null; then
+        echo "WARNING: jq not available, skipping JSON validation" >&3
+    else
+        echo "$stats_json" | jq . >/dev/null 2>&1 || {
+            echo "ERROR: Invalid JSON in stats output" >&3
+            return 1
+        }
+    fi
+    
+    # Expected stats for the range (both commits combined):
+    # - Commit 1: Human added 3 lines (module1.py)
+    # - Commit 2: AI added 5 lines (module2.py)
+    # Total: 3 human additions, 5 AI additions
+    # Note: Range stats are nested under "range_stats" field
+    expected_json='{
+      "authorship_stats": {
+        "total_commits": 2,
+        "commits_with_authorship": 2,
+        "authors_commiting_authorship": ["Test User <test@example.com>"],
+        "authors_not_commiting_authorship": [],
+        "commits_without_authorship": [],
+        "commits_without_authorship_with_authors": []
+      },
+      "range_stats": {
+        "human_additions": 3,
+        "mixed_additions": 0,
+        "ai_additions": 5,
+        "ai_accepted": 5,
+        "total_ai_additions": 5,
+        "total_ai_deletions": 0,
+        "time_waiting_for_ai": 0,
+        "git_diff_deleted_lines": 0,
+        "git_diff_added_lines": 8,
+        "tool_model_breakdown": {
+          "mock_ai::unknown": {
+            "ai_additions": 5,
+            "mixed_additions": 0,
+            "ai_accepted": 5,
+            "total_ai_additions": 5,
+            "total_ai_deletions": 0,
+            "time_waiting_for_ai": 0
+          }
+        }
+      }
+    }'
+    
+    compare_json "$expected_json" "$stats_json" "Range stats do not match expected" || return 1
+    
+    # Also test with just the second commit in the range
+    echo "=== Testing range: $commit1_sha..$commit2_sha ===" >&3
+    
+    stats_output_single=$(git-ai stats "$commit1_sha..$commit2_sha" --json 2>&1)
+    stats_json_single=$(echo "$stats_output_single" | grep -v '^\[DEBUG\]' | grep '^{')
+    
+    echo "=== Stats JSON for single commit range ===" >&3
+    echo "$stats_json_single" >&3
+    
+    # Verify JSON is valid
+    if ! command -v jq &> /dev/null; then
+        echo "WARNING: jq not available, skipping JSON validation" >&3
+    else
+        echo "$stats_json_single" | jq . >/dev/null 2>&1 || {
+            echo "ERROR: Invalid JSON in stats output" >&3
+            return 1
+        }
+    fi
+    
+    # Expected stats for commit1..commit2 (only commit2):
+    # - Only Commit 2: AI added 5 lines (module2.py)
+    expected_json_single='{
+      "authorship_stats": {
+        "total_commits": 1,
+        "commits_with_authorship": 1,
+        "authors_commiting_authorship": ["Test User <test@example.com>"],
+        "authors_not_commiting_authorship": [],
+        "commits_without_authorship": [],
+        "commits_without_authorship_with_authors": []
+      },
+      "range_stats": {
+        "human_additions": 0,
+        "mixed_additions": 0,
+        "ai_additions": 5,
+        "ai_accepted": 5,
+        "total_ai_additions": 5,
+        "total_ai_deletions": 0,
+        "time_waiting_for_ai": 0,
+        "git_diff_deleted_lines": 0,
+        "git_diff_added_lines": 5,
+        "tool_model_breakdown": {
+          "mock_ai::unknown": {
+            "ai_additions": 5,
+            "mixed_additions": 0,
+            "ai_accepted": 5,
+            "total_ai_additions": 5,
+            "total_ai_deletions": 0,
+            "time_waiting_for_ai": 0
+          }
+        }
+      }
+    }'
+    
+    compare_json "$expected_json_single" "$stats_json_single" "Single commit range stats do not match expected" || return 1
+    
+    echo "✓ Stats range command verified successfully" >&3
+}
+
 
