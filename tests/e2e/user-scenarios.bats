@@ -315,6 +315,49 @@ EOF
     echo "step4" >> multi.txt
     run git-ai checkpoint mock_ai multi.txt
     [ "$status" -eq 0 ]
+
+
+    git add multi.txt
+    git commit -m "Test multiple checkpoints in sequence"
+
+     stats_json=$(get_stats_json)
+    
+    # Debug: show the stats output
+    echo "=== Stats JSON output ===" >&3
+    echo "$stats_json" >&3
+
+    echo "=== Blame output ===" >&3
+    git-ai blame multi.txt >&3
+
+    # Verify JSON is valid
+    verify_stats_json "$stats_json" || return 1
+
+    expected_json='{
+      "human_additions": 2,
+      "mixed_additions": 0,
+      "ai_additions": 2,
+      "ai_accepted": 2,
+      "total_ai_additions": 2,
+      "total_ai_deletions": 0,
+      "time_waiting_for_ai": 0,
+      "git_diff_deleted_lines": 0,
+      "git_diff_added_lines": 4,
+      "tool_model_breakdown": {
+        "mock_ai::unknown": {
+          "ai_additions": 2,
+          "mixed_additions": 0,
+          "ai_accepted": 2,
+          "total_ai_additions": 2,
+          "total_ai_deletions": 0,
+          "time_waiting_for_ai": 0
+        }
+      }
+    }'
+
+    # Compare JSONs using helper
+    compare_json "$expected_json" "$stats_json" "Stats JSON does not match expected" || return 1
+    
+    echo "✓ Complete JSON match verified" >&3
 }
 
 @test "git-ai stats shows AI contribution after commit" {
