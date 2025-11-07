@@ -326,7 +326,7 @@ fn handle_checkpoint(args: &[String]) {
         .map(|r| r.checkpoint_kind)
         .unwrap_or(CheckpointKind::Human);
 
-    if CheckpointKind::Human == checkpoint_kind {
+    if CheckpointKind::Human == checkpoint_kind && agent_run_result.is_none() {
         println!(
             "get_all_files_for_mock_ai HUMAN Checkpoints: {:?}",
             get_all_files_for_mock_ai(&final_working_dir)
