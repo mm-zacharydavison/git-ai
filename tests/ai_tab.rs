@@ -1,3 +1,4 @@
+#![cfg(not(target_os = "windows"))]
 mod repos;
 
 use repos::test_file::ExpectedLineExt;

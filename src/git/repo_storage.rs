@@ -145,7 +145,7 @@ impl PersistedWorkingLog {
         self.dirty_files = dirty_files.map(|map| {
             map.into_iter()
                 .map(|(file_path, content)| {
-                    (self.to_repo_relative_path(&file_path, true), content)
+                    (self.to_repo_relative_path(&file_path), content)
                 })
                 .collect()
         });
@@ -195,45 +195,30 @@ impl PersistedWorkingLog {
         self.repo_workdir.join(file_path).to_string_lossy().to_string()
     }
 
-    pub fn to_repo_relative_path(&self, file_path: &str, use_unix_style: bool) -> String {
-        let mut result = if !Path::new(file_path).is_absolute() {
-            file_path.to_string()
-        } else {
-            let path = Path::new(file_path);
-
-            // Try without canonicalizing first
-            if path.starts_with(&self.repo_workdir) {
-                path
-                    .strip_prefix(&self.repo_workdir)
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string()
-            } else {
-                // If we couldn't match yet, try canonicalizing both repo_workdir and the input path
-                let canonical_workdir = match self.repo_workdir.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => self.repo_workdir.clone(),
-                };
-                let canonical_path = match path.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => path.to_path_buf(),
-                };
-                if canonical_path.starts_with(&canonical_workdir) {
-                    canonical_path
-                        .strip_prefix(&canonical_workdir)
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string()
-                } else {
-                    file_path.to_string()
-                }
-            }
-        };
-
-        if use_unix_style {
-            result = result.replace('\\', "/");
+    pub fn to_repo_relative_path(&self, file_path: &str) -> String {
+        if !Path::new(file_path).is_absolute() {
+            return file_path.to_string();
         }
-        result
+        let path = Path::new(file_path);
+
+        // Try without canonicalizing first
+        if path.starts_with(&self.repo_workdir) {
+            return path.strip_prefix(&self.repo_workdir).unwrap().to_string_lossy().to_string();
+        }
+
+        // If we couldn't match yet, try canonicalizing both repo_workdir and the input path
+        let canonical_workdir = match self.repo_workdir.canonicalize() {
+            Ok(p) => p,
+            Err(_) => self.repo_workdir.clone(),
+        };
+        let canonical_path = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => path.to_path_buf(),
+        };
+        if canonical_path.starts_with(&canonical_workdir) {
+            return canonical_path.strip_prefix(&canonical_workdir).unwrap().to_string_lossy().to_string();
+        }
+        return file_path.to_string();
     }
 
     pub fn read_current_file_content(&self, file_path: &str) -> Result<String, GitAiError> {
