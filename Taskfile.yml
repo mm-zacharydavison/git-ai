@@ -37,3 +37,15 @@ tasks:
     cmds:
       - cp target/debug/git-ai ~/.local/bin/git-ai
       - chmod +x ~/.local/bin/git-ai
+
+  test:e2e:
+    desc: Run the end-to-end tests with debug build
+    deps: [build-debug]
+    cmds:
+      - bats tests/e2e/user-scenarios.bats
+
+  test:e2e:release:
+    desc: Run the end-to-end tests with release build
+    deps: [build]
+    cmds:
+      - bats tests/e2e/user-scenarios.bats

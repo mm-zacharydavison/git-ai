@@ -14,6 +14,7 @@ pub struct AgentCheckpointFlags {
     pub hook_input: Option<String>,
 }
 
+#[derive(Clone, Debug)]
 pub struct AgentRunResult {
     pub agent_id: AgentId,
     pub checkpoint_kind: CheckpointKind,

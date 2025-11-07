@@ -1,9 +1,9 @@
-use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use glob::Pattern;
 use serde::Deserialize;
 
 use crate::git::repository::Repository;
@@ -12,8 +12,10 @@ use crate::git::repository::Repository;
 pub struct Config {
     git_path: String,
     ignore_prompts: bool,
-    allow_repositories: HashSet<String>,
-    exclude_repositories: HashSet<String>,
+    allow_repositories: Vec<Pattern>,
+    exclude_repositories: Vec<Pattern>,
+    telemetry_oss_disabled: bool,
+    telemetry_enterprise_dsn: Option<String>,
 }
 #[derive(Deserialize)]
 struct FileConfig {
@@ -25,6 +27,10 @@ struct FileConfig {
     allow_repositories: Option<Vec<String>>,
     #[serde(default)]
     exclude_repositories: Option<Vec<String>>,
+    #[serde(default)]
+    telemetry_oss: Option<String>,
+    #[serde(default)]
+    telemetry_enterprise_dsn: Option<String>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -57,11 +63,12 @@ impl Config {
             && let Some(repository) = repository
         {
             if let Some(remotes) = repository.remotes_with_urls().ok() {
-                // If any remote matches the exclusion list, deny access
-                if remotes
-                    .iter()
-                    .any(|remote| self.exclude_repositories.contains(&remote.1))
-                {
+                // If any remote matches the exclusion patterns, deny access
+                if remotes.iter().any(|remote| {
+                    self.exclude_repositories
+                        .iter()
+                        .any(|pattern| pattern.matches(&remote.1))
+                }) {
                     return false;
                 }
             }
@@ -72,12 +79,14 @@ impl Config {
             return true;
         }
 
-        // If allowlist is defined, only allow repos whose remotes match the list
+        // If allowlist is defined, only allow repos whose remotes match the patterns
         if let Some(repository) = repository {
             match repository.remotes_with_urls().ok() {
-                Some(remotes) => remotes
-                    .iter()
-                    .any(|remote| self.allow_repositories.contains(&remote.1)),
+                Some(remotes) => remotes.iter().any(|remote| {
+                    self.allow_repositories
+                        .iter()
+                        .any(|pattern| pattern.matches(&remote.1))
+                }),
                 None => false, // Can't verify, deny by default when allowlist is active
             }
         } else {
@@ -89,6 +98,16 @@ impl Config {
     #[allow(dead_code)]
     pub fn ignore_prompts(&self) -> bool {
         self.ignore_prompts
+    }
+
+    /// Returns true if OSS telemetry is disabled.
+    pub fn is_telemetry_oss_disabled(&self) -> bool {
+        self.telemetry_oss_disabled
+    }
+
+    /// Returns the telemetry_enterprise_dsn if set.
+    pub fn telemetry_enterprise_dsn(&self) -> Option<&str> {
+        self.telemetry_enterprise_dsn.as_deref()
     }
 }
 
@@ -103,13 +122,42 @@ fn build_config() -> Config {
         .and_then(|c| c.allow_repositories.clone())
         .unwrap_or(vec![])
         .into_iter()
+        .filter_map(|pattern_str| {
+            Pattern::new(&pattern_str)
+                .map_err(|e| {
+                    eprintln!(
+                        "Warning: Invalid glob pattern in allow_repositories '{}': {}",
+                        pattern_str, e
+                    );
+                })
+                .ok()
+        })
         .collect();
     let exclude_repositories = file_cfg
         .as_ref()
         .and_then(|c| c.exclude_repositories.clone())
         .unwrap_or(vec![])
         .into_iter()
+        .filter_map(|pattern_str| {
+            Pattern::new(&pattern_str)
+                .map_err(|e| {
+                    eprintln!(
+                        "Warning: Invalid glob pattern in exclude_repositories '{}': {}",
+                        pattern_str, e
+                    );
+                })
+                .ok()
+        })
         .collect();
+    let telemetry_oss_disabled = file_cfg
+        .as_ref()
+        .and_then(|c| c.telemetry_oss.clone())
+        .filter(|s| s == "off")
+        .is_some();
+    let telemetry_enterprise_dsn = file_cfg
+        .as_ref()
+        .and_then(|c| c.telemetry_enterprise_dsn.clone())
+        .filter(|s| !s.is_empty());
 
     let git_path = resolve_git_path(&file_cfg);
 
@@ -118,6 +166,8 @@ fn build_config() -> Config {
         ignore_prompts,
         allow_repositories,
         exclude_repositories,
+        telemetry_oss_disabled,
+        telemetry_enterprise_dsn,
     }
 }
 
@@ -205,8 +255,16 @@ mod tests {
         Config {
             git_path: "/usr/bin/git".to_string(),
             ignore_prompts: false,
-            allow_repositories: allow_repositories.into_iter().collect(),
-            exclude_repositories: exclude_repositories.into_iter().collect(),
+            allow_repositories: allow_repositories
+                .into_iter()
+                .filter_map(|s| Pattern::new(&s).ok())
+                .collect(),
+            exclude_repositories: exclude_repositories
+                .into_iter()
+                .filter_map(|s| Pattern::new(&s).ok())
+                .collect(),
+            telemetry_oss_disabled: false,
+            telemetry_enterprise_dsn: None,
         }
     }
 
@@ -245,5 +303,49 @@ mod tests {
 
         // With allowlist but no exclusions, should deny when no repository provided
         assert!(!config.is_allowed_repository(&None));
+    }
+
+    #[test]
+    fn test_glob_pattern_wildcard_in_allow() {
+        let config = create_test_config(vec!["https://github.com/myorg/*".to_string()], vec![]);
+
+        // Test that the pattern would match (note: we can't easily test with real Repository objects,
+        // but the pattern compilation is tested by the fact that create_test_config succeeds)
+        assert!(!config.allow_repositories.is_empty());
+        assert!(config.allow_repositories[0].matches("https://github.com/myorg/repo1"));
+        assert!(config.allow_repositories[0].matches("https://github.com/myorg/repo2"));
+        assert!(!config.allow_repositories[0].matches("https://github.com/other/repo"));
+    }
+
+    #[test]
+    fn test_glob_pattern_wildcard_in_exclude() {
+        let config = create_test_config(vec![], vec!["https://github.com/private/*".to_string()]);
+
+        // Test pattern matching
+        assert!(!config.exclude_repositories.is_empty());
+        assert!(config.exclude_repositories[0].matches("https://github.com/private/repo1"));
+        assert!(config.exclude_repositories[0].matches("https://github.com/private/secret"));
+        assert!(!config.exclude_repositories[0].matches("https://github.com/public/repo"));
+    }
+
+    #[test]
+    fn test_exact_match_still_works() {
+        let config = create_test_config(vec!["https://github.com/exact/match".to_string()], vec![]);
+
+        // Test that exact matches still work (glob treats them as literals)
+        assert!(!config.allow_repositories.is_empty());
+        assert!(config.allow_repositories[0].matches("https://github.com/exact/match"));
+        assert!(!config.allow_repositories[0].matches("https://github.com/exact/other"));
+    }
+
+    #[test]
+    fn test_complex_glob_patterns() {
+        let config = create_test_config(vec!["*@github.com:company/*".to_string()], vec![]);
+
+        // Test more complex patterns with wildcards
+        assert!(!config.allow_repositories.is_empty());
+        assert!(config.allow_repositories[0].matches("git@github.com:company/repo"));
+        assert!(config.allow_repositories[0].matches("user@github.com:company/project"));
+        assert!(!config.allow_repositories[0].matches("git@github.com:other/repo"));
     }
 }

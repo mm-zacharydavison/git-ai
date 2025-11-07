@@ -1,12 +1,12 @@
 use crate::authorship::attribution_tracker::LineAttribution;
 use crate::authorship::authorship_log::PromptRecord;
-use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint};
+use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
 use crate::utils::debug_log;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +24,7 @@ pub struct RepoStorage {
     pub repo_path: PathBuf,
     pub working_logs: PathBuf,
     pub rewrite_log: PathBuf,
+    pub logs: PathBuf,
 }
 
 impl RepoStorage {
@@ -31,11 +32,13 @@ impl RepoStorage {
         let ai_dir = repo_path.join("ai");
         let working_logs_dir = ai_dir.join("working_logs");
         let rewrite_log_file = ai_dir.join("rewrite_log");
+        let logs_dir = ai_dir.join("logs");
 
         let config = RepoStorage {
             repo_path: repo_path.to_path_buf(),
             working_logs: working_logs_dir,
             rewrite_log: rewrite_log_file,
+            logs: logs_dir,
         };
 
         // @todo - @acunniffe, make this lazy on a read or write.
@@ -52,6 +55,9 @@ impl RepoStorage {
 
         // Create working_logs directory
         fs::create_dir_all(&self.working_logs)?;
+
+        // Create logs directory for Sentry events
+        fs::create_dir_all(&self.logs)?;
 
         if !&self.rewrite_log.exists() && !&self.rewrite_log.is_file() {
             fs::write(&self.rewrite_log, "")?;
@@ -111,6 +117,7 @@ impl RepoStorage {
     }
 }
 
+#[derive(Clone)]
 pub struct PersistedWorkingLog {
     pub dir: PathBuf,
     #[allow(dead_code)]
@@ -218,12 +225,41 @@ impl PersistedWorkingLog {
         Ok(checkpoints)
     }
 
+    pub fn all_touched_files(&self) -> Result<HashSet<String>, GitAiError> {
+        let checkpoints = self.read_all_checkpoints()?;
+        let mut touched_files = HashSet::new();
+        for checkpoint in checkpoints {
+            for entry in checkpoint.entries {
+                touched_files.insert(entry.file);
+            }
+        }
+        Ok(touched_files)
+    }
+
+    pub fn all_ai_touched_files(&self) -> Result<HashSet<String>, GitAiError> {
+        let checkpoints = self.read_all_checkpoints()?;
+        let mut touched_files = HashSet::new();
+        for checkpoint in checkpoints {
+            // Only include files from AI checkpoints (AiAgent or AiTab)
+            match checkpoint.kind {
+                CheckpointKind::AiAgent | CheckpointKind::AiTab => {
+                    for entry in checkpoint.entries {
+                        touched_files.insert(entry.file);
+                    }
+                }
+                CheckpointKind::Human => {
+                    // Skip human checkpoints
+                }
+            }
+        }
+        Ok(touched_files)
+    }
+
     /* INITIAL attributions file */
 
     /// Write initial attributions to the INITIAL file.
     /// This seeds the working log with known attributions from rewrite operations.
     /// Only writes files that have non-empty attributions.
-    #[allow(dead_code)]
     pub fn write_initial_attributions(
         &self,
         attributions: HashMap<String, Vec<LineAttribution>>,
@@ -427,8 +463,6 @@ mod tests {
         let checkpoints = working_log
             .read_all_checkpoints()
             .expect("Failed to read checkpoints");
-
-        println!("checkpoints: {:?}", checkpoints);
 
         assert_eq!(checkpoints.len(), 1, "Should have one checkpoint");
         assert_eq!(checkpoints[0].author, "test-author");

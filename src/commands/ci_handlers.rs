@@ -1,5 +1,5 @@
-use crate::ci::github::{get_github_ci_context, install_github_ci_workflow};
 use crate::ci::ci_context::{CiContext, CiEvent};
+use crate::ci::github::{get_github_ci_context, install_github_ci_workflow};
 use crate::git::repository::find_repository_in_path;
 use crate::utils::debug_log;
 
@@ -54,21 +54,16 @@ fn handle_ci_github(args: &[String]) {
                 }
             }
         }
-        "install" => {
-            match install_github_ci_workflow() {
-                Ok(path) => {
-                    println!(
-                        "Installed GitHub Actions workflow to {}",
-                        path.display()
-                    );
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Failed to install GitHub CI workflow: {}", e);
-                    std::process::exit(1);
-                }
+        "install" => match install_github_ci_workflow() {
+            Ok(path) => {
+                println!("Installed GitHub Actions workflow to {}", path.display());
+                std::process::exit(0);
             }
-        }
+            Err(e) => {
+                eprintln!("Failed to install GitHub CI workflow: {}", e);
+                std::process::exit(1);
+            }
+        },
         other => {
             eprintln!("Unknown ci github subcommand: {}", other);
             print_ci_help_and_exit();
@@ -195,7 +190,9 @@ fn print_ci_help_and_exit() -> ! {
     eprintln!("  local            Run CI locally by event name and flags");
     eprintln!("                   Usage: git-ai ci local <event> [flags]");
     eprintln!("                   Events:");
-    eprintln!("                     merge  --merge-commit-sha <sha> --base-ref <ref> --head-ref <ref> --head-sha <sha> --base-sha <sha>");
+    eprintln!(
+        "                     merge  --merge-commit-sha <sha> --base-ref <ref> --head-ref <ref> --head-sha <sha> --base-sha <sha>"
+    );
     std::process::exit(1);
 }
 
@@ -205,7 +202,9 @@ fn print_ci_local_help_and_exit() -> ! {
     eprintln!("Usage: git-ai ci local <event> [flags]");
     eprintln!("");
     eprintln!("Events:");
-    eprintln!("  merge  --merge-commit-sha <sha> --base-ref <ref> --head-ref <ref> --head-sha <sha> --base-sha <sha>");
+    eprintln!(
+        "  merge  --merge-commit-sha <sha> --base-ref <ref> --head-ref <ref> --head-sha <sha> --base-sha <sha>"
+    );
     std::process::exit(1);
 }
 

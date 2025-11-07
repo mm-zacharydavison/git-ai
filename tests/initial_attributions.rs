@@ -44,7 +44,7 @@ fn test_initial_only_no_blame_data() {
         start_line: 1,
         end_line: 3,
         author_id: "initial-ai-123".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("newfile.txt".to_string(), line_attrs);
 
@@ -132,7 +132,7 @@ fn test_initial_wins_overlaps() {
         start_line: 1,
         end_line: 2,
         author_id: "initial-override-456".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("example.txt".to_string(), line_attrs);
 
@@ -201,13 +201,13 @@ fn test_initial_and_blame_merge() {
         start_line: 1,
         end_line: 3,
         author_id: "initial-123".to_string(),
-        overridden: false,
+        overrode: None,
     });
     line_attrs.push(LineAttribution {
         start_line: 5,
         end_line: 5,
         author_id: "initial-456".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("example.txt".to_string(), line_attrs);
 
@@ -292,7 +292,7 @@ fn test_partial_file_coverage() {
         start_line: 1,
         end_line: 2,
         author_id: "initial-fileA".to_string(),
-        overridden: false,
+        overrode: None,
     });
     initial_attributions.insert("fileA.txt".to_string(), line_attrs);
     // Note: fileB.txt is not in INITIAL
@@ -346,5 +346,93 @@ fn test_partial_file_coverage() {
         .git_ai(&["blame", "fileB.txt"])
         .expect("blame should succeed");
     let normalized_b = normalize_blame_output(&blame_b);
+    assert_debug_snapshot!(normalized_b);
+}
+
+#[test]
+fn test_initial_attributions_in_subsequent_checkpoint() {
+    // Test that INITIAL attributions work when a file first appears in checkpoint #2+
+    // This verifies the bug fix where files appearing in non-first checkpoints
+    // should still get INITIAL attributions and blame initialization
+    let repo = TestRepo::new();
+
+    // Create initial commit with README.md
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(vec!["# Test Repo".to_string()]);
+    repo.stage_all_and_commit("initial commit")
+        .expect("commit should succeed");
+
+    // Create fileA.txt and make checkpoint #1 (human checkpoint, no INITIAL)
+    std::fs::write(repo.path().join("fileA.txt"), "content in file A\n")
+        .expect("write file should succeed");
+    repo.git_ai(&["checkpoint"])
+        .expect("checkpoint #1 should succeed");
+
+    // Get the working log for current HEAD
+    let working_log = repo.current_working_logs();
+
+    // Write INITIAL attributions file for fileB.txt (which doesn't exist yet)
+    let mut initial_attributions = HashMap::new();
+    let mut line_attrs = Vec::new();
+    line_attrs.push(LineAttribution {
+        start_line: 1,
+        end_line: 2,
+        author_id: "subsequent-initial-789".to_string(),
+        overrode: None,
+    });
+    initial_attributions.insert("fileB.txt".to_string(), line_attrs);
+
+    let mut prompts = HashMap::new();
+    prompts.insert(
+        "subsequent-initial-789".to_string(),
+        PromptRecord {
+            agent_id: AgentId {
+                tool: "subsequent-tool".to_string(),
+                id: "subsequent-session".to_string(),
+                model: "subsequent-model".to_string(),
+            },
+            human_author: None,
+            messages: vec![Message::assistant(
+                "Subsequent checkpoint attribution".to_string(),
+                None,
+            )],
+            total_additions: 0,
+            total_deletions: 0,
+            accepted_lines: 0,
+            overriden_lines: 0,
+        },
+    );
+
+    working_log
+        .write_initial_attributions(initial_attributions, prompts)
+        .expect("write initial attributions should succeed");
+
+    // NOW create fileB.txt in working directory
+    std::fs::write(repo.path().join("fileB.txt"), "line 1 from INITIAL\nline 2 from INITIAL\n")
+        .expect("write file should succeed");
+
+    // Make checkpoint #2 - this should use INITIAL attributions for fileB
+    repo.git_ai(&["checkpoint"])
+        .expect("checkpoint #2 should succeed");
+
+    // Commit and verify
+    repo.stage_all_and_commit("add files")
+        .expect("commit should succeed");
+
+    // Check blame for fileB - should show INITIAL attributions (subsequent-tool)
+    // NOT human or any other author
+    let blame_b = repo
+        .git_ai(&["blame", "fileB.txt"])
+        .expect("blame should succeed");
+
+    let normalized_b = normalize_blame_output(&blame_b);
+    
+    // The blame output should contain "subsequent-tool" showing INITIAL worked
+    assert!(
+        normalized_b.contains("subsequent-tool"),
+        "Expected fileB to have INITIAL attributions from subsequent-tool, but got: {}",
+        normalized_b
+    );
+    
     assert_debug_snapshot!(normalized_b);
 }

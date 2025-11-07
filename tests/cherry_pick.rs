@@ -28,6 +28,49 @@ fn test_single_commit_cherry_pick() {
 
     // Verify final file state - hooks should have preserved AI authorship
     file.assert_lines_and_blame(lines!["Initial content".human(), "AI feature line".ai(),]);
+
+    // Verify stats
+    let stats = repo.stats().unwrap();
+    assert_eq!(
+        stats.git_diff_added_lines, 2,
+        "Should add 1 AI line (+ newline)"
+    );
+    assert_eq!(stats.ai_additions, 1, "1 AI line added");
+    assert_eq!(stats.ai_accepted, 1, "1 AI line accepted");
+    assert_eq!(stats.human_additions, 1, "1 human line (newline)");
+
+    // Verify prompt records have correct stats
+    let head_commit = repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let log = git_ai::git::refs::get_reference_as_authorship_log_v3(
+        &git_ai::git::find_repository_in_path(repo.path().to_str().unwrap()).unwrap(),
+        &head_commit,
+    )
+    .unwrap();
+
+    let prompts = &log.metadata.prompts;
+    assert!(
+        !prompts.is_empty(),
+        "Should have at least one prompt record"
+    );
+
+    for (prompt_id, prompt_record) in prompts {
+        assert!(
+            prompt_record.accepted_lines > 0,
+            "Prompt {} should have accepted_lines > 0",
+            prompt_id
+        );
+        assert_eq!(
+            prompt_record.overriden_lines, 0,
+            "Prompt {} should have overridden_lines = 0",
+            prompt_id
+        );
+    }
+
+    let total_accepted: u32 = prompts.values().map(|p| p.accepted_lines).sum();
+    assert_eq!(
+        total_accepted, stats.ai_accepted,
+        "Sum of accepted_lines should match ai_accepted stat"
+    );
 }
 
 /// Test cherry-picking multiple commits in sequence
@@ -72,6 +115,41 @@ fn test_multiple_commits_cherry_pick() {
         "AI line 3".ai(),
         "AI line 4".ai(),
     ]);
+
+    // Verify stats for the last cherry-picked commit
+    let stats = repo.stats().unwrap();
+    // Last commit inserts "AI line 4" in middle, stats include accumulated lines
+    assert!(stats.git_diff_added_lines > 0, "Should have added lines");
+    assert!(stats.ai_additions >= 2, "At least 2 AI lines");
+    assert_eq!(stats.ai_accepted, 3, "3 AI lines accepted in commit");
+
+    // Verify prompt records have correct stats
+    let head_commit = repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let log = git_ai::git::refs::get_reference_as_authorship_log_v3(
+        &git_ai::git::find_repository_in_path(repo.path().to_str().unwrap()).unwrap(),
+        &head_commit,
+    )
+    .unwrap();
+
+    let prompts = &log.metadata.prompts;
+    for (prompt_id, prompt_record) in prompts {
+        assert!(
+            prompt_record.accepted_lines > 0,
+            "Prompt {} should have accepted_lines > 0",
+            prompt_id
+        );
+        assert_eq!(
+            prompt_record.overriden_lines, 0,
+            "Prompt {} should have overridden_lines = 0",
+            prompt_id
+        );
+    }
+
+    let total_accepted: u32 = prompts.values().map(|p| p.accepted_lines).sum();
+    assert_eq!(
+        total_accepted, stats.ai_accepted,
+        "Sum of accepted_lines should match ai_accepted stat"
+    );
 }
 
 /// Test cherry-pick with conflicts and --continue
@@ -236,6 +314,45 @@ fn test_cherry_pick_multiple_ai_sessions() {
         "    // TODO: Add error handling".ai(),
         "}".human(),
     ]);
+
+    // Verify stats for the last cherry-picked commit
+    let stats = repo.stats().unwrap();
+    assert_eq!(stats.git_diff_added_lines, 1, "Last commit adds 1 line");
+    assert_eq!(stats.ai_additions, 1, "1 AI line in last commit");
+    assert_eq!(stats.ai_accepted, 2, "2 AI lines accepted (accumulated)");
+
+    // Verify prompt records have correct stats
+    let head_commit = repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let log = git_ai::git::refs::get_reference_as_authorship_log_v3(
+        &git_ai::git::find_repository_in_path(repo.path().to_str().unwrap()).unwrap(),
+        &head_commit,
+    )
+    .unwrap();
+
+    let prompts = &log.metadata.prompts;
+    assert!(
+        !prompts.is_empty(),
+        "Should have at least one prompt record"
+    );
+
+    for (prompt_id, prompt_record) in prompts {
+        assert!(
+            prompt_record.accepted_lines > 0,
+            "Prompt {} should have accepted_lines > 0",
+            prompt_id
+        );
+        assert_eq!(
+            prompt_record.overriden_lines, 0,
+            "Prompt {} should have overridden_lines = 0",
+            prompt_id
+        );
+    }
+
+    let total_accepted: u32 = prompts.values().map(|p| p.accepted_lines).sum();
+    assert_eq!(
+        total_accepted, stats.ai_accepted,
+        "Sum of accepted_lines should match ai_accepted stat"
+    );
 }
 
 /// Test that trees-identical fast path works

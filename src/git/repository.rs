@@ -802,6 +802,14 @@ impl Repository {
         args
     }
 
+    /// Execute an arbitrary git command and return stdout as string
+    pub fn git(&self, args: &[&str]) -> Result<String, GitAiError> {
+        let mut full_args = self.global_args_for_exec();
+        full_args.extend(args.iter().map(|s| s.to_string()));
+        let output = exec_git(&full_args)?;
+        Ok(String::from_utf8(output.stdout)?)
+    }
+
     pub fn require_pre_command_head(&mut self) {
         if self.pre_command_base_commit.is_some() || self.pre_command_refname.is_some() {
             return;
@@ -1640,6 +1648,36 @@ impl Repository {
         parse_diff_added_lines(&diff_output)
     }
 
+    /// Get added line ranges from git diff between a commit and the working directory,
+    /// along with information about which lines are pure insertions (old_count=0).
+    ///
+    /// Returns (all_added_lines, pure_insertion_lines)
+    /// Pure insertions are lines that were added without modifying existing lines at that position.
+    pub fn diff_workdir_added_lines_with_insertions(
+        &self,
+        from_ref: &str,
+        pathspecs: Option<&HashSet<String>>,
+    ) -> Result<(HashMap<String, Vec<u32>>, HashMap<String, Vec<u32>>), GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("diff".to_string());
+        args.push("-U0".to_string()); // Zero context lines
+        args.push("--no-color".to_string());
+        args.push(from_ref.to_string());
+
+        // Add pathspecs if provided
+        if let Some(paths) = pathspecs {
+            args.push("--".to_string());
+            for path in paths {
+                args.push(path.clone());
+            }
+        }
+
+        let output = exec_git(&args)?;
+        let diff_output = String::from_utf8(output.stdout)?;
+
+        parse_diff_added_lines_with_insertions(&diff_output)
+    }
+
     pub fn fetch_branch(&self, branch_name: &str, remote_name: &str) -> Result<(), GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("fetch".to_string());
@@ -1800,7 +1838,7 @@ fn parse_diff_added_lines(diff_output: &str) -> Result<HashMap<String, Vec<u32>>
         } else if line.starts_with("@@ ") {
             // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
             if let Some(ref file) = current_file {
-                if let Some(added_lines) = parse_hunk_header(line) {
+                if let Some((added_lines, _is_pure_insertion)) = parse_hunk_header(line) {
                     result
                         .entry(file.clone())
                         .or_insert_with(Vec::new)
@@ -1819,11 +1857,63 @@ fn parse_diff_added_lines(diff_output: &str) -> Result<HashMap<String, Vec<u32>>
     Ok(result)
 }
 
-/// Parse a hunk header line to extract added line numbers
+/// Parses the unified diff output to extract line numbers of added lines,
+/// along with information about which are pure insertions (old_count=0).
+///
+/// Returns (all_added_lines, pure_insertion_lines)
+fn parse_diff_added_lines_with_insertions(
+    diff_output: &str,
+) -> Result<(HashMap<String, Vec<u32>>, HashMap<String, Vec<u32>>), GitAiError> {
+    let mut all_lines: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut insertion_lines: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut current_file: Option<String> = None;
+
+    for line in diff_output.lines() {
+        // Track current file being diffed
+        if line.starts_with("+++ b/") {
+            current_file = Some(line[6..].to_string());
+        } else if line.starts_with("+++ /dev/null") {
+            // File was deleted
+            current_file = None;
+        } else if line.starts_with("@@ ") {
+            // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
+            if let Some(ref file) = current_file {
+                if let Some((added_lines, is_pure_insertion)) = parse_hunk_header(line) {
+                    all_lines
+                        .entry(file.clone())
+                        .or_insert_with(Vec::new)
+                        .extend(added_lines.clone());
+
+                    if is_pure_insertion {
+                        insertion_lines
+                            .entry(file.clone())
+                            .or_insert_with(Vec::new)
+                            .extend(added_lines);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort and deduplicate line numbers for each file
+    for lines in all_lines.values_mut() {
+        lines.sort_unstable();
+        lines.dedup();
+    }
+    for lines in insertion_lines.values_mut() {
+        lines.sort_unstable();
+        lines.dedup();
+    }
+
+    Ok((all_lines, insertion_lines))
+}
+
+/// Parse a hunk header line to extract added line numbers and whether it's a pure insertion
 ///
 /// Format: @@ -old_start,old_count +new_start,new_count @@
-/// Returns the line numbers that were added in the new file
-fn parse_hunk_header(line: &str) -> Option<Vec<u32>> {
+/// Returns (line numbers that were added, is_pure_insertion)
+/// is_pure_insertion is true when old_count=0, meaning these are new lines, not modifications
+fn parse_hunk_header(line: &str) -> Option<(Vec<u32>, bool)> {
     // Find the part between @@ and @@
     let parts: Vec<&str> = line.split("@@").collect();
     if parts.len() < 2 {
@@ -1837,6 +1927,20 @@ fn parse_hunk_header(line: &str) -> Option<Vec<u32>> {
     if ranges.len() < 2 {
         return None;
     }
+
+    // Parse the old file range (starts with '-')
+    let old_range = ranges
+        .iter()
+        .find(|r| r.starts_with('-'))?
+        .trim_start_matches('-');
+
+    // Parse "start,count" or just "start" for old range
+    let old_parts: Vec<&str> = old_range.split(',').collect();
+    let old_count: u32 = if old_parts.len() > 1 {
+        old_parts[1].parse().ok()?
+    } else {
+        1 // If no count specified, it's 1 line
+    };
 
     // Parse the new file range (starts with '+')
     let new_range = ranges
@@ -1855,10 +1959,14 @@ fn parse_hunk_header(line: &str) -> Option<Vec<u32>> {
 
     // If count is 0, no lines were added (only deleted)
     if count == 0 {
-        return Some(Vec::new());
+        return Some((Vec::new(), false));
     }
 
     // Generate all line numbers in the range
     let lines: Vec<u32> = (start..start + count).collect();
-    Some(lines)
+
+    // Pure insertion if old_count is 0 (no lines from old file were modified)
+    let is_pure_insertion = old_count == 0;
+
+    Some((lines, is_pure_insertion))
 }

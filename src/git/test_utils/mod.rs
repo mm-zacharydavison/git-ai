@@ -353,6 +353,7 @@ impl TmpRepo {
             false, // reset
             true,
             None, // agent_run_result
+            false,
         )
     }
 
@@ -407,6 +408,7 @@ impl TmpRepo {
             false, // reset
             true,
             Some(agent_run_result),
+            false,
         )
     }
 
@@ -428,6 +430,7 @@ impl TmpRepo {
             false, // reset
             true,  // quiet
             agent_run_result,
+            false,
         )
     }
 

@@ -1,14 +1,13 @@
 mod authorship;
+mod ci;
 mod commands;
 mod config;
 mod error;
 mod git;
-mod ci;
+mod observability;
 mod utils;
 
 use clap::Parser;
-
-use crate::utils::Timer;
 
 #[derive(Parser)]
 #[command(name = "git-ai")]
@@ -21,10 +20,8 @@ struct Cli {
 }
 
 fn main() {
-    _ = Timer::default();
-
+    // TODO Move this into async
     commands::upgrade::check_for_updates();
-
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()
@@ -51,9 +48,6 @@ fn main() {
         commands::git_ai_handlers::handle_git_ai(&cli.args);
         std::process::exit(0);
     }
-
-    // debug_log(&format!("in main, command: {}", command));
-    // debug_log(&format!("in main, args: {:?}", positional_args));
 
     commands::git_handlers::handle_git(&cli.args);
 }
