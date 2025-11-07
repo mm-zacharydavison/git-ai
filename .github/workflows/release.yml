@@ -1,5 +1,8 @@
 name: Release Build
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +10,11 @@ on:
         description: 'Dry Run (uncheck to create a release)'
         required: false
         default: true
+        type: boolean
+      release_production:
+        description: 'Release to latest (production) channel. For stable production releases only!'
+        required: false
+        default: false
         type: boolean
 
 jobs:
@@ -219,6 +227,31 @@ jobs:
     if: success() && inputs.dry_run != true
 
     steps:
+      - name: Determine release metadata
+        id: release-meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION="${{ needs.build.outputs.version }}"
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          if [[ "${{ inputs.release_production }}" == 'true' ]]; then
+            RELEASE_TAG="$BASE_VERSION"
+            CHANNEL="latest"
+            PRERELEASE="false"
+            MAKE_LATEST="true"
+          else
+            RELEASE_TAG="${BASE_VERSION}-next-${SHORT_SHA}"
+            CHANNEL="next"
+            PRERELEASE="true"
+            MAKE_LATEST="false"
+          fi
+
+          echo "tag_name=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=Release $RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "make_latest=$MAKE_LATEST" >> "$GITHUB_OUTPUT"
+          echo "channel_label=$CHANNEL" >> "$GITHUB_OUTPUT"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -249,10 +282,13 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.build.outputs.version }}
-          name: Release ${{ needs.build.outputs.version }}
+          tag_name: ${{ steps.release-meta.outputs.tag_name }}
+          name: ${{ steps.release-meta.outputs.release_name }}
           body: |
-            ## git-ai ${{ needs.build.outputs.version }}
+            ## git-ai ${{ steps.release-meta.outputs.tag_name }}
+
+            ### Release Channel
+            `${{ steps.release-meta.outputs.channel_label }}`
 
             ### Downloads
             - **Linux (x64)**: `git-ai-linux-x64`
@@ -275,6 +311,7 @@ jobs:
             release/git-ai-*
             release/SHA256SUMS
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.release-meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.release-meta.outputs.make_latest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
