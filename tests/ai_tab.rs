@@ -338,7 +338,7 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
 
     repo.stage_all_and_commit("Record AI tab completion while other files dirty").unwrap();
 
-    let mut file = repo.filename(lib_relative_path);
+    let mut file = repo.filename(&std::path::Path::new("src").join("lib.rs").to_string_lossy());
     file.assert_lines_and_blame(lines![
         "fn greet() {".human(),
         "    println!(\"hello\");".human(),
