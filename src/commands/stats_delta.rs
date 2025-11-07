@@ -6,6 +6,7 @@ use crate::git::refs::show_authorship_note;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::repository::Repository;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
     // Find all working log refs
