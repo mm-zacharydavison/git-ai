@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 mod repos;
 
 use repos::test_file::ExpectedLineExt;
@@ -278,7 +277,7 @@ fn test_ai_tab_e2e_marks_ai_lines() {
 #[test]
 fn test_ai_tab_e2e_handles_dirty_files_map() {
     let repo = TestRepo::new();
-    let lib_relative_path = "src/lib.rs";
+    let lib_relative_path = std::path::Path::new("src").join("lib.rs");
     let lib_file_path = repo.path().join(lib_relative_path);
     // Create parent directory - handle Windows paths safely
     if let Some(parent) = lib_file_path.parent() {
