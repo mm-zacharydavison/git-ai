@@ -42,7 +42,7 @@ pub fn run(
     }
 
     // Initialize the new storage system
-    let repo_storage = RepoStorage::for_repo_path(repo.path());
+    let repo_storage = RepoStorage::for_repo_path(repo.path(), &repo.workdir()?);
     let mut working_log = repo_storage.working_log_for_base_commit(&base_commit);
 
     // Set dirty files if available
@@ -453,8 +453,7 @@ fn get_checkpoint_entry_for_file(
     initial_attributions: Arc<HashMap<String, Vec<LineAttribution>>>,
     ts: u128,
 ) -> Result<Option<WorkingLogEntry>, GitAiError> {
-    let abs_path = working_log.repo_root.join(&file_path);
-    let current_content = std::fs::read_to_string(&abs_path).unwrap_or_else(|_| String::new());
+    let current_content = working_log.read_current_file_content(&file_path).unwrap_or_default();
 
     // Try to get previous state from checkpoints first
     let from_checkpoint = previous_checkpoints.iter().rev().find_map(|checkpoint| {
@@ -1238,12 +1237,20 @@ mod tests {
 }
 
 fn is_text_file(working_log: &PersistedWorkingLog, path: &str) -> bool {
-    if let Ok(metadata) = std::fs::metadata(working_log.normalize_file_path(path)) {
-        if !metadata.is_file() {
-            return false;
+    let skip_metadata_check = working_log
+        .dirty_files
+        .as_ref()
+        .map(|m| m.contains_key(path))
+        .unwrap_or(false);
+
+    if !skip_metadata_check {
+        if let Ok(metadata) = std::fs::metadata(working_log.to_repo_absolute_path(path)) {
+            if !metadata.is_file() {
+                return false;
+            }
+        } else {
+            return false; // If metadata can't be read, treat as non-text
         }
-    } else {
-        return false; // If metadata can't be read, treat as non-text
     }
 
     working_log

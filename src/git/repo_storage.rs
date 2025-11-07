@@ -22,13 +22,14 @@ pub struct InitialAttributions {
 #[derive(Debug, Clone)]
 pub struct RepoStorage {
     pub repo_path: PathBuf,
+    pub repo_workdir: PathBuf,
     pub working_logs: PathBuf,
     pub rewrite_log: PathBuf,
     pub logs: PathBuf,
 }
 
 impl RepoStorage {
-    pub fn for_repo_path(repo_path: &Path) -> RepoStorage {
+    pub fn for_repo_path(repo_path: &Path, repo_workdir: &Path) -> RepoStorage {
         let ai_dir = repo_path.join("ai");
         let working_logs_dir = ai_dir.join("working_logs");
         let rewrite_log_file = ai_dir.join("rewrite_log");
@@ -36,6 +37,7 @@ impl RepoStorage {
 
         let config = RepoStorage {
             repo_path: repo_path.to_path_buf(),
+            repo_workdir: repo_workdir.to_path_buf(),
             working_logs: working_logs_dir,
             rewrite_log: rewrite_log_file,
             logs: logs_dir,
@@ -71,9 +73,7 @@ impl RepoStorage {
     pub fn working_log_for_base_commit(&self, sha: &str) -> PersistedWorkingLog {
         let working_log_dir = self.working_logs.join(sha);
         fs::create_dir_all(&working_log_dir).unwrap();
-        // The repo_path is the .git directory, so we need to go up one level to get the actual repo root
-        let repo_root = self.repo_path.parent().unwrap().to_path_buf();
-        PersistedWorkingLog::new(working_log_dir, sha, repo_root, None)
+        PersistedWorkingLog::new(working_log_dir, sha, self.repo_workdir.clone(), None)
     }
 
     #[allow(dead_code)]
@@ -122,7 +122,7 @@ pub struct PersistedWorkingLog {
     pub dir: PathBuf,
     #[allow(dead_code)]
     pub base_commit: String,
-    pub repo_root: PathBuf,
+    pub repo_workdir: PathBuf,
     pub dirty_files: Option<HashMap<String, String>>,
 }
 
@@ -136,7 +136,7 @@ impl PersistedWorkingLog {
         Self {
             dir,
             base_commit: base_commit.to_string(),
-            repo_root,
+            repo_workdir: repo_root,
             dirty_files,
         }
     }
@@ -145,7 +145,7 @@ impl PersistedWorkingLog {
         self.dirty_files = dirty_files.map(|map| {
             map.into_iter()
                 .map(|(file_path, content)| {
-                    (self.normalize_file_path(&file_path), content)
+                    (self.to_repo_relative_path(&file_path), content)
                 })
                 .collect()
         });
@@ -188,22 +188,51 @@ impl PersistedWorkingLog {
         Ok(sha)
     }
 
-    pub fn normalize_file_path(&self, file_path: &str) -> String {
+    pub fn to_repo_absolute_path(&self, file_path: &str) -> String {
         if Path::new(file_path).is_absolute() {
             return file_path.to_string();
         }
-        self.repo_root.join(file_path).to_string_lossy().to_string()
+        self.repo_workdir.join(file_path).to_string_lossy().to_string()
+    }
+
+    pub fn to_repo_relative_path(&self, file_path: &str) -> String {
+        // 1. If the path isn't absolute, return the file path
+        // 2. Check that the file path is within the repo root (if not just return the file path)
+        // 3. Convert the path to a relative path (strip the repo root)
+        if !Path::new(file_path).is_absolute() {
+            return file_path.to_string();
+        }
+        let path = Path::new(file_path);
+
+        // Try without canonicalizing first
+        if path.starts_with(&self.repo_workdir) {
+            return path.strip_prefix(&self.repo_workdir).unwrap().to_string_lossy().to_string();
+        }
+
+        // If we couldn't match yet, try canonicalizing both repo_workdir and the input path
+        let canonical_workdir = match self.repo_workdir.canonicalize() {
+            Ok(p) => p,
+            Err(_) => self.repo_workdir.clone(),
+        };
+        let canonical_path = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => path.to_path_buf(),
+        };
+        if canonical_path.starts_with(&canonical_workdir) {
+            return canonical_path.strip_prefix(&canonical_workdir).unwrap().to_string_lossy().to_string();
+        }
+        return file_path.to_string();
     }
 
     pub fn read_current_file_content(&self, file_path: &str) -> Result<String, GitAiError> {
-        let file_path = self.normalize_file_path(file_path);
-
-        // First try to read from dirty_files
+        // First try to read from dirty_files (using raw path)
         if let Some(ref dirty_files) = self.dirty_files {
-            if let Some(content) = dirty_files.get(file_path.as_str()) {
+            if let Some(content) = dirty_files.get(&file_path.to_string()) {
                 return Ok(content.clone());
             }
         }
+
+        let file_path = self.to_repo_absolute_path(file_path);
 
         // Fall back to reading from filesystem
         match fs::read(&file_path) {
@@ -374,7 +403,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage
-        let _repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let _repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
 
         // Verify .git/ai directory exists
         let ai_dir = tmp_repo.repo().path().join("ai");
@@ -407,7 +436,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage
-        let repo_storage = RepoStorage::for_repo_path(&tmp_repo.repo().path());
+        let repo_storage = RepoStorage::for_repo_path(&tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
 
         // Add some content to rewrite_log
         let rewrite_log_file = tmp_repo.repo().path().join("ai").join("rewrite_log");
@@ -441,7 +470,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
-        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
         let working_log = repo_storage.working_log_for_base_commit("test-commit-sha");
 
         // Test persisting a file version
@@ -484,7 +513,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
-        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
         let working_log = repo_storage.working_log_for_base_commit("test-commit-sha");
 
         // Create a test checkpoint
@@ -540,7 +569,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
-        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
         let working_log = repo_storage.working_log_for_base_commit("test-commit-sha");
 
         // Build three checkpoints: missing version, wrong version, and correct version
@@ -592,7 +621,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage and PersistedWorkingLog
-        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
         let working_log = repo_storage.working_log_for_base_commit("test-commit-sha");
 
         // Add some blobs
@@ -660,7 +689,7 @@ mod tests {
         let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
 
         // Create RepoStorage
-        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path());
+        let repo_storage = RepoStorage::for_repo_path(tmp_repo.repo().path(), &tmp_repo.repo().workdir().unwrap());
 
         // Create working log for a specific commit
         let commit_sha = "abc123def456";

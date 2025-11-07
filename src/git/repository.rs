@@ -789,7 +789,7 @@ pub struct Repository {
     pub storage: RepoStorage,
     pub pre_command_base_commit: Option<String>,
     pub pre_command_refname: Option<String>,
-    workdir_cache: OnceLock<Result<PathBuf, GitAiError>>,
+    workdir: PathBuf,
 }
 
 impl Repository {
@@ -898,27 +898,8 @@ impl Repository {
     // Get the path of the working directory for this repository.
     // If this repository is bare, then None is returned.
     pub fn workdir(&self) -> Result<PathBuf, GitAiError> {
-        self.workdir_cache
-            .get_or_init(|| {
-                let mut args = self.global_args_for_exec();
-                args.push("rev-parse".to_string());
-                args.push("--show-toplevel".to_string());
-
-                let output = exec_git(&args)?;
-                let git_dir_str = String::from_utf8(output.stdout)?;
-
-                let git_dir_str = git_dir_str.trim();
-                let path = PathBuf::from(git_dir_str);
-                if !path.is_dir() {
-                    return Err(GitAiError::Generic(format!(
-                        "Git directory does not exist: {}",
-                        git_dir_str
-                    )));
-                }
-
-                Ok(path)
-            })
-            .clone()
+        // TODO Remove Result since this is determined at initialization now
+        Ok(self.workdir.clone())
     }
 
     // List all remotes for a given repository
@@ -1692,26 +1673,38 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
     let mut args = global_args.clone();
     args.push("rev-parse".to_string());
     args.push("--absolute-git-dir".to_string());
+    args.push("--show-toplevel".to_string());
 
     let output = exec_git(&args)?;
-    let git_dir_str = String::from_utf8(output.stdout)?;
+    let both_dirs = String::from_utf8(output.stdout)?;
 
-    let git_dir_str = git_dir_str.trim();
-    let path = PathBuf::from(git_dir_str);
-    if !path.is_dir() {
+    let both_dirs = both_dirs.trim();
+    let git_dir_str = both_dirs.split("\n").next().unwrap();
+    let workdir_str = both_dirs.split("\n").nth(1).unwrap();
+    let git_dir = PathBuf::from(git_dir_str);
+    let workdir = PathBuf::from(workdir_str);
+    if !git_dir.is_dir() {
         return Err(GitAiError::Generic(format!(
             "Git directory does not exist: {}",
-            git_dir_str
+            git_dir.display()
+        )));
+    }
+    if !workdir.is_dir() {
+        return Err(GitAiError::Generic(format!(
+            "Work directory does not exist: {}",
+            workdir.display()
         )));
     }
 
+    // TODO Consider if we should canonicalize the paths (sometimes git will return symlinked paths)
+
     Ok(Repository {
         global_args: global_args.clone(),
-        storage: RepoStorage::for_repo_path(&path),
-        git_dir: path,
+        storage: RepoStorage::for_repo_path(&git_dir, &workdir),
+        git_dir,
         pre_command_base_commit: None,
         pre_command_refname: None,
-        workdir_cache: OnceLock::new(),
+        workdir,
     })
 }
 
