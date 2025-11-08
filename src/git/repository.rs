@@ -790,6 +790,9 @@ pub struct Repository {
     pub pre_command_base_commit: Option<String>,
     pub pre_command_refname: Option<String>,
     workdir: PathBuf,
+    /// Canonical (absolute, resolved) version of workdir for reliable path comparisons
+    /// On Windows, this uses the \\?\ UNC prefix format
+    canonical_workdir: PathBuf,
 }
 
 impl Repository {
@@ -900,6 +903,31 @@ impl Repository {
     pub fn workdir(&self) -> Result<PathBuf, GitAiError> {
         // TODO Remove Result since this is determined at initialization now
         Ok(self.workdir.clone())
+    }
+
+    /// Check if a path is within the repository's working directory
+    /// Uses canonical path comparison for reliability on Windows
+    pub fn path_is_in_workdir(&self, path: &Path) -> bool {
+        // Try canonical comparison first (most reliable, especially on Windows)
+        if let Ok(canonical_path) = path.canonicalize() {
+            return canonical_path.starts_with(&self.canonical_workdir);
+        }
+        
+        // Fallback for paths that don't exist yet: normalize by resolving .. and .
+        let normalized = path.components().fold(
+            std::path::PathBuf::new(),
+            |mut acc, component| {
+                match component {
+                    std::path::Component::ParentDir => {
+                        acc.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    _ => acc.push(component),
+                }
+                acc
+            },
+        );
+        normalized.starts_with(&self.workdir)
     }
 
     // List all remotes for a given repository
@@ -1696,7 +1724,16 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
         )));
     }
 
-    // TODO Consider if we should canonicalize the paths (sometimes git will return symlinked paths)
+    // Canonicalize workdir for reliable path comparisons (especially on Windows)
+    // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
+    // comparisons work correctly. We store both regular and canonical versions.
+    let canonical_workdir = workdir.canonicalize().map_err(|e| {
+        GitAiError::Generic(format!(
+            "Failed to canonicalize working directory {}: {}",
+            workdir.display(),
+            e
+        ))
+    })?;
 
     Ok(Repository {
         global_args: global_args.clone(),
@@ -1705,6 +1742,7 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
         pre_command_base_commit: None,
         pre_command_refname: None,
         workdir,
+        canonical_workdir,
     })
 }
 

@@ -76,57 +76,23 @@ pub fn run(
         paths.and_then(|p| {
             let repo_workdir = repo.workdir().ok()?;
             
-            // CRITICAL FIX: Canonicalize repo_workdir for consistent path comparison on Windows
-            // On Windows, canonicalize() returns paths with \\?\ UNC prefix, so both paths
-            // must be canonicalized for starts_with() to work correctly
-            let canonical_repo_workdir = repo_workdir.canonicalize().ok()?;
-            
             let filtered: Vec<String> = p
                 .iter()
                 .filter_map(|path| {
-                    // Check if path is absolute and outside repo
-                    if std::path::Path::new(path).is_absolute() {
-                        // For absolute paths, canonicalize and compare with canonical_repo_workdir
-                        if let Ok(canonical_path) = std::path::Path::new(path).canonicalize() {
-                            if !canonical_path.starts_with(&canonical_repo_workdir) {
-                                return None;
-                            }
-                        } else if !std::path::Path::new(path).starts_with(&repo_workdir) {
-                            // Fallback if canonicalize fails
-                            return None;
-                        }
+                    let path_buf = if std::path::Path::new(path).is_absolute() {
+                        // Absolute path - check directly
+                        std::path::PathBuf::from(path)
                     } else {
-                        // For relative paths, join with workdir and canonicalize to check
-                        let joined = repo_workdir.join(path);
-                        // Try to canonicalize to resolve .. and . components
-                        if let Ok(canonical) = joined.canonicalize() {
-                            // Compare canonical paths (both have \\?\ prefix on Windows)
-                            if !canonical.starts_with(&canonical_repo_workdir) {
-                                return None;
-                            }
-                        } else {
-                            // If we can't canonicalize (file doesn't exist), check the joined path
-                            // Convert both to canonical form if possible, otherwise use as-is
-                            let normalized_joined = joined.components().fold(
-                                std::path::PathBuf::new(),
-                                |mut acc, component| {
-                                    match component {
-                                        std::path::Component::ParentDir => {
-                                            acc.pop();
-                                        }
-                                        std::path::Component::CurDir => {}
-                                        _ => acc.push(component),
-                                    }
-                                    acc
-                                },
-                            );
-                            // For the fallback, compare against the original repo_workdir
-                            if !normalized_joined.starts_with(&repo_workdir) {
-                                return None;
-                            }
-                        }
+                        // Relative path - join with workdir
+                        repo_workdir.join(path)
+                    };
+                    
+                    // Use centralized path comparison (handles Windows canonical paths correctly)
+                    if repo.path_is_in_workdir(&path_buf) {
+                        Some(path.clone())
+                    } else {
+                        None
                     }
-                    Some(path.clone())
                 })
                 .collect();
 
