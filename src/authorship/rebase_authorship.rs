@@ -1049,10 +1049,12 @@ fn transform_attributions_to_final_state(
                     // Use line-content matching to restore attributions for lines that existed before
                     // Build a map of line content -> author from original state
                     let mut original_line_to_author: HashMap<String, String> = HashMap::new();
-                    
-                    if let Some(original_line_attrs) = original_state.get_line_attributions(&file_path) {
+
+                    if let Some(original_line_attrs) =
+                        original_state.get_line_attributions(&file_path)
+                    {
                         let original_lines: Vec<&str> = original_content.lines().collect();
-                        
+
                         for line_attr in original_line_attrs {
                             // LineAttribution is 1-indexed
                             for line_num in line_attr.start_line..=line_attr.end_line {
@@ -1063,36 +1065,40 @@ fn transform_attributions_to_final_state(
                                     // VirtualAttributions normalizes humans to "human" via return_human_authors_as_human flag
                                     // AI authors keep their tool names (mock_ai, Claude, GPT, etc.) or prompt hashes
                                     if line_attr.author_id != "human" {
-                                        original_line_to_author.insert(line_content, line_attr.author_id.clone());
+                                        original_line_to_author
+                                            .insert(line_content, line_attr.author_id.clone());
                                     }
                                 }
                             }
                         }
                     }
-                    
+
                     // Now update char attributions based on line content matching
                     let dummy_author = "__DUMMY__";
                     let final_lines: Vec<&str> = final_content.lines().collect();
-                    
+
                     // Convert char attributions to line attributions to process line by line
-                    let temp_line_attrs = crate::authorship::attribution_tracker::attributions_to_line_attributions(
-                        &transformed_attrs,
-                        &final_content,
-                    );
-                    
+                    let temp_line_attrs =
+                        crate::authorship::attribution_tracker::attributions_to_line_attributions(
+                            &transformed_attrs,
+                            &final_content,
+                        );
+
                     // For each line with dummy attribution, try to restore from original
                     for (line_idx, line_content) in final_lines.iter().enumerate() {
                         // Check if this line has a dummy attribution
                         let line_num = (line_idx + 1) as u32; // LineAttribution is 1-indexed
                         let has_dummy = temp_line_attrs.iter().any(|la| {
-                            la.start_line <= line_num 
-                            && la.end_line >= line_num 
-                            && la.author_id == dummy_author
+                            la.start_line <= line_num
+                                && la.end_line >= line_num
+                                && la.author_id == dummy_author
                         });
-                        
+
                         if has_dummy {
                             // Try to find this line content in original state
-                            if let Some(original_author) = original_line_to_author.get(*line_content) {
+                            if let Some(original_author) =
+                                original_line_to_author.get(*line_content)
+                            {
                                 // Update all char attributions on this line
                                 // Find the char range for this line
                                 let line_start_char: usize = final_lines[..line_idx]
@@ -1100,12 +1106,12 @@ fn transform_attributions_to_final_state(
                                     .map(|l| l.len() + 1) // +1 for newline
                                     .sum();
                                 let line_end_char = line_start_char + line_content.len();
-                                
+
                                 // Update attributions that overlap with this line
                                 for attr in &mut transformed_attrs {
-                                    if attr.author_id == dummy_author 
-                                        && attr.start < line_end_char 
-                                        && attr.end > line_start_char 
+                                    if attr.author_id == dummy_author
+                                        && attr.start < line_end_char
+                                        && attr.end > line_start_char
                                     {
                                         attr.author_id = original_author.clone();
                                     }
