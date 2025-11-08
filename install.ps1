@@ -195,14 +195,24 @@ $os = 'windows'
 
 # Determine binary name and download URLs
 $binaryName = "git-ai-$os-$arch"
-$downloadUrlExe = "https://github.com/$Repo/releases/latest/download/$binaryName.exe"
-$downloadUrlNoExt = "https://github.com/$Repo/releases/latest/download/$binaryName"
+$releaseTag = $env:GIT_AI_RELEASE_TAG
+if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+    $releaseTag = 'latest'
+}
+
+if ($releaseTag -eq 'latest') {
+    $downloadUrlExe = "https://github.com/$Repo/releases/latest/download/$binaryName.exe"
+    $downloadUrlNoExt = "https://github.com/$Repo/releases/latest/download/$binaryName"
+} else {
+    $downloadUrlExe = "https://github.com/$Repo/releases/download/$releaseTag/$binaryName.exe"
+    $downloadUrlNoExt = "https://github.com/$Repo/releases/download/$releaseTag/$binaryName"
+}
 
 # Install directory: %USERPROFILE%\.git-ai\bin
 $installDir = Join-Path $HOME ".git-ai\bin"
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-Write-Host 'Downloading git-ai...'
+Write-Host ("Downloading git-ai (release: {0})..." -f $releaseTag)
 $tmpFile = Join-Path $installDir "git-ai.tmp.$PID.exe"
 
 function Try-Download {
@@ -287,7 +297,13 @@ try {
     $configJsonPath = Join-Path $configDir 'config.json'
     New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
-    $cfg = @{ git_path = $stdGitPath; ignore_prompts = $false } | ConvertTo-Json -Compress
+    $cfg = @{
+        git_path = $stdGitPath
+        ignore_prompts = $false
+        disable_version_checks = $false
+        disable_auto_updates = $false
+        update_channel = 'latest'
+    } | ConvertTo-Json -Compress
     $cfg | Out-File -FilePath $configJsonPath -Encoding UTF8 -Force
 } catch {
     Write-Host "Warning: Failed to write config.json: $($_.Exception.Message)" -ForegroundColor Yellow

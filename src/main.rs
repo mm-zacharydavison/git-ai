@@ -20,8 +20,6 @@ struct Cli {
 }
 
 fn main() {
-    // TODO Move this into async
-    commands::upgrade::check_for_updates();
     // Get the binary name that was called
     let binary_name = std::env::args_os()
         .next()

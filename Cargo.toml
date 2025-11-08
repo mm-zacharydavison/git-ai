@@ -21,7 +21,6 @@ git2 = { version = "0.20.2", optional = true }
 diff-match-patch-rs = "0.5.1"
 strsim = "0.11.1"
 jsonc-parser = { version = "0.27", features = ["cst"] }
-ureq = { version = "2.10", default-features = false, features = ["json", "tls"] }
 dirs = "5.0"
 minreq = { version = "2.12", features = ["https-rustls"] }
 url = "2.5"
@@ -39,4 +38,3 @@ insta = "1.38"
 rand = "0.8"
 regex = "1.10"
 filetime = "0.2"
-mockito = "1.5"

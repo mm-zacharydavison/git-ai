@@ -132,8 +132,8 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
                     .collect();
 
                 // Split into committed (authorship log) and uncommitted (INITIAL)
-                let (mut authorship_log, _initial_attributions) =
-                    working_va.to_authorship_log_and_initial_working_log(
+                let (mut authorship_log, _initial_attributions) = working_va
+                    .to_authorship_log_and_initial_working_log(
                         repo,
                         commit_hash,
                         child_commit,

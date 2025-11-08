@@ -144,8 +144,14 @@ esac
 # Determine binary name
 BINARY_NAME="git-ai-${OS}-${ARCH}"
 
-# Download URL
-DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
+# Determine release tag (defaults to latest but can be overridden)
+RELEASE_TAG="${GIT_AI_RELEASE_TAG:-latest}"
+if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "latest" ]; then
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${BINARY_NAME}"
+else
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
+    RELEASE_TAG="latest"
+fi
 
 # Install into the user's bin directory ~/.git-ai/bin
 INSTALL_DIR="$HOME/.git-ai/bin"
@@ -154,7 +160,7 @@ INSTALL_DIR="$HOME/.git-ai/bin"
 mkdir -p "$INSTALL_DIR"
 
 # Download and install
-echo "Downloading git-ai..."
+echo "Downloading git-ai (release: ${RELEASE_TAG})..."
 TMP_FILE="${INSTALL_DIR}/git-ai.tmp.$$"
 if ! curl --fail --location --silent --show-error -o "$TMP_FILE" "$DOWNLOAD_URL"; then
     rm -f "$TMP_FILE" 2>/dev/null || true
@@ -204,7 +210,10 @@ TMP_CFG="$CONFIG_JSON_PATH.tmp.$$"
 cat >"$TMP_CFG" <<EOF
 {
   "git_path": "${STD_GIT_PATH}",
-  "ignore_prompts": false
+  "ignore_prompts": false,
+  "disable_version_checks": false,
+  "disable_auto_updates": false,
+  "update_channel": "latest"
 }
 EOF
 mv -f "$TMP_CFG" "$CONFIG_JSON_PATH"

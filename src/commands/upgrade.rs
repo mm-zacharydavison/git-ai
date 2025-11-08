@@ -1,11 +1,24 @@
+use crate::config::{self, UpdateChannel};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const GITHUB_REPO: &str = "acunniffe/git-ai";
 const UPDATE_CHECK_INTERVAL_HOURS: u64 = 24;
-const INSTALL_SCRIPT_URL: &str = "https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh";
+const INSTALL_SCRIPT_URL: &str =
+    "https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh";
+#[cfg(windows)]
+const INSTALL_SCRIPT_PS1_URL: &str =
+    "https://raw.githubusercontent.com/acunniffe/git-ai/main/install.ps1";
+const RELEASES_API_URL: &str = "https://usegitai.com/api/releases";
+const GIT_AI_RELEASE_ENV: &str = "GIT_AI_RELEASE_TAG";
+const BACKGROUND_ENV: &str = "GIT_AI_BACKGROUND";
+const BACKGROUND_SPAWN_THROTTLE_SECS: u64 = 60;
+
+static UPDATE_NOTICE_EMITTED: AtomicBool = AtomicBool::new(false);
+static LAST_BACKGROUND_SPAWN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, PartialEq)]
 enum UpgradeAction {
@@ -13,6 +26,45 @@ enum UpgradeAction {
     AlreadyLatest,
     RunningNewerVersion,
     ForceReinstall,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelRelease {
+    tag: String,
+    semver: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpdateCache {
+    last_checked_at: u64,
+    available_tag: Option<String>,
+    available_semver: Option<String>,
+    channel: String,
+}
+
+impl UpdateCache {
+    fn new(channel: UpdateChannel) -> Self {
+        Self {
+            last_checked_at: 0,
+            available_tag: None,
+            available_semver: None,
+            channel: channel.as_str().to_string(),
+        }
+    }
+
+    fn update_available(&self) -> bool {
+        self.available_semver.is_some()
+    }
+
+    fn matches_channel(&self, channel: UpdateChannel) -> bool {
+        self.channel == channel.as_str()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleasesResponse {
+    latest: String,
+    next: String,
 }
 
 fn get_update_check_cache_path() -> Option<PathBuf> {
@@ -26,64 +78,197 @@ fn get_update_check_cache_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".git-ai").join(".update_check"))
 }
 
-fn should_check_for_updates() -> bool {
-    let cache_path = match get_update_check_cache_path() {
-        Some(path) => path,
-        None => return true,
-    };
-
-    if !cache_path.exists() {
-        return true;
-    }
-
-    let metadata = match fs::metadata(&cache_path) {
-        Ok(m) => m,
-        Err(_) => return true,
-    };
-
-    let modified = match metadata.modified() {
-        Ok(m) => m,
-        Err(_) => return true,
-    };
-
-    let elapsed = SystemTime::now()
-        .duration_since(modified)
-        .unwrap_or(Duration::from_secs(0));
-
-    elapsed.as_secs() > UPDATE_CHECK_INTERVAL_HOURS * 3600
+fn read_update_cache() -> Option<UpdateCache> {
+    let path = get_update_check_cache_path()?;
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
-fn update_check_cache() {
-    if let Some(cache_path) = get_update_check_cache_path() {
-        if let Some(parent) = cache_path.parent() {
+fn write_update_cache(cache: &UpdateCache) {
+    if let Some(path) = get_update_check_cache_path() {
+        if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = fs::write(&cache_path, "");
+        if let Ok(json) = serde_json::to_vec(cache) {
+            let _ = fs::write(path, json);
+        }
     }
 }
 
-fn is_newer_version(latest: &str, current: &str) -> bool {
-    let parse_version = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|s| s.parse::<u32>().ok())
-            .collect()
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_secs()
+}
+
+fn should_check_for_updates(cache: Option<&UpdateCache>) -> bool {
+    let now = current_timestamp();
+    match cache {
+        Some(cache) if cache.last_checked_at > 0 => {
+            let elapsed = now.saturating_sub(cache.last_checked_at);
+            elapsed > UPDATE_CHECK_INTERVAL_HOURS * 3600
+        }
+        _ => true,
+    }
+}
+
+fn semver_from_tag(tag: &str) -> String {
+    let trimmed = tag.trim().trim_start_matches('v');
+    trimmed
+        .split(|c| c == '-' || c == '+')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+fn determine_action(force: bool, release: &ChannelRelease, current_version: &str) -> UpgradeAction {
+    if force {
+        return UpgradeAction::ForceReinstall;
+    }
+
+    if release.semver == current_version {
+        UpgradeAction::AlreadyLatest
+    } else if is_newer_version(&release.semver, current_version) {
+        UpgradeAction::UpgradeAvailable
+    } else {
+        UpgradeAction::RunningNewerVersion
+    }
+}
+
+fn persist_update_state(channel: UpdateChannel, release: Option<&ChannelRelease>) {
+    let mut cache = UpdateCache::new(channel);
+    cache.last_checked_at = current_timestamp();
+    if let Some(release) = release {
+        cache.available_tag = Some(release.tag.clone());
+        cache.available_semver = Some(release.semver.clone());
+    }
+    write_update_cache(&cache);
+}
+
+fn releases_endpoint(base: Option<&str>) -> String {
+    base.map(|b| format!("{}/releases", b.trim_end_matches('/')))
+        .unwrap_or_else(|| RELEASES_API_URL.to_string())
+}
+
+fn fetch_release_for_channel(
+    api_base_url: Option<&str>,
+    channel: UpdateChannel,
+) -> Result<ChannelRelease, String> {
+    #[cfg(test)]
+    if let Some(result) = try_mock_releases(api_base_url, channel) {
+        return result;
+    }
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    let url = releases_endpoint(api_base_url);
+    let response = minreq::get(&url)
+        .with_header("User-Agent", format!("git-ai/{}", current_version))
+        .with_timeout(5)
+        .send()
+        .map_err(|e| format!("Failed to check for updates: {}", e))?;
+
+    let body = response.as_str()
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+    let releases: ReleasesResponse = serde_json::from_str(body)
+        .map_err(|e| format!("Failed to parse release response: {}", e))?;
+
+    release_from_response(releases, channel)
+}
+
+fn release_from_response(
+    releases: ReleasesResponse,
+    channel: UpdateChannel,
+) -> Result<ChannelRelease, String> {
+    let tag_raw = match channel {
+        UpdateChannel::Latest => releases.latest,
+        UpdateChannel::Next => releases.next,
     };
 
-    let latest_parts = parse_version(latest);
-    let current_parts = parse_version(current);
+    let tag = tag_raw.trim().to_string();
+    if tag.is_empty() {
+        return Err("Release tag not found in response".to_string());
+    }
 
-    for i in 0..latest_parts.len().max(current_parts.len()) {
-        let latest_part = latest_parts.get(i).copied().unwrap_or(0);
-        let current_part = current_parts.get(i).copied().unwrap_or(0);
+    let semver = semver_from_tag(&tag);
+    if semver.is_empty() {
+        return Err(format!("Unable to parse semver from tag '{}'", tag));
+    }
 
-        if latest_part > current_part {
-            return true;
-        } else if latest_part < current_part {
-            return false;
+    Ok(ChannelRelease { tag, semver })
+}
+
+#[cfg(test)]
+fn try_mock_releases(
+    api_base_url: Option<&str>,
+    channel: UpdateChannel,
+) -> Option<Result<ChannelRelease, String>> {
+    let base = api_base_url?;
+    let json = base.strip_prefix("mock://")?;
+    Some(
+        serde_json::from_str::<ReleasesResponse>(json)
+            .map_err(|e| format!("Invalid mock releases payload: {}", e))
+            .and_then(|releases| release_from_response(releases, channel)),
+    )
+}
+
+fn run_install_script_for_tag(tag: &str, silent: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("powershell");
+        cmd.arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(format!("irm {} | iex", INSTALL_SCRIPT_PS1_URL))
+            .env(GIT_AI_RELEASE_ENV, tag);
+
+        if silent {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+
+        match cmd.status() {
+            Ok(status) => {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Installation script failed with exit code: {:?}",
+                        status.code()
+                    ))
+                }
+            }
+            Err(e) => Err(format!("Failed to run installation script: {}", e)),
         }
     }
 
-    false
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c")
+            .arg(format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL))
+            .env(GIT_AI_RELEASE_ENV, tag);
+
+        if silent {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+
+        match cmd.status() {
+            Ok(status) => {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Installation script failed with exit code: {:?}",
+                        status.code()
+                    ))
+                }
+            }
+            Err(e) => {
+                Err(format!("Failed to run installation script: {}", e))
+            }
+        }
+    }
 }
 
 pub fn run_with_args(args: &[String]) {
@@ -104,66 +289,43 @@ pub fn run_with_args(args: &[String]) {
 }
 
 fn run_impl(force: bool) {
-    let _ = run_impl_with_url(force, None);
+    let config = config::Config::get();
+    let channel = config.update_channel();
+    let skip_install =
+        std::env::var(BACKGROUND_ENV).as_deref() == Ok("1") && config.auto_updates_disabled();
+    let _ = run_impl_with_url(force, None, channel, skip_install);
 }
 
-fn run_impl_with_url(force: bool, api_base_url: Option<&str>) -> UpgradeAction {
+fn run_impl_with_url(
+    force: bool,
+    api_base_url: Option<&str>,
+    channel: UpdateChannel,
+    skip_install: bool,
+) -> UpgradeAction {
     let current_version = env!("CARGO_PKG_VERSION");
 
-    println!("Checking for updates...");
+    println!("Checking for updates (channel: {})...", channel.as_str());
 
-    let url = if let Some(base_url) = api_base_url {
-        format!("{}/repos/{}/releases/latest", base_url, GITHUB_REPO)
-    } else {
-        format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            GITHUB_REPO
-        )
-    };
-
-    let response = match ureq::get(&url)
-        .set("User-Agent", &format!("git-ai/{}", current_version))
-        .timeout(std::time::Duration::from_secs(5))
-        .call()
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            eprintln!("Failed to check for updates: {}", e);
+    let release = match fetch_release_for_channel(api_base_url, channel) {
+        Ok(release) => release,
+        Err(err) => {
+            eprintln!("{}", err);
             std::process::exit(1);
         }
     };
-
-    let json: serde_json::Value = match response.into_json() {
-        Ok(j) => j,
-        Err(e) => {
-            eprintln!("Failed to parse GitHub API response: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let latest_version = match json["tag_name"].as_str() {
-        Some(v) => v.trim_start_matches('v'),
-        None => {
-            eprintln!("Failed to get version from GitHub API response");
-            std::process::exit(1);
-        }
-    };
-
-    update_check_cache();
 
     println!("Current version: v{}", current_version);
-    println!("Latest version:  v{}", latest_version);
+    println!(
+        "Available {} version: v{} (tag {})",
+        channel.as_str(),
+        release.semver,
+        release.tag
+    );
     println!();
 
-    let action = if force {
-        UpgradeAction::ForceReinstall
-    } else if latest_version == current_version {
-        UpgradeAction::AlreadyLatest
-    } else if is_newer_version(latest_version, current_version) {
-        UpgradeAction::UpgradeAvailable
-    } else {
-        UpgradeAction::RunningNewerVersion
-    };
+    let action = determine_action(force, &release, current_version);
+    let cache_release = matches!(action, UpgradeAction::UpgradeAvailable);
+    persist_update_state(channel, cache_release.then_some(&release));
 
     match action {
         UpgradeAction::AlreadyLatest => {
@@ -174,50 +336,38 @@ fn run_impl_with_url(force: bool, api_base_url: Option<&str>) -> UpgradeAction {
             return action;
         }
         UpgradeAction::RunningNewerVersion => {
-            println!("You are running a newer version than the latest release.");
+            println!("You are running a newer version than the selected release channel.");
             println!("(This usually means you're running a development build)");
             println!();
-            println!("To reinstall the latest release version anyway, run:");
+            println!("To reinstall the selected release anyway, run:");
             println!("  \x1b[1;36mgit-ai upgrade --force\x1b[0m");
             return action;
         }
         UpgradeAction::ForceReinstall => {
-            println!("\x1b[1;33mForce mode enabled - reinstalling v{}\x1b[0m", latest_version);
+            println!(
+                "\x1b[1;33mForce mode enabled - reinstalling {}\x1b[0m",
+                release.tag
+            );
         }
         UpgradeAction::UpgradeAvailable => {
             println!("\x1b[1;33mA new version is available!\x1b[0m");
         }
-        _ => {}
     }
     println!();
 
-    // Skip installation if api_base_url is provided (test mode)
-    if api_base_url.is_some() {
+    if api_base_url.is_some() || skip_install {
         return action;
     }
 
     println!("Running installation script...");
     println!();
 
-    // Run the install script via curl | bash
-    let status = Command::new("bash")
-        .arg("-c")
-        .arg(format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL))
-        .status();
-
-    match status {
-        Ok(exit_status) => {
-            if exit_status.success() {
-                println!();
-                println!("\x1b[1;32m✓\x1b[0m Successfully installed v{}!", latest_version);
-            } else {
-                eprintln!();
-                eprintln!("Installation script failed with exit code: {:?}", exit_status.code());
-                std::process::exit(1);
-            }
+    match run_install_script_for_tag(&release.tag, false) {
+        Ok(()) => {
+            println!("\x1b[1;32m✓\x1b[0m Successfully installed {}!", release.tag);
         }
-        Err(e) => {
-            eprintln!("Failed to run installation script: {}", e);
+        Err(err) => {
+            eprintln!("{}", err);
             std::process::exit(1);
         }
     }
@@ -225,69 +375,114 @@ fn run_impl_with_url(force: bool, api_base_url: Option<&str>) -> UpgradeAction {
     action
 }
 
-pub fn check_for_updates() {
-    check_for_updates_with_url(None);
-}
+fn emit_cached_notice(cache: &UpdateCache) {
+    if cache.available_semver.is_none() || cache.available_tag.is_none() {
+        return;
+    }
 
-fn check_for_updates_with_url(api_base_url: Option<&str>) {
-    if !should_check_for_updates() {
+    if UPDATE_NOTICE_EMITTED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return;
     }
 
     let current_version = env!("CARGO_PKG_VERSION");
+    let available_version = cache.available_semver.as_deref().unwrap_or("");
 
-    let url = if let Some(base_url) = api_base_url {
-        format!("{}/repos/{}/releases/latest", base_url, GITHUB_REPO)
-    } else {
-        format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            GITHUB_REPO
-        )
-    };
+    eprintln!();
+    eprintln!(
+        "\x1b[1;33mA new version of git-ai is available: \x1b[1;32mv{}\x1b[0m → \x1b[1;32mv{}\x1b[0m",
+        current_version, available_version
+    );
+    eprintln!(
+        "\x1b[1;33mRun \x1b[1;36mgit-ai upgrade\x1b[0m \x1b[1;33mto upgrade to the latest version.\x1b[0m"
+    );
+    eprintln!();
+}
 
-    let response = match ureq::get(&url)
-        .set("User-Agent", &format!("git-ai/{}", current_version))
-        .timeout(std::time::Duration::from_secs(3))
-        .call()
-    {
-        Ok(resp) => resp,
-        Err(_) => {
-            return;
-        }
-    };
-
-    let json: serde_json::Value = match response.into_json() {
-        Ok(j) => j,
-        Err(_) => {
-            return;
-        }
-    };
-
-    let latest_version = match json["tag_name"].as_str() {
-        Some(v) => v.trim_start_matches('v'),
-        None => {
-            return;
-        }
-    };
-
-    update_check_cache();
-
-    if latest_version != current_version && is_newer_version(latest_version, current_version) {
-        eprintln!();
-        eprintln!(
-            "\x1b[1;33mA new version of git-ai is available: \x1b[1;32mv{}\x1b[0m → \x1b[1;32mv{}\x1b[0m",
-            current_version, latest_version
-        );
-        eprintln!(
-            "\x1b[1;33mRun \x1b[1;36mgit-ai upgrade\x1b[0m \x1b[1;33mto upgrade to the latest version.\x1b[0m"
-        );
-        eprintln!();
+pub fn maybe_schedule_background_update_check() {
+    let config = config::Config::get();
+    if config.version_checks_disabled() {
+        return;
     }
+
+    let channel = config.update_channel();
+    let cache = read_update_cache();
+
+    if config.auto_updates_disabled() {
+        if let Some(cache) = cache.as_ref() {
+            if cache.matches_channel(channel) && cache.update_available() {
+                emit_cached_notice(cache);
+            }
+        }
+    }
+
+    if !should_check_for_updates(cache.as_ref()) {
+        return;
+    }
+
+    let now = current_timestamp();
+    let last_spawn = LAST_BACKGROUND_SPAWN.load(Ordering::SeqCst);
+    if now.saturating_sub(last_spawn) < BACKGROUND_SPAWN_THROTTLE_SECS {
+        return;
+    }
+
+    if spawn_background_upgrade_process() {
+        LAST_BACKGROUND_SPAWN.store(now, Ordering::SeqCst);
+    }
+}
+
+fn spawn_background_upgrade_process() -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            let mut cmd = Command::new(exe);
+            cmd.arg("upgrade")
+                .env(BACKGROUND_ENV, "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd.spawn().is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse_version =
+        |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse::<u32>().ok()).collect() };
+
+    let latest_parts = parse_version(latest);
+    let current_parts = parse_version(current);
+
+    for i in 0..latest_parts.len().max(current_parts.len()) {
+        let latest_part = latest_parts.get(i).copied().unwrap_or(0);
+        let current_part = current_parts.get(i).copied().unwrap_or(0);
+
+        if latest_part > current_part {
+            return true;
+        } else if latest_part < current_part {
+            return false;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn set_test_cache_dir(dir: &tempfile::TempDir) {
+        unsafe {
+            std::env::set_var("GIT_AI_TEST_CACHE_DIR", dir.path());
+        }
+    }
+
+    fn clear_test_cache_dir() {
+        unsafe {
+            std::env::remove_var("GIT_AI_TEST_CACHE_DIR");
+        }
+    }
 
     #[test]
     fn test_is_newer_version() {
@@ -315,101 +510,89 @@ mod tests {
     }
 
     #[test]
-    fn test_run_impl_with_url() {
-        let _temp_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("GIT_AI_TEST_CACHE_DIR", _temp_dir.path());
-        }
-
-        let mut server = mockito::Server::new();
-
-        // Newer version available - should upgrade
-        let mock = server
-            .mock("GET", "/repos/acunniffe/git-ai/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v999.0.0"}"#)
-            .create();
-        let action = run_impl_with_url(false, Some(&server.url()));
-        assert_eq!(action, UpgradeAction::UpgradeAvailable);
-        mock.assert();
-
-        // Same version without --force - already latest
-        let mock = server
-            .mock("GET", "/repos/acunniffe/git-ai/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v1.0.10"}"#)
-            .create();
-        let action = run_impl_with_url(false, Some(&server.url()));
-        assert_eq!(action, UpgradeAction::AlreadyLatest);
-        mock.assert();
-
-        // Same version with --force - force reinstall
-        let mock = server
-            .mock("GET", "/repos/acunniffe/git-ai/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v1.0.10"}"#)
-            .create();
-        let action = run_impl_with_url(true, Some(&server.url()));
-        assert_eq!(action, UpgradeAction::ForceReinstall);
-        mock.assert();
-
-        // Older version without --force - running newer version
-        let mock = server
-            .mock("GET", "/repos/acunniffe/git-ai/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v1.0.9"}"#)
-            .create();
-        let action = run_impl_with_url(false, Some(&server.url()));
-        assert_eq!(action, UpgradeAction::RunningNewerVersion);
-        mock.assert();
-
-        // Older version with --force - force reinstall
-        let mock = server
-            .mock("GET", "/repos/acunniffe/git-ai/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v1.0.9"}"#)
-            .create();
-        let action = run_impl_with_url(true, Some(&server.url()));
-        assert_eq!(action, UpgradeAction::ForceReinstall);
-        mock.assert();
-
-        unsafe {
-            std::env::remove_var("GIT_AI_TEST_CACHE_DIR");
-        }
+    fn test_semver_from_tag_strips_prefix_and_suffix() {
+        assert_eq!(semver_from_tag("v1.2.3"), "1.2.3");
+        assert_eq!(semver_from_tag("1.2.3"), "1.2.3");
+        assert_eq!(semver_from_tag("v1.2.3-next-abc"), "1.2.3");
     }
 
     #[test]
-    fn test_check_for_updates() {
+    fn test_run_impl_with_url() {
         let temp_dir = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("GIT_AI_TEST_CACHE_DIR", temp_dir.path());
-        }
+        set_test_cache_dir(&temp_dir);
 
-        let mut server = mockito::Server::new();
+        let mock_url = |body: &str| format!("mock://{}", body);
+        let current = env!("CARGO_PKG_VERSION");
 
-        let mock = server
-            .mock("GET", "/repos/acunniffe/git-ai/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v999.0.0"}"#)
-            .expect(1)  // Expect exactly 1 call total
-            .create();
+        // Newer version available - should upgrade
+        let action = run_impl_with_url(
+            false,
+            Some(&mock_url(
+                r#"{"latest":"v999.0.0","next":"v999.0.0-next-deadbeef"}"#,
+            )),
+            UpdateChannel::Latest,
+            false,
+        );
+        assert_eq!(action, UpgradeAction::UpgradeAvailable);
 
-        // No cache exists - should make API call
-        check_for_updates_with_url(Some(&server.url()));
-        mock.assert();
+        // Same version without --force - already latest
+        let same_version_payload = format!(
+            "{{\"latest\":\"v{}\",\"next\":\"v{}-next-deadbeef\"}}",
+            current, current
+        );
+        let action = run_impl_with_url(
+            false,
+            Some(&mock_url(&same_version_payload)),
+            UpdateChannel::Latest,
+            false,
+        );
+        assert_eq!(action, UpgradeAction::AlreadyLatest);
 
-        // Cache exists - should not make API call
-        check_for_updates_with_url(Some(&server.url()));
-        mock.assert();
+        // Same version with --force - force reinstall
+        let action = run_impl_with_url(
+            true,
+            Some(&mock_url(&same_version_payload)),
+            UpdateChannel::Latest,
+            false,
+        );
+        assert_eq!(action, UpgradeAction::ForceReinstall);
 
-        unsafe {
-            std::env::remove_var("GIT_AI_TEST_CACHE_DIR");
-        }
+        // Older version without --force - running newer version
+        let action = run_impl_with_url(
+            false,
+            Some(&mock_url(
+                r#"{"latest":"v1.0.9","next":"v1.0.9-next-deadbeef"}"#,
+            )),
+            UpdateChannel::Latest,
+            false,
+        );
+        assert_eq!(action, UpgradeAction::RunningNewerVersion);
+
+        // Older version with --force - force reinstall
+        let action = run_impl_with_url(
+            true,
+            Some(&mock_url(
+                r#"{"latest":"v1.0.9","next":"v1.0.9-next-deadbeef"}"#,
+            )),
+            UpdateChannel::Latest,
+            false,
+        );
+        assert_eq!(action, UpgradeAction::ForceReinstall);
+
+        clear_test_cache_dir();
+    }
+
+    #[test]
+    fn test_should_check_for_updates_respects_interval() {
+        let now = current_timestamp();
+        let mut cache = UpdateCache::new(UpdateChannel::Latest);
+        cache.last_checked_at = now;
+        assert!(!should_check_for_updates(Some(&cache)));
+
+        let stale_offset = (UPDATE_CHECK_INTERVAL_HOURS * 3600) + 10;
+        cache.last_checked_at = now.saturating_sub(stale_offset);
+        assert!(should_check_for_updates(Some(&cache)));
+
+        assert!(should_check_for_updates(None));
     }
 }
