@@ -305,6 +305,34 @@ pub fn rewrite_authorship_after_rebase_v2(
         new_commits.len()
     ));
 
+    // Filter out commits that already have authorship logs (these are commits from the target branch)
+    // Only process newly created rebased commits
+    let commits_to_process: Vec<String> = new_commits
+        .iter()
+        .filter(|commit| {
+            let has_log = get_reference_as_authorship_log_v3(repo, commit).is_ok();
+            if has_log {
+                debug_log(&format!(
+                    "Skipping commit {} (already has authorship log)",
+                    commit
+                ));
+            }
+            !has_log
+        })
+        .cloned()
+        .collect();
+
+    if commits_to_process.is_empty() {
+        debug_log("No new commits to process (all commits already have authorship logs)");
+        return Ok(());
+    }
+
+    debug_log(&format!(
+        "Processing {} newly created commits (skipped {} existing commits)",
+        commits_to_process.len(),
+        new_commits.len() - commits_to_process.len()
+    ));
+
     // Step 2: Create VirtualAttributions from original_head (before rebase)
     let repo_clone = repo.clone();
     let original_head_clone = original_head.to_string();
@@ -344,11 +372,11 @@ pub fn rewrite_authorship_after_rebase_v2(
     };
 
     // Step 3: Process each new commit in order (oldest to newest)
-    for (idx, new_commit) in new_commits.iter().enumerate() {
+    for (idx, new_commit) in commits_to_process.iter().enumerate() {
         debug_log(&format!(
             "Processing commit {}/{}: {}",
             idx + 1,
-            new_commits.len(),
+            commits_to_process.len(),
             new_commit
         ));
 
