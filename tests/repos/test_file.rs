@@ -728,7 +728,9 @@ impl<'a> TestFile<'a> {
         let contents = self.contents();
         fs::write(&self.file_path, contents).unwrap();
         let _ = if author_type == &AuthorType::Ai {
-            self.repo.git_ai(&["checkpoint", "mock_ai"])
+            let a = self.repo.git_ai(&["checkpoint", "mock_ai"]);
+            println!("checkpoint result: {:?}", a);
+            a
         } else {
             self.repo.git_ai(&["checkpoint"])
         };
