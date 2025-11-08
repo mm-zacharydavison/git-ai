@@ -1,11 +1,9 @@
-use crate::authorship::attribution_tracker::LineAttribution;
 use crate::authorship::authorship_log::{Author, LineRange, PromptRecord};
-use crate::authorship::working_log::{Checkpoint, CheckpointKind};
-use crate::config;
+use crate::authorship::working_log::CheckpointKind;
 use crate::git::repository::Repository;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -124,140 +122,6 @@ impl AuthorshipLog {
             attestations: Vec::new(),
             metadata: AuthorshipMetadata::new(),
         }
-    }
-
-    /// Filter authorship log to keep only committed line ranges
-    ///
-    /// This keeps only attributions for lines that were actually committed, removing everything else.
-    /// This is the inverse of filter_unstaged_lines - instead of removing unstaged, we keep only committed.
-    ///
-    /// # Arguments
-    /// * `committed_hunks` - Map of file paths to their committed line ranges
-    pub fn filter_to_committed_lines(&mut self, committed_hunks: &HashMap<String, Vec<LineRange>>) {
-        for file_attestation in &mut self.attestations {
-            if let Some(committed_ranges) = committed_hunks.get(&file_attestation.file_path) {
-                // For each attestation entry, keep only the lines that were committed
-                for entry in &mut file_attestation.entries {
-                    // Expand entry's line ranges to individual lines
-                    let mut entry_lines: Vec<u32> = Vec::new();
-                    for range in &entry.line_ranges {
-                        entry_lines.extend(range.expand());
-                    }
-
-                    // Keep only lines that are in committed ranges
-                    let mut committed_lines: Vec<u32> = Vec::new();
-                    for line in entry_lines {
-                        if committed_ranges.iter().any(|range| range.contains(line)) {
-                            committed_lines.push(line);
-                        }
-                    }
-
-                    if !committed_lines.is_empty() {
-                        committed_lines.sort_unstable();
-                        committed_lines.dedup();
-                        entry.line_ranges = LineRange::compress_lines(&committed_lines);
-                    } else {
-                        entry.line_ranges.clear();
-                    }
-                }
-
-                // Remove entries that have no line ranges left
-                file_attestation
-                    .entries
-                    .retain(|entry| !entry.line_ranges.is_empty());
-            } else {
-                // No committed lines for this file, remove all entries
-                file_attestation.entries.clear();
-            }
-        }
-
-        // Remove file attestations that have no entries left
-        self.attestations.retain(|file| !file.entries.is_empty());
-    }
-
-    /// Merge overlapping and adjacent line ranges
-    fn merge_line_ranges(ranges: &[LineRange]) -> Vec<LineRange> {
-        if ranges.is_empty() {
-            return Vec::new();
-        }
-
-        let mut sorted_ranges = ranges.to_vec();
-        sorted_ranges.sort_by(|a, b| {
-            let a_start = match a {
-                LineRange::Single(line) => *line,
-                LineRange::Range(start, _) => *start,
-            };
-            let b_start = match b {
-                LineRange::Single(line) => *line,
-                LineRange::Range(start, _) => *start,
-            };
-            a_start.cmp(&b_start)
-        });
-
-        let mut merged = Vec::new();
-        for current in sorted_ranges {
-            if let Some(last) = merged.last_mut() {
-                if Self::ranges_can_merge(last, &current) {
-                    *last = Self::merge_ranges(last, &current);
-                } else {
-                    merged.push(current);
-                }
-            } else {
-                merged.push(current);
-            }
-        }
-
-        merged
-    }
-
-    /// Check if two ranges can be merged (overlapping or adjacent)
-    fn ranges_can_merge(range1: &LineRange, range2: &LineRange) -> bool {
-        let (start1, end1) = match range1 {
-            LineRange::Single(line) => (*line, *line),
-            LineRange::Range(start, end) => (*start, *end),
-        };
-        let (start2, end2) = match range2 {
-            LineRange::Single(line) => (*line, *line),
-            LineRange::Range(start, end) => (*start, *end),
-        };
-
-        // Ranges can merge if they overlap or are adjacent
-        start1 <= end2 + 1 && start2 <= end1 + 1
-    }
-
-    /// Merge two ranges into one
-    fn merge_ranges(range1: &LineRange, range2: &LineRange) -> LineRange {
-        let (start1, end1) = match range1 {
-            LineRange::Single(line) => (*line, *line),
-            LineRange::Range(start, end) => (*start, *end),
-        };
-        let (start2, end2) = match range2 {
-            LineRange::Single(line) => (*line, *line),
-            LineRange::Range(start, end) => (*start, *end),
-        };
-
-        let start = start1.min(start2);
-        let end = end1.max(end2);
-
-        if start == end {
-            LineRange::Single(start)
-        } else {
-            LineRange::Range(start, end)
-        }
-    }
-
-    fn collect_latest_line_attributions(
-        checkpoints: &[Checkpoint],
-    ) -> HashMap<String, Vec<LineAttribution>> {
-        let mut latest_by_file: HashMap<String, Vec<LineAttribution>> = HashMap::new();
-
-        for checkpoint in checkpoints {
-            for entry in &checkpoint.entries {
-                latest_by_file.insert(entry.file.clone(), entry.line_attributions.clone());
-            }
-        }
-
-        latest_by_file
     }
 
     pub fn get_or_create_file(&mut self, file: &str) -> &mut FileAttestation {
@@ -758,14 +622,6 @@ pub fn generate_short_hash(agent_id: &str, tool: &str) -> String {
     let result = hasher.finalize();
     // Take first 7 characters of the hex representation
     format!("{:x}", result)[..7].to_string()
-}
-
-/// Count the number of lines represented by a LineRange
-fn count_line_range(range: &LineRange) -> u32 {
-    match range {
-        LineRange::Single(_) => 1,
-        LineRange::Range(start, end) => end - start + 1,
-    }
 }
 
 #[cfg(test)]
