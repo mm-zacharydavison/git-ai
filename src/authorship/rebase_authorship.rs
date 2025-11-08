@@ -2,7 +2,7 @@ use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::post_commit;
 use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
-use crate::git::repository::{Commit, Repository};
+use crate::git::repository::Repository;
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::utils::debug_log;
 use std::collections::{HashMap, HashSet};
@@ -630,37 +630,6 @@ pub fn rewrite_authorship_after_cherry_pick(
     }
 
     Ok(())
-}
-
-/// Check if two commits have identical trees
-fn trees_identical(commit1: &Commit, commit2: &Commit) -> Result<bool, GitAiError> {
-    let tree1 = commit1.tree()?;
-    let tree2 = commit2.tree()?;
-    Ok(tree1.id() == tree2.id())
-}
-
-/// Copy authorship log from one commit to another
-fn copy_authorship_log(repo: &Repository, from_sha: &str, to_sha: &str) -> Result<(), GitAiError> {
-    // Try to get the authorship log from the old commit
-    match get_reference_as_authorship_log_v3(repo, from_sha) {
-        Ok(mut log) => {
-            // Update the base_commit_sha to the new commit
-            log.metadata.base_commit_sha = to_sha.to_string();
-
-            // Save to the new commit
-            let authorship_json = log.serialize_to_string().map_err(|_| {
-                GitAiError::Generic("Failed to serialize authorship log".to_string())
-            })?;
-
-            crate::git::refs::notes_add(repo, to_sha, &authorship_json)?;
-            Ok(())
-        }
-        Err(_) => {
-            // No authorship log exists for the old commit, that's ok
-            debug_log(&format!("No authorship log found for {}", from_sha));
-            Ok(())
-        }
-    }
 }
 
 /// Get file contents from a commit tree for specified pathspecs

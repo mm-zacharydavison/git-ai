@@ -2,15 +2,13 @@ use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
 use crate::error::GitAiError;
-use crate::git::cli_parser::ParsedGitInvocation;
-use crate::git::refs::{get_authorship, show_authorship_note};
+use crate::git::refs::get_authorship;
 use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::OnceLock;
 
 pub struct Object<'a> {
     repo: &'a Repository,
@@ -433,6 +431,7 @@ impl<'a> Commit<'a> {
     }
 
     // Get the committer of this commit.
+    #[allow(dead_code)]
     pub fn committer(&self) -> Result<Signature<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("show".to_string());
@@ -456,7 +455,8 @@ impl<'a> Commit<'a> {
     }
 
     // Get the commit time (i.e. committer time) of a commit.
-    // The first element of the tuple is the time, in seconds, since the epoch. The second element is the offset, in minutes, of the time zone of the committer’s preferred time zone.
+    // The first element of the tuple is the time, in seconds, since the epoch. The second element is the offset, in minutes, of the time zone of the committer's preferred time zone.
+    #[allow(dead_code)]
     pub fn time(&self) -> Result<Time, GitAiError> {
         let signature = self.committer()?;
         Ok(signature.when())
@@ -722,6 +722,7 @@ impl<'a> Reference<'a> {
     }
 
     // Peel a reference to a commit This method recursively peels the reference until it reaches a commit.
+    #[allow(dead_code)]
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
         let mut args = self.repo.global_args_for_exec();
         args.push("rev-parse".to_string());
@@ -803,6 +804,7 @@ impl Repository {
     }
 
     /// Execute an arbitrary git command and return stdout as string
+    #[allow(dead_code)]
     pub fn git(&self, args: &[&str]) -> Result<String, GitAiError> {
         let mut full_args = self.global_args_for_exec();
         full_args.extend(args.iter().map(|s| s.to_string()));
@@ -1316,6 +1318,7 @@ impl Repository {
         Ok(remotes.get(0).map(|s| s.to_string()))
     }
 
+    #[allow(dead_code)]
     pub fn fetch_authorship<'a>(&'a self, remote_name: &str) -> Result<(), GitAiError> {
         fetch_authorship_notes(self, remote_name)
     }
@@ -1375,7 +1378,8 @@ impl Repository {
         }
     }
 
-    // Create an iterator for the repo’s references (git2-style)
+    // Create an iterator for the repo's references (git2-style)
+    #[allow(dead_code)]
     pub fn references<'a>(&'a self) -> Result<References<'a>, GitAiError> {
         let mut args = self.global_args_for_exec();
         args.push("for-each-ref".to_string());
@@ -1439,6 +1443,7 @@ impl Repository {
 
     /// Get the content of a file at a specific commit
     /// Uses `git show <commit>:<path>` for efficient single-call retrieval
+    #[allow(dead_code)]
     pub fn get_file_content(
         &self,
         file_path: &str,
@@ -1604,6 +1609,7 @@ impl Repository {
     /// Returns a HashMap of file paths to vectors of added line numbers
     ///
     /// Similar to diff_added_lines but compares against the working directory
+    #[allow(dead_code)]
     pub fn diff_workdir_added_lines(
         &self,
         from_ref: &str,
