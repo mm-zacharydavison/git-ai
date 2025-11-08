@@ -905,6 +905,12 @@ impl Repository {
         Ok(self.workdir.clone())
     }
 
+    /// Get the canonical (absolute, resolved) path of the working directory
+    /// On Windows, this uses the \\?\ UNC prefix format for reliable path comparisons
+    pub fn canonical_workdir(&self) -> &Path {
+        &self.canonical_workdir
+    }
+
     /// Check if a path is within the repository's working directory
     /// Uses canonical path comparison for reliability on Windows
     pub fn path_is_in_workdir(&self, path: &Path) -> bool {

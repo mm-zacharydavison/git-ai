@@ -74,3 +74,28 @@ pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
         println!("  No changes between {} and {}", old_label, new_label);
     }
 }
+
+/// Normalize a path to use POSIX-style forward slashes
+///
+/// Git expects paths with forward slashes, even on Windows. This function
+/// converts any backslashes to forward slashes for cross-platform compatibility.
+///
+/// # Arguments
+///
+/// * `path` - The path string to normalize (e.g., from `Path::to_string_lossy()`)
+///
+/// # Returns
+///
+/// A string with all backslashes replaced by forward slashes
+///
+/// # Example
+///
+/// ```
+/// let path = std::path::Path::new("src\\commands\\checkpoint.rs");
+/// let normalized = normalize_to_posix(&path.to_string_lossy());
+/// assert_eq!(normalized, "src/commands/checkpoint.rs");
+/// ```
+#[inline]
+pub fn normalize_to_posix(path: &str) -> String {
+    path.replace('\\', "/")
+}
