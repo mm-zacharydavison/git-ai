@@ -1059,8 +1059,10 @@ fn transform_attributions_to_final_state(
                                 let line_idx = (line_num as usize).saturating_sub(1);
                                 if line_idx < original_lines.len() {
                                     let line_content = original_lines[line_idx].to_string();
-                                    // Only store if it's not a human attribution (we want to preserve AI attributions)
-                                    if line_attr.author_id != "human" && line_attr.author_id != "Test User" {
+                                    // Store all non-human attributions (AI attributions)
+                                    // VirtualAttributions normalizes humans to "human" via return_human_authors_as_human flag
+                                    // AI authors keep their tool names (mock_ai, Claude, GPT, etc.) or prompt hashes
+                                    if line_attr.author_id != "human" {
                                         original_line_to_author.insert(line_content, line_attr.author_id.clone());
                                     }
                                 }
