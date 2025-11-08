@@ -11,10 +11,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Authorship log format version identifier
 pub const AUTHORSHIP_LOG_VERSION: &str = "authorship/3.0.0";
 
+#[cfg(all(debug_assertions, test))]
+pub const GIT_AI_VERSION: &str = "development";
+
+#[cfg(all(debug_assertions, not(test)))]
+pub const GIT_AI_VERSION: &str = concat!("development:", env!("CARGO_PKG_VERSION"));
+
+#[cfg(not(debug_assertions))]
+pub const GIT_AI_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Metadata section that goes below the divider as JSON
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorshipMetadata {
     pub schema_version: String,
+    pub git_ai_version: Option<String>,
     pub base_commit_sha: String,
     pub prompts: BTreeMap<String, PromptRecord>,
 }
@@ -23,6 +33,7 @@ impl AuthorshipMetadata {
     pub fn new() -> Self {
         Self {
             schema_version: AUTHORSHIP_LOG_VERSION.to_string(),
+            git_ai_version: Some(GIT_AI_VERSION.to_string()),
             base_commit_sha: String::new(),
             prompts: BTreeMap::new(),
         }
