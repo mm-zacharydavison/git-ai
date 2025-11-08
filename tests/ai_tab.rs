@@ -16,13 +16,8 @@ use git_ai::{
 fn run_ai_tab_checkpoint(repo: &TestRepo, hook_payload: serde_json::Value) {
     let hook_input = hook_payload.to_string();
     let args: Vec<&str> = vec!["checkpoint", "ai_tab", "--hook-input", hook_input.as_str()];
-    match repo.git_ai(&args) {
-        Ok(output) => {
-            println!("git_ai checkpoint output: {}", output);
-        }
-        Err(err) => {
-            panic!("ai_tab checkpoint failed: {}", err);
-        }
+    if let Err(err) = repo.git_ai(&args) {
+        panic!("ai_tab checkpoint failed: {}", err);
     }
 }
 
@@ -135,10 +130,7 @@ fn test_ai_tab_after_edit_checkpoint_includes_dirty_files_and_paths() {
     let edited = result
         .edited_filepaths
         .expect("after_edit should include edited filepaths");
-    assert_eq!(
-        edited,
-        vec!["/Users/test/project/src/main.rs".to_string()]
-    );
+    assert_eq!(edited, vec!["/Users/test/project/src/main.rs".to_string()]);
 
     let dirty_files = result
         .dirty_files
@@ -173,7 +165,10 @@ fn test_ai_tab_rejects_invalid_hook_event() {
                 message
             );
         }
-        other => panic!("expected PresetError for invalid hook_event_name, got {:?}", other),
+        other => panic!(
+            "expected PresetError for invalid hook_event_name, got {:?}",
+            other
+        ),
     }
 }
 
@@ -228,7 +223,7 @@ fn test_ai_tab_requires_non_empty_tool_and_model() {
 fn test_ai_tab_e2e_marks_ai_lines() {
     let repo = TestRepo::new();
     let relative_path = "notes_test.ts";
-    let file_path = repo.canonical_path().join(relative_path);
+    let file_path = repo.path().join(relative_path);
 
     let base_content = "console.log(\"hello world\");\n".to_string();
     fs::write(&file_path, &base_content).unwrap();
@@ -243,7 +238,7 @@ fn test_ai_tab_e2e_marks_ai_lines() {
             "hook_event_name": "before_edit",
             "tool": "github-copilot-tab",
             "model": "default",
-            "repo_working_dir": repo.canonical_path().to_string_lossy(),
+            "repo_working_dir": repo.path().to_string_lossy(),
             "will_edit_filepaths": [file_path_str.clone()],
             "dirty_files": {
                 file_path_str.clone(): base_content.clone()
@@ -252,7 +247,9 @@ fn test_ai_tab_e2e_marks_ai_lines() {
     );
 
     // AI tab inserts new lines alongside the existing content
-    let ai_content = "console.log(\"hello world\");\n// Log hello world\nconsole.log(\"hello from ai\");\n".to_string();
+    let ai_content =
+        "console.log(\"hello world\");\n// Log hello world\nconsole.log(\"hello from ai\");\n"
+            .to_string();
     fs::write(&file_path, &ai_content).unwrap();
 
     run_ai_tab_checkpoint(
@@ -261,7 +258,7 @@ fn test_ai_tab_e2e_marks_ai_lines() {
             "hook_event_name": "after_edit",
             "tool": "github-copilot-tab",
             "model": "default",
-            "repo_working_dir": repo.canonical_path().to_string_lossy(),
+            "repo_working_dir": repo.path().to_string_lossy(),
             "edited_filepaths": [file_path_str.clone()],
             "dirty_files": {
                 file_path_str.clone(): ai_content.clone()
@@ -269,7 +266,8 @@ fn test_ai_tab_e2e_marks_ai_lines() {
         }),
     );
 
-    repo.stage_all_and_commit("Accept AI tab completion").unwrap();
+    repo.stage_all_and_commit("Accept AI tab completion")
+        .unwrap();
 
     let mut file = repo.filename(relative_path);
     file.assert_lines_and_blame(lines![
@@ -283,13 +281,13 @@ fn test_ai_tab_e2e_marks_ai_lines() {
 fn test_ai_tab_e2e_handles_dirty_files_map() {
     let repo = TestRepo::new();
     let lib_relative_path = std::path::Path::new("src").join("lib.rs");
-    let lib_file_path = repo.canonical_path().join(lib_relative_path);
+    let lib_file_path = repo.path().join(lib_relative_path);
     // Create parent directory - handle Windows paths safely
     if let Some(parent) = lib_file_path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
     let readme_relative_path = "README.md";
-    let readme_file_path = repo.canonical_path().join(readme_relative_path);
+    let readme_file_path = repo.path().join(readme_relative_path);
 
     let base_lib_content = "fn greet() {\n    println!(\"hello\");\n}\n".to_string();
     fs::write(&lib_file_path, &base_lib_content).unwrap();
@@ -304,9 +302,6 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
     let lib_file_path_str = lib_file_path.to_string_lossy().to_string();
     let readme_file_path_str = readme_file_path.to_string_lossy().to_string();
 
-    println!("lib_file_path_str: {}", lib_file_path_str);
-    println!("readme_file_path_str: {}", readme_file_path_str);
-
     // Before edit snapshot includes all dirty files (AI target plus unrelated human edits)
     run_ai_tab_checkpoint(
         &repo,
@@ -314,7 +309,7 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
             "hook_event_name": "before_edit",
             "tool": "github-copilot-tab",
             "model": "default",
-            "repo_working_dir": repo.canonical_path().to_string_lossy(),
+            "repo_working_dir": repo.path().to_string_lossy(),
             "will_edit_filepaths": [lib_file_path_str.clone()],
             "dirty_files": {
                 lib_file_path_str.clone(): base_lib_content.clone(),
@@ -335,7 +330,7 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
             "hook_event_name": "after_edit",
             "tool": "github-copilot-tab",
             "model": "default",
-            "repo_working_dir": repo.canonical_path().to_string_lossy(),
+            "repo_working_dir": repo.path().to_string_lossy(),
             "edited_filepaths": [lib_file_path_str.clone()],
             "dirty_files": {
                 lib_file_path_str.clone(): ai_content.clone(),
@@ -344,19 +339,8 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
         }),
     );
 
-    // Debug: Check working logs before commit
-    let working_logs = repo.current_working_logs();
-    if let Ok(checkpoints) = working_logs.read_all_checkpoints() {
-        println!("Checkpoints before commit: {}", checkpoints.len());
-        for (i, cp) in checkpoints.iter().enumerate() {
-            println!("Checkpoint {}: kind={:?}, entries={}", i, cp.kind, cp.entries.len());
-            for entry in &cp.entries {
-                println!("  File: {}, attributions={}", entry.file, entry.attributions.len());
-            }
-        }
-    }
-
-    repo.stage_all_and_commit("Record AI tab completion while other files dirty").unwrap();
+    repo.stage_all_and_commit("Record AI tab completion while other files dirty")
+        .unwrap();
 
     let mut file = repo.filename(&std::path::Path::new("src").join("lib.rs").to_string_lossy());
     file.assert_lines_and_blame(lines![
