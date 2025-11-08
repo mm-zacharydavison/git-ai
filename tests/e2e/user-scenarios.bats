@@ -1672,3 +1672,249 @@ EOF
 }
 
 
+@test "interactive rebase with squash preserves authorship" {
+    # Create initial file with base API endpoint structure
+    cat > api_handler.py <<'EOF'
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# API endpoint placeholder
+EOF
+    git add api_handler.py
+    git commit -m "Base commit with initial API structure"
+    
+    # Remember the base commit for validation
+    base_commit_sha=$(git rev-parse HEAD)
+    
+    # COMMIT 1: Human adds 2 lines, AI adds 3 lines
+    
+    # Human adds route definition and error handling
+    cat > api_handler.py <<'EOF'
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+# API endpoint placeholder
+EOF
+    git-ai checkpoint  # Human added 2 lines
+    
+    # AI adds data extraction and basic validation
+    cat > api_handler.py <<'EOF'
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    data = request.get_json()
+    username = data.get('username', '') if data else ''
+    return jsonify({'user': username}), 201
+# API endpoint placeholder
+EOF
+    git-ai checkpoint mock_ai api_handler.py  # AI added 3 lines
+    
+    git add api_handler.py
+    git commit -m "Commit 1: Add user creation endpoint with basic implementation"
+    commit1_sha=$(git rev-parse HEAD)
+    
+    echo "=== Commit 1 Stats ===" >&3
+    stats_commit1=$(get_stats_json "$commit1_sha")
+    echo "$stats_commit1" >&3
+    
+    # Verify Commit 1 stats
+    expected_commit1_json='{
+        "human_additions": 2,
+        "mixed_additions": 0,
+        "ai_additions": 3,
+        "ai_accepted": 3,
+        "total_ai_additions": 3,
+        "total_ai_deletions": 0,
+        "time_waiting_for_ai": 0,
+        "git_diff_deleted_lines": 0,
+        "git_diff_added_lines": 5,
+        "tool_model_breakdown": {
+            "mock_ai::unknown": {
+                "ai_additions": 3,
+                "mixed_additions": 0,
+                "ai_accepted": 3,
+                "total_ai_additions": 3,
+                "total_ai_deletions": 0,
+                "time_waiting_for_ai": 0
+            }
+        }
+    }'
+    
+    compare_json "$expected_commit1_json" "$stats_commit1" "Commit 1 stats mismatch" || return 1
+    echo "✓ Commit 1 stats verified" >&3
+    
+    # COMMIT 2: Human adds 2 lines, AI deletes 1 of its own AI lines and adds 2 lines
+    
+    # Human adds documentation comments
+    cat > api_handler.py <<'EOF'
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    data = request.get_json()
+    username = data.get('username', '') if data else ''
+    return jsonify({'user': username}), 201
+    # TODO: Add proper database integration
+    # TODO: Add authentication check
+# API endpoint placeholder
+EOF
+    git-ai checkpoint  # Human added 2 lines
+    
+    # AI improves validation (removes simple return, adds validation logic)
+    cat > api_handler.py <<'EOF'
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    data = request.get_json()
+    username = data.get('username', '') if data else ''
+    # TODO: Add proper database integration
+    # TODO: Add authentication check
+    if not username or len(username) < 3:
+        return jsonify({'error': 'Invalid username'}), 400
+# API endpoint placeholder
+EOF
+    git-ai checkpoint mock_ai api_handler.py  # AI deleted 1 line and added 2 lines
+    
+    git add api_handler.py
+    git commit -m "Commit 2: Add documentation and improve validation"
+    commit2_sha=$(git rev-parse HEAD)
+    
+    echo "=== Commit 2 Stats ===" >&3
+    stats_commit2=$(get_stats_json "$commit2_sha")
+    echo "$stats_commit2" >&3
+    
+    # Verify Commit 2 stats
+    # Human added 2 lines
+    # AI added 2 new lines
+    # AI deleted 1 of its own AI lines from Commit 1
+    # Expectations:
+    #  - human_additions: 2 (2 human lines added)
+    #  - ai_additions: 2 (2 new AI lines added)
+    #  - ai_accepted: 2 (2 new lines are not modified by human)
+    #  - mixed_additions: 0 (AI lines are not modified by human)
+    #  - total_ai_additions: 2 (AI added 2 new lines)
+    #  - total_ai_deletions: 1 (AI deleted one of its previous lines)
+    #  - git_diff_deleted_lines: 1 (deleted 1 AI line)
+    #  - git_diff_added_lines: 4 (2 human + 2 AI lines added)
+    expected_commit2_json='{
+        "human_additions": 2,
+        "mixed_additions": 0,
+        "ai_additions": 2,
+        "ai_accepted": 2,
+        "total_ai_additions": 2,
+        "total_ai_deletions": 1,
+        "time_waiting_for_ai": 0,
+        "git_diff_deleted_lines": 1,
+        "git_diff_added_lines": 4,
+        "tool_model_breakdown": {
+            "mock_ai::unknown": {
+                "ai_additions": 2,
+                "mixed_additions": 0,
+                "ai_accepted": 2,
+                "total_ai_additions": 2,
+                "total_ai_deletions": 1,
+                "time_waiting_for_ai": 0
+            }
+        }
+    }'
+    
+    compare_json "$expected_commit2_json" "$stats_commit2" "Commit 2 stats mismatch" || return 1
+    echo "✓ Commit 2 stats verified" >&3
+    
+    # Capture blame output BEFORE squashing
+    echo "=== Blame BEFORE squash ===" >&3
+    blame_before_squash=$(git-ai blame api_handler.py)
+    echo "$blame_before_squash" >&3
+    
+    # Perform interactive rebase to squash the last 2 commits
+    echo "=== Performing interactive rebase with squash ===" >&3
+    
+    # Use the squash-editor.sh script from the repository
+    export GIT_SEQUENCE_EDITOR="$ORIGINAL_DIR/tests/e2e/squash-editor.sh"
+    export GIT_EDITOR="echo 'Squashed: Implement user creation endpoint with validation and logging' >"
+    
+    # Perform the interactive rebase
+    git rebase -i --autosquash HEAD~2 2>&1 | tee /dev/stderr
+    
+    unset GIT_SEQUENCE_EDITOR
+    unset GIT_EDITOR
+    
+    # Verify that the rebase resulted in one commit
+    squashed_commit_sha=$(git rev-parse HEAD)
+    new_commit_count=$(git rev-list --count HEAD ^$base_commit_sha)
+    
+    if [[ "$new_commit_count" != "1" ]]; then
+        echo "ERROR: Interactive rebase did not result in one commit (got $new_commit_count)" >&3
+        git log --oneline HEAD~3..HEAD >&3
+        return 1
+    fi
+    
+    echo "✓ Successfully squashed last 2 commits into one" >&3
+    
+    # Get squashed commit stats
+    echo "=== Squashed Commit Stats ===" >&3
+    stats_squashed=$(get_stats_json "$squashed_commit_sha")
+    echo "$stats_squashed" >&3
+    
+    # Verify blame output AFTER squashing
+    echo "=== Blame AFTER squash ===" >&3
+    blame_after_squash=$(git-ai blame api_handler.py)
+    echo "$blame_after_squash" >&3
+    
+    # Verify that both AI and human attributions are preserved
+    [[ "$blame_after_squash" =~ "mock_ai" ]] || {
+        echo "ERROR: 'mock_ai' not found in squashed blame output" >&3
+        return 1
+    }
+    
+    [[ "$blame_after_squash" =~ "Test User" ]] || {
+        echo "ERROR: 'Test User' not found in squashed blame output" >&3
+        return 1
+    }
+    
+    # Verify the squashed commit has combined authorship from all commits
+    # Final file should have (compared to base):
+    # - 4 human lines (2 from commit 1: route + function, 2 from commit 2: TODO comments)
+    # - 4 AI lines in final file (2 from commit 1: data extraction + username parsing, 2 from commit 2: validation)
+    # Total git diff shows: 8 additions (4 human + 4 AI)
+    # Total AI additions across all commits: 3 + 2 = 5 (including 1 line later deleted by AI)
+    # Total AI deletions across all commits: 1 (AI replaced simple return with validation)
+    
+    expected_squashed_json='{
+        "human_additions": 4,
+        "mixed_additions": 0,
+        "ai_additions": 4,
+        "ai_accepted": 4,
+        "total_ai_additions": 5,
+        "total_ai_deletions": 1,
+        "time_waiting_for_ai": 0,
+        "git_diff_deleted_lines": 0,
+        "git_diff_added_lines": 8,
+        "tool_model_breakdown": {
+            "mock_ai::unknown": {
+                "ai_additions": 4,
+                "mixed_additions": 0,
+                "ai_accepted": 4,
+                "total_ai_additions": 5,
+                "total_ai_deletions": 1,
+                "time_waiting_for_ai": 0
+            }
+        }
+    }'
+    
+    compare_json "$expected_squashed_json" "$stats_squashed" "Squashed stats mismatch" || return 1
+    
+    echo "✓ Interactive rebase with squash successfully preserved line attributions" >&3
+}
