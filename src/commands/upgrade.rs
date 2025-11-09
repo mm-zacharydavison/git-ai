@@ -219,28 +219,50 @@ fn try_mock_releases(
 fn run_install_script_for_tag(tag: &str, silent: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
+        // On Windows, we need to run the installer detached because the current git-ai
+        // binary and shims are in use and need to be replaced. The installer will wait
+        // for the files to be released before proceeding.
+        let pid = std::process::id();
+        let log_dir = dirs::home_dir()
+            .ok_or_else(|| "Could not determine home directory".to_string())?
+            .join(".git-ai")
+            .join("windows-upgrade-logs");
+        
+        // Ensure the log directory exists
+        let _ = fs::create_dir_all(&log_dir);
+        
+        let log_file = log_dir.join(format!("upgrade-{}.log", pid));
+        let log_path_str = log_file.to_string_lossy().to_string();
+        
+        // Create a PowerShell command that runs detached and logs to a file
+        let ps_script = format!(
+            "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',\"irm {} | iex\" -NoNewWindow -RedirectStandardOutput '{}' -RedirectStandardError '{}'",
+            INSTALL_SCRIPT_PS1_URL,
+            log_path_str,
+            log_path_str
+        );
+        
         let mut cmd = Command::new("powershell");
         cmd.arg("-NoProfile")
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-Command")
-            .arg(format!("irm {} | iex", INSTALL_SCRIPT_PS1_URL))
+            .arg(&ps_script)
             .env(GIT_AI_RELEASE_ENV, tag);
 
         if silent {
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
 
-        match cmd.status() {
-            Ok(status) => {
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Installation script failed with exit code: {:?}",
-                        status.code()
-                    ))
+        match cmd.spawn() {
+            Ok(_) => {
+                if !silent {
+                    println!("\x1b[1;33mNote: The installation is running in the background on Windows.\x1b[0m");
+                    println!("This allows the current git-ai process to exit and release file locks.");
+                    println!("Check the log file for progress: {}", log_path_str);
+                    println!("The upgrade should complete shortly as long as there are no long-running git or git-ai processes in the background.");
                 }
+                Ok(())
             }
             Err(e) => Err(format!("Failed to run installation script: {}", e)),
         }
