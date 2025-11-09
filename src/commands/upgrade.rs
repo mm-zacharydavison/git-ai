@@ -14,7 +14,6 @@ const INSTALL_SCRIPT_PS1_URL: &str =
     "https://raw.githubusercontent.com/acunniffe/git-ai/main/install.ps1";
 const RELEASES_API_URL: &str = "https://usegitai.com/api/releases";
 const GIT_AI_RELEASE_ENV: &str = "GIT_AI_RELEASE_TAG";
-const BACKGROUND_ENV: &str = "GIT_AI_BACKGROUND";
 const BACKGROUND_SPAWN_THROTTLE_SECS: u64 = 60;
 
 static UPDATE_NOTICE_EMITTED: AtomicBool = AtomicBool::new(false);
@@ -273,10 +272,12 @@ fn run_install_script_for_tag(tag: &str, silent: bool) -> Result<(), String> {
 
 pub fn run_with_args(args: &[String]) {
     let mut force = false;
+    let mut background = false;
 
     for arg in args {
         match arg.as_str() {
             "--force" => force = true,
+            "--background" => background = true, // Undocumented flag for internal use when spawning background process
             _ => {
                 eprintln!("Unknown argument: {}", arg);
                 eprintln!("Usage: git-ai upgrade [--force]");
@@ -285,14 +286,13 @@ pub fn run_with_args(args: &[String]) {
         }
     }
 
-    run_impl(force);
+    run_impl(force, background);
 }
 
-fn run_impl(force: bool) {
+fn run_impl(force: bool, background: bool) {
     let config = config::Config::get();
     let channel = config.update_channel();
-    let skip_install =
-        std::env::var(BACKGROUND_ENV).as_deref() == Ok("1") && config.auto_updates_disabled();
+    let skip_install = background && config.auto_updates_disabled();
     let _ = run_impl_with_url(force, None, channel, skip_install);
 }
 
@@ -434,11 +434,11 @@ pub fn maybe_schedule_background_update_check() {
 }
 
 fn spawn_background_upgrade_process() -> bool {
-    match std::env::current_exe() {
+    match crate::utils::current_git_ai_exe() {
         Ok(exe) => {
             let mut cmd = Command::new(exe);
             cmd.arg("upgrade")
-                .env(BACKGROUND_ENV, "1")
+                .arg("--background")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             cmd.spawn().is_ok()
