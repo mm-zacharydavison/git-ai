@@ -545,7 +545,7 @@ pub fn stats_from_authorship_log(
     // Human additions are the difference between total git diff and AI additions (ensure non-negative)
     commit_stats.human_additions = std::cmp::max(
         0,
-        git_diff_added_lines.saturating_sub(commit_stats.ai_accepted),
+        git_diff_added_lines.saturating_sub(commit_stats.ai_additions),
     );
 
     commit_stats
