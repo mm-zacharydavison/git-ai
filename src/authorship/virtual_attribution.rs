@@ -1086,6 +1086,9 @@ impl VirtualAttributions {
     /// This is useful for range analysis where we only want to count AI contributions
     /// from commits within the range, not from before
     pub fn filter_to_commits(&mut self, commit_shas: &HashSet<String>) {
+        // Capture original AI prompt IDs before filtering
+        let original_prompt_ids: HashSet<String> = self.prompts.keys().cloned().collect();
+
         // Filter prompts to only include those from the specified commits
         let mut filtered_prompts = BTreeMap::new();
 
@@ -1108,11 +1111,10 @@ impl VirtualAttributions {
 
         // Remove attributions that reference filtered-out prompts
         for (_file_path, (char_attrs, _line_attrs)) in self.attributions.iter_mut() {
-            // Remove any attributions with author_ids that are no longer in prompts
             char_attrs.retain(|attr| {
-                // If it's a human attribution (not in prompts at all), keep it
-                // If it's an AI attribution, only keep if the prompt is still in our filtered set
-                !self.prompts.contains_key(&attr.author_id)
+                // Keep human attributions (not in original prompts at all)
+                // OR keep AI attributions that are still valid after filtering
+                !original_prompt_ids.contains(&attr.author_id)
                     || valid_prompt_ids.contains(&attr.author_id)
             });
         }
