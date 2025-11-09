@@ -95,7 +95,7 @@ pub fn run(repo: &Repository, json_output: bool) -> Result<(), GitAiError> {
     let mut authorship_logs: HashMap<String, AuthorshipLog> = HashMap::new();
 
     // Initialize the storage system once
-    let repo_storage = RepoStorage::for_repo_path(repo.path());
+    let repo_storage = RepoStorage::for_repo_path(repo.path(), &repo.workdir()?);
 
     for commit_hash in &commit_hashes {
         // Get the working log for this commit
@@ -197,7 +197,7 @@ fn find_working_log_refs(repo: &Repository) -> Result<HashMap<String, usize>, Gi
     let mut working_log_refs = HashMap::new();
 
     // Initialize the new storage system
-    let repo_storage = RepoStorage::for_repo_path(repo.path());
+    let repo_storage = RepoStorage::for_repo_path(repo.path(), &repo.workdir()?);
 
     // Check if the working logs directory exists
     if !repo_storage.working_logs.exists() {
