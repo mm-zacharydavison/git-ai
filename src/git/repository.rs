@@ -1714,7 +1714,7 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
     })
 }
 
-pub(crate) fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
+pub fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
     let workdir = git_dir
         .parent()
         .ok_or_else(|| GitAiError::Generic("Git directory has no parent".to_string()))?
