@@ -373,6 +373,7 @@ pub fn write_stats_to_markdown(stats: &CommitStats) -> String {
         0
     };
 
+    output.push_str("Stats powered by [Git AI](https://github.com/acunniffe/git-ai)\n\n");
     // Build the fenced code block
     output.push_str("```text\n");
 
@@ -398,6 +399,47 @@ pub fn write_stats_to_markdown(stats: &CommitStats) -> String {
     output.push_str(&format!("  {}%\n", ai_percentage));
 
     output.push_str("```");
+
+    // Add details section
+    output.push_str("\n\n<details>\n");
+    output.push_str("<summary>More stats</summary>\n\n");
+
+    // Calculate lines generated per line accepted
+    let lines_per_accepted = if stats.ai_accepted > 0 {
+        stats.total_ai_additions as f64 / stats.ai_accepted as f64
+    } else {
+        0.0
+    };
+    output.push_str(&format!(
+        "- {:.1} lines generated for every 1 accepted\n",
+        lines_per_accepted
+    ));
+
+    // Format time waiting for AI in minutes
+    let minutes = stats.time_waiting_for_ai / 60;
+    let seconds = stats.time_waiting_for_ai % 60;
+    let time_str = if minutes > 0 {
+        format!("{} mins {} secs", minutes, seconds)
+    } else {
+        format!("{} secs", seconds)
+    };
+    output.push_str(&format!("- {} time waiting for AI\n", time_str));
+
+    // Find top model by accepted lines
+    if !stats.tool_model_breakdown.is_empty() {
+        if let Some((model_name, model_stats)) = stats
+            .tool_model_breakdown
+            .iter()
+            .max_by_key(|(_, stats)| stats.ai_accepted)
+        {
+            output.push_str(&format!(
+                "- Top model: {} ({} accepted lines, {} generated lines)\n",
+                model_name, model_stats.ai_accepted, model_stats.total_ai_additions
+            ));
+        }
+    }
+
+    output.push_str("\n</details>");
 
     return output;
 }

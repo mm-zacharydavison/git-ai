@@ -261,8 +261,21 @@ fn test_markdown_stats_minimal_human() {
 
 #[test]
 fn test_markdown_stats_formatting() {
-    use git_ai::authorship::stats::write_stats_to_markdown;
+    use git_ai::authorship::stats::{ToolModelHeadlineStats, write_stats_to_markdown};
     use std::collections::BTreeMap;
+
+    let mut tool_model_breakdown = BTreeMap::new();
+    tool_model_breakdown.insert(
+        "cursor::claude-3.5-sonnet".to_string(),
+        ToolModelHeadlineStats {
+            ai_additions: 8,
+            mixed_additions: 2,
+            ai_accepted: 6,
+            total_ai_additions: 10,
+            total_ai_deletions: 3,
+            time_waiting_for_ai: 25,
+        },
+    );
 
     let stats = CommitStats {
         human_additions: 5,
@@ -274,9 +287,10 @@ fn test_markdown_stats_formatting() {
         time_waiting_for_ai: 25,
         git_diff_deleted_lines: 2,
         git_diff_added_lines: 13,
-        tool_model_breakdown: BTreeMap::new(),
+        tool_model_breakdown,
     };
 
     let markdown = write_stats_to_markdown(&stats);
+    println!("{}", markdown);
     assert_debug_snapshot!(markdown);
 }
