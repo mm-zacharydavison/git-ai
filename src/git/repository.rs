@@ -1714,6 +1714,23 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
     })
 }
 
+pub(crate) fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
+    let workdir = git_dir
+        .parent()
+        .ok_or_else(|| GitAiError::Generic("Git directory has no parent".to_string()))?
+        .to_path_buf();
+    let global_args = vec!["-C".to_string(), git_dir.to_string_lossy().to_string()];
+
+    Ok(Repository {
+        global_args,
+        storage: RepoStorage::for_repo_path(git_dir, &workdir),
+        git_dir: git_dir.to_path_buf(),
+        pre_command_base_commit: None,
+        pre_command_refname: None,
+        workdir,
+    })
+}
+
 pub fn find_repository_in_path(path: &str) -> Result<Repository, GitAiError> {
     let global_args = vec!["-C".to_string(), path.to_string()];
     return find_repository(&global_args);
