@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -377,6 +378,11 @@ fn run_impl_with_url(
 
 fn emit_cached_notice(cache: &UpdateCache) {
     if cache.available_semver.is_none() || cache.available_tag.is_none() {
+        return;
+    }
+
+    if !std::io::stdout().is_terminal() {
+        // Don't print the version check notice if stdout is not a terminal/interactive shell
         return;
     }
 
