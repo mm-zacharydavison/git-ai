@@ -36,7 +36,8 @@ impl<'a> Object<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+
 pub struct CommitRange<'a> {
     repo: &'a Repository,
     pub start_oid: String,
@@ -191,6 +192,16 @@ impl<'a> CommitRange<'a> {
             }
             Err(_) => 0, // If they don't share lineage or error occurs, return 0
         }
+    }
+
+    pub fn all_commits(&self) -> Vec<String> {
+        let mut commits = Vec::new();
+        let itt = self.clone().into_iter();
+
+        for commit in itt {
+            commits.push(commit.oid.clone());
+        }
+        commits
     }
 }
 
