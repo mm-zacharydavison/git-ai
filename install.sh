@@ -201,22 +201,20 @@ else
     success "Successfully set up IDE/agent hooks"
 fi
 
-# Write JSON config at ~/.git-ai/config.json
+# Write JSON config at ~/.git-ai/config.json (only if it doesn't exist)
 CONFIG_DIR="$HOME/.git-ai"
 CONFIG_JSON_PATH="$CONFIG_DIR/config.json"
 mkdir -p "$CONFIG_DIR"
 
-TMP_CFG="$CONFIG_JSON_PATH.tmp.$$"
-cat >"$TMP_CFG" <<EOF
+if [ ! -f "$CONFIG_JSON_PATH" ]; then
+    TMP_CFG="$CONFIG_JSON_PATH.tmp.$$"
+    cat >"$TMP_CFG" <<EOF
 {
-  "git_path": "${STD_GIT_PATH}",
-  "ignore_prompts": false,
-  "disable_version_checks": false,
-  "disable_auto_updates": false,
-  "update_channel": "latest"
+  "git_path": "${STD_GIT_PATH}"
 }
 EOF
-mv -f "$TMP_CFG" "$CONFIG_JSON_PATH"
+    mv -f "$TMP_CFG" "$CONFIG_JSON_PATH"
+fi
 
 # Add to PATH automatically if not already there
 if [[ ":$PATH:" != *"$INSTALL_DIR"* ]]; then

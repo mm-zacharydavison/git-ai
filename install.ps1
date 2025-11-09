@@ -291,20 +291,18 @@ if ($pathUpdate.MachineStatus -eq 'Updated') {
 Write-Success "Successfully installed git-ai into $installDir"
 Write-Success "You can now run 'git-ai' from your terminal"
 
-# Write JSON config at %USERPROFILE%\.git-ai\config.json
+# Write JSON config at %USERPROFILE%\.git-ai\config.json (only if it doesn't exist)
 try {
     $configDir = Join-Path $HOME '.git-ai'
     $configJsonPath = Join-Path $configDir 'config.json'
     New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
-    $cfg = @{
-        git_path = $stdGitPath
-        ignore_prompts = $false
-        disable_version_checks = $false
-        disable_auto_updates = $false
-        update_channel = 'latest'
-    } | ConvertTo-Json -Compress
-    $cfg | Out-File -FilePath $configJsonPath -Encoding UTF8 -Force
+    if (-not (Test-Path -LiteralPath $configJsonPath)) {
+        $cfg = @{
+            git_path = $stdGitPath
+        } | ConvertTo-Json -Compress
+        $cfg | Out-File -FilePath $configJsonPath -Encoding UTF8 -Force
+    }
 } catch {
     Write-Host "Warning: Failed to write config.json: $($_.Exception.Message)" -ForegroundColor Yellow
 }
