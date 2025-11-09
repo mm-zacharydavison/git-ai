@@ -102,10 +102,14 @@ fn current_timestamp() -> u64 {
         .as_secs()
 }
 
-fn should_check_for_updates(cache: Option<&UpdateCache>) -> bool {
+fn should_check_for_updates(channel: UpdateChannel, cache: Option<&UpdateCache>) -> bool {
     let now = current_timestamp();
     match cache {
         Some(cache) if cache.last_checked_at > 0 => {
+            // If cache doesn't match the channel, we should check for updates
+            if !cache.matches_channel(channel) {
+                return true;
+            }
             let elapsed = now.saturating_sub(cache.last_checked_at);
             elapsed > UPDATE_CHECK_INTERVAL_HOURS * 3600
         }
@@ -376,7 +380,7 @@ fn run_impl_with_url(
     action
 }
 
-fn emit_cached_notice(cache: &UpdateCache) {
+fn print_cached_notice(cache: &UpdateCache) {
     if cache.available_semver.is_none() || cache.available_tag.is_none() {
         return;
     }
@@ -419,12 +423,12 @@ pub fn maybe_schedule_background_update_check() {
     if config.auto_updates_disabled() {
         if let Some(cache) = cache.as_ref() {
             if cache.matches_channel(channel) && cache.update_available() {
-                emit_cached_notice(cache);
+                print_cached_notice(cache);
             }
         }
     }
 
-    if !should_check_for_updates(cache.as_ref()) {
+    if !should_check_for_updates(channel, cache.as_ref()) {
         return;
     }
 
@@ -593,12 +597,25 @@ mod tests {
         let now = current_timestamp();
         let mut cache = UpdateCache::new(UpdateChannel::Latest);
         cache.last_checked_at = now;
-        assert!(!should_check_for_updates(Some(&cache)));
+        assert!(!should_check_for_updates(UpdateChannel::Latest, Some(&cache)));
 
         let stale_offset = (UPDATE_CHECK_INTERVAL_HOURS * 3600) + 10;
         cache.last_checked_at = now.saturating_sub(stale_offset);
-        assert!(should_check_for_updates(Some(&cache)));
+        assert!(should_check_for_updates(UpdateChannel::Latest, Some(&cache)));
 
-        assert!(should_check_for_updates(None));
+        assert!(should_check_for_updates(UpdateChannel::Latest, None));
+    }
+
+    #[test]
+    fn test_should_check_for_updates_verifies_channel() {
+        let now = current_timestamp();
+        let mut cache = UpdateCache::new(UpdateChannel::Latest);
+        cache.last_checked_at = now;
+        
+        // Cache matches channel - should respect interval
+        assert!(!should_check_for_updates(UpdateChannel::Latest, Some(&cache)));
+        
+        // Cache doesn't match channel - should check for updates
+        assert!(should_check_for_updates(UpdateChannel::Next, Some(&cache)));
     }
 }
