@@ -19,6 +19,7 @@ libc = "0.2"
 git2 = { version = "0.20.2", optional = true }
 diff-match-patch-rs = "0.5.1"
 jsonc-parser = { version = "0.27", features = ["cst"] }
+dirs = "5.0"
 minreq = { version = "2.12", features = ["https-rustls"] }
 url = "2.5"
 glob = "0.3"
@@ -34,3 +35,4 @@ predicates = "3.0"
 insta = "1.38"
 rand = "0.8"
 regex = "1.10"
+filetime = "0.2"

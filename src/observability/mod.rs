@@ -180,7 +180,7 @@ pub fn spawn_background_flush() {
     // and cleanup when telemetry_oss is "off"
     use std::process::Command;
 
-    if let Ok(exe) = std::env::current_exe() {
+    if let Ok(exe) = crate::utils::current_git_ai_exe() {
         let _ = Command::new(exe)
             .arg("flush-logs")
             .stdout(std::process::Stdio::null())

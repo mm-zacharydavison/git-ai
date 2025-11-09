@@ -83,6 +83,9 @@ pub fn handle_git_ai(args: &[String]) {
         "ci" => {
             commands::ci_handlers::handle_ci(&args[1..]);
         }
+        "upgrade" => {
+            commands::upgrade::run_with_args(&args[1..]);
+        }
         "flush-logs" => {
             commands::flush_logs::handle_flush_logs(&args[1..]);
         }
@@ -119,9 +122,13 @@ fn print_help() {
     eprintln!("  ci                 Continuous integration utilities");
     eprintln!("    github                 GitHub CI helpers");
     eprintln!("  squash-authorship  Generate authorship log for squashed commits");
-    eprintln!("    <base_branch> <new_sha> <old_sha>  Required: base branch, new commit SHA, old commit SHA");
+    eprintln!(
+        "    <base_branch> <new_sha> <old_sha>  Required: base branch, new commit SHA, old commit SHA"
+    );
     eprintln!("    --dry-run             Show what would be done without making changes");
     eprintln!("  git-path           Print the path to the underlying git executable");
+    eprintln!("  upgrade            Check for updates and install if available");
+    eprintln!("    --force               Reinstall latest version even if already up to date");
     eprintln!("  version, -v, --version     Print the git-ai version");
     eprintln!("  help, -h, --help           Show this help message");
     eprintln!("");
