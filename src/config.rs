@@ -91,6 +91,7 @@ impl Config {
         &self.git_path
     }
 
+    #[allow(dead_code)]
     pub fn get_ignore_prompts(&self) -> bool {
         self.ignore_prompts
     }

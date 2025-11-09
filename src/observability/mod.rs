@@ -44,6 +44,7 @@ struct PerformanceEnvelope {
 enum LogEnvelope {
     Error(ErrorEnvelope),
     Performance(PerformanceEnvelope),
+    #[allow(dead_code)]
     Message(MessageEnvelope),
 }
 
@@ -160,6 +161,7 @@ pub fn log_performance(operation: &str, duration: Duration, context: Option<serd
 }
 
 /// Log a message to Sentry (info, warning, etc.)
+#[allow(dead_code)]
 pub fn log_message(message: &str, level: &str, context: Option<serde_json::Value>) {
     let envelope = MessageEnvelope {
         event_type: "message".to_string(),

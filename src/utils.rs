@@ -1,7 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::diff_tree_to_tree::Diff;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 /// Check if debug logging is enabled via environment variable
 ///
