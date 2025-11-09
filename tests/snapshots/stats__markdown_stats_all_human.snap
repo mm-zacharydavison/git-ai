@@ -1,5 +1,5 @@
 ---
-source: src/authorship/stats.rs
-expression: human_only_output
+source: tests/stats.rs
+expression: markdown
 ---
 "```text\n🧠 you    ████████████████████  100%\n🤖 ai     ░░░░░░░░░░░░░░░░░░░░  0%\n```"
