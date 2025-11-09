@@ -235,10 +235,10 @@ fn run_install_script_for_tag(tag: &str, silent: bool) -> Result<(), String> {
         let log_path_str = log_file.to_string_lossy().to_string();
         
         // Create a PowerShell command that runs detached and logs to a file
+        // Use *>> to redirect all streams (stdout, stderr, etc.) to the log file
         let ps_script = format!(
-            "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',\"irm {} | iex\" -NoNewWindow -RedirectStandardOutput '{}' -RedirectStandardError '{}'",
+            "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',\"& {{ irm {} | iex }} *>> '{}' 2>&1\" -NoNewWindow",
             INSTALL_SCRIPT_PS1_URL,
-            log_path_str,
             log_path_str
         );
         
@@ -391,7 +391,11 @@ fn run_impl_with_url(
 
     match run_install_script_for_tag(&release.tag, false) {
         Ok(()) => {
-            println!("\x1b[1;32m✓\x1b[0m Successfully installed {}!", release.tag);
+            // On Windows, we spawn the installer in the background and can't verify success
+            #[cfg(not(windows))]
+            {
+                println!("\x1b[1;32m✓\x1b[0m Successfully installed {}!", release.tag);
+            }
         }
         Err(err) => {
             eprintln!("{}", err);
