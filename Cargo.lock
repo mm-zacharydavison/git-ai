@@ -765,7 +765,6 @@ dependencies = [
  "jsonc-parser",
  "libc",
  "minreq",
- "once_cell",
  "predicates",
  "rand",
  "regex",
@@ -775,7 +774,6 @@ dependencies = [
  "sha2",
  "similar",
  "smol",
- "strsim",
  "tempfile",
  "url",
 ]
