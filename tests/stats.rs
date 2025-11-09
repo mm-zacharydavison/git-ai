@@ -39,8 +39,6 @@ fn test_authorship_log_stats() {
         "Pluto (dwarf)".ai(),
     ]);
 
-    println!("repo path: {}", repo.path().display());
-
     // First commit should have all the planets
     let first_commit = repo.stage_all_and_commit("Add planets").unwrap();
 
