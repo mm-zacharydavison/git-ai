@@ -7,6 +7,12 @@ use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 const UPDATE_CHECK_INTERVAL_HOURS: u64 = 24;
 const INSTALL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/acunniffe/git-ai/main/install.sh";
@@ -226,29 +232,52 @@ fn run_install_script_for_tag(tag: &str, silent: bool) -> Result<(), String> {
         let log_dir = dirs::home_dir()
             .ok_or_else(|| "Could not determine home directory".to_string())?
             .join(".git-ai")
-            .join("windows-upgrade-logs");
+            .join("upgrade-logs");
         
         // Ensure the log directory exists
-        let _ = fs::create_dir_all(&log_dir);
+        fs::create_dir_all(&log_dir)
+            .map_err(|e| format!("Failed to create log directory: {}", e))?;
         
         let log_file = log_dir.join(format!("upgrade-{}.log", pid));
         let log_path_str = log_file.to_string_lossy().to_string();
         
-        // Create a PowerShell command that runs detached and logs to a file
-        // Use *>> to redirect all streams (stdout, stderr, etc.) to the log file
+        // Create an empty log file to ensure it exists
+        fs::write(&log_file, format!("Starting upgrade at PID {}\n", pid))
+            .map_err(|e| format!("Failed to create log file: {}", e))?;
+        
+        // PowerShell script that handles its own logging
+        // The script captures all output using Start-Transcript
         let ps_script = format!(
-            "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',\"& {{ irm {} | iex }} *>> '{}' 2>&1\" -NoNewWindow",
+            "$logFile = '{}'; \
+             Start-Transcript -Path $logFile -Append -Force | Out-Null; \
+             Write-Host 'Fetching install script from {}'; \
+             try {{ \
+                 $ErrorActionPreference = 'Continue'; \
+                 $script = Invoke-RestMethod -Uri '{}' -UseBasicParsing; \
+                 Write-Host 'Running install script...'; \
+                 Invoke-Expression $script; \
+                 Write-Host 'Install script completed'; \
+             }} catch {{ \
+                 Write-Host \"Error: $_\"; \
+                 Write-Host \"Stack trace: $($_.ScriptStackTrace)\"; \
+             }} finally {{ \
+                 Stop-Transcript | Out-Null; \
+             }}",
+            log_path_str,
             INSTALL_SCRIPT_PS1_URL,
-            log_path_str
+            INSTALL_SCRIPT_PS1_URL
         );
         
         let mut cmd = Command::new("powershell");
         cmd.arg("-NoProfile")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-Command")
-            .arg(&ps_script)
-            .env(GIT_AI_RELEASE_ENV, tag);
+           .arg("-ExecutionPolicy")
+           .arg("Bypass")
+           .arg("-Command")
+           .arg(&ps_script)
+           .env(GIT_AI_RELEASE_ENV, tag);
+
+        // Hide the spawned console to prevent any host/UI bleed-through
+        cmd.creation_flags(CREATE_NO_WINDOW);
 
         if silent {
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
