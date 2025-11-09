@@ -380,29 +380,3 @@ pub fn print_range_authorship_stats(stats: &RangeAuthorshipStats) {
         }
     }
 }
-
-mod test {
-    use crate::git::find_repository_in_path;
-
-    use super::*;
-
-    #[test]
-    fn test_range_authorship() {
-        let repo = find_repository_in_path("/Users/aidancunniffe/testing-gitflows-git-ai").unwrap();
-
-        println!("repo: {:?}", repo.path());
-        let stats = range_authorship(
-            CommitRange::new(
-                &repo,
-                "1b1f5a39bbe316438b1fe68ccad4c6e70f2e3711".to_string(),
-                "0e24e98340bbac06e2eef29db10b10334f226357".to_string(),
-                "refs/heads/nn".to_string(),
-            )
-            .unwrap(),
-            false,
-        )
-        .unwrap();
-
-        println!("stats: {:?}", stats);
-    }
-}
