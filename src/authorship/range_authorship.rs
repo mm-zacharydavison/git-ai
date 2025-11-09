@@ -88,10 +88,9 @@ pub fn range_authorship(
         debug_log(&format!("✓ Fetched {} from {}", fetch_refspec, remote));
     }
 
-    // Extract start/end before consuming commit_range
+    // Clone commit_range before consuming it
     let repository = commit_range.repo();
-    let start_sha = commit_range.start_oid.clone();
-    let end_sha = commit_range.end_oid.clone();
+    let commit_range_clone = commit_range.clone();
 
     // Collect commit SHAs from the range
     let commit_shas: Vec<String> = commit_range
@@ -101,7 +100,7 @@ pub fn range_authorship(
     let commit_authorship = get_commits_with_notes_from_list(repository, &commit_shas)?;
 
     // Calculate range stats - now just pass start, end, and commits
-    let range_stats = calculate_range_stats_direct(repository, &start_sha, &end_sha, &commit_shas)?;
+    let range_stats = calculate_range_stats_direct(repository, commit_range_clone)?;
 
     Ok(RangeAuthorshipStats {
         authorship_stats: RangeAuthorshipStatsData {
@@ -310,21 +309,22 @@ fn get_git_diff_stats_for_range(
 /// Uses VirtualAttributions approach to create an in-memory squash
 fn calculate_range_stats_direct(
     repo: &Repository,
-    start_sha: &str,
-    end_sha: &str,
-    commit_shas: &[String],
+    commit_range: CommitRange,
 ) -> Result<CommitStats, GitAiError> {
+    let start_sha = commit_range.start_oid.clone();
+    let end_sha = commit_range.end_oid.clone();
     // Special case: single commit range (start == end)
     if start_sha == end_sha {
-        return stats_for_commit_stats(repo, end_sha, "");
+        return stats_for_commit_stats(repo, &end_sha, &commit_range.refname);
     }
 
     // Step 1: Get git diff stats between start and end
     let (git_diff_added_lines, git_diff_deleted_lines) =
-        get_git_diff_stats_for_range(repo, start_sha, end_sha)?;
+        get_git_diff_stats_for_range(repo, &start_sha, &end_sha)?;
 
     // Step 2: Create in-memory authorship log for the range, filtered to only commits in the range
-    let authorship_log = create_authorship_log_for_range(repo, start_sha, end_sha, commit_shas)?;
+    let commit_shas = commit_range.clone().all_commits();
+    let authorship_log = create_authorship_log_for_range(repo, &start_sha, &end_sha, &commit_shas)?;
 
     // Step 3: Calculate stats from the authorship log
     let stats = stats_from_authorship_log(
