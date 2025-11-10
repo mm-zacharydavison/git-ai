@@ -350,24 +350,17 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
         }),
     );
 
-    // // Debug: Check working logs before commit
-    // let working_logs = repo.current_working_logs();
-    // if let Ok(checkpoints) = working_logs.read_all_checkpoints() {
-    //     println!("Checkpoints before commit: {}", checkpoints.len());
-    //     for (i, cp) in checkpoints.iter().enumerate() {
-    //         println!("Checkpoint {}: kind={:?}, entries={}", i, cp.kind, cp.entries.len());
-    //         for entry in &cp.entries {
-    //             println!("  File: {}, attributions={}", entry.file, entry.attributions.len());
-    //         }
-    //     }
-    // }
 
     let working_logs = repo.current_working_logs();
     println!("dirty_files: {:?}", working_logs.dirty_files);
 
-    repo.stage_all_and_commit("Record AI tab completion while other files dirty").unwrap();
+    let commit_result = repo.stage_all_and_commit("Record AI tab completion while other files dirty").unwrap();
+    println!("COMMIT OUTPUT: {}", commit_result.stdout);
 
-    let mut file = repo.filename(&std::path::Path::new("src").join("lib.rs").to_string_lossy());
+
+    commit_result.print_authorship();
+
+    let mut file = repo.filename("src/lib.rs");
     file.assert_lines_and_blame(lines![
         "fn greet() {".human(),
         "    println!(\"hello\");".human(),
