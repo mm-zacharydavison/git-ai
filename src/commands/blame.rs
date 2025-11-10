@@ -196,13 +196,23 @@ impl Repository {
             file_path.to_string()
         };
 
+        // do this before normalizing the path
+        let abs_file_path = repo_root.join(&relative_file_path);
+
+
         #[cfg(windows)]
-        let relative_file_path = normalize_to_posix(&relative_file_path);
+        let relative_file_path = {
+            let normalized = normalize_to_posix(&relative_file_path);
+            // Strip leading ./ or .\ if present
+            normalized.strip_prefix("./").unwrap_or(&normalized).to_string()
+        };
 
         #[cfg(not(windows))]
-        let relative_file_path = relative_file_path;
+        let relative_file_path = {
+            // Also strip leading ./ on non-Windows for consistency
+            relative_file_path.strip_prefix("./").unwrap_or(&relative_file_path).to_string()
+        };
 
-        let abs_file_path = repo_root.join(&relative_file_path);
 
         // Validate that the file exists
         if !abs_file_path.exists() {
