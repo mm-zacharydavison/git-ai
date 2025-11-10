@@ -415,16 +415,14 @@ pub fn write_stats_to_markdown(stats: &CommitStats) -> String {
         lines_per_accepted
     ));
 
-    // Format time waiting for AI in minutes
     let minutes = stats.time_waiting_for_ai / 60;
     let seconds = stats.time_waiting_for_ai % 60;
     let time_str = if minutes > 0 {
-        format!("{} mins {} secs", minutes, seconds)
+        format!("{} minute{}", minutes, if minutes == 1 { "" } else { "s" })
     } else {
-        format!("{} secs", seconds)
+        format!("{} second{}", seconds, if seconds == 1 { "" } else { "s" })
     };
-    output.push_str(&format!("- {} time waiting for AI\n", time_str));
-
+    output.push_str(&format!("- {} waiting for AI \n", time_str));
     // Find top model by accepted lines
     if !stats.tool_model_breakdown.is_empty() {
         if let Some((model_name, model_stats)) = stats
