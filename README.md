@@ -8,6 +8,8 @@
 </div>
 <p align="left">Track the AI Code in your repositories</p>
 
+<video src="https://github.com/user-attachments/assets/68304ca6-b262-4638-9fb6-0a26f55c7986" autoplay="true"></video>
+
 ## Quick Start
 
 #### Mac, Linux, Windows (WSL)
