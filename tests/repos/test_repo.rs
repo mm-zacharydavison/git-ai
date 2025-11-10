@@ -14,7 +14,7 @@ use super::test_file::TestFile;
 
 #[derive(Clone, Debug)]
 pub struct TestRepo {
-    pub path: PathBuf,
+    path: PathBuf,
 }
 
 impl TestRepo {
@@ -216,7 +216,7 @@ impl TestRepo {
     }
 
     pub fn stage_all_and_commit(&self, message: &str) -> Result<NewCommit, String> {
-        println!("stage_all_and_commit: {:?}", self.git(&["add", "-A"]).expect("add --all should succeed"));
+        self.git(&["add", "-A"]).expect("add --all should succeed");
         self.commit(message)
     }
 

@@ -120,12 +120,8 @@ impl<'a> TestFile<'a> {
             };
         }
 
-        // Run blame to get authorship - use relative path from repo root
-        let filename = file_path
-            .strip_prefix(&repo.path)
-            .expect("file path should be within repo")
-            .to_str()
-            .expect("valid path");
+        // Run blame to get authorship
+        let filename = file_path.to_str().expect("valid path");
         let blame_result = repo.git_ai(&["blame", filename]);
 
         let lines = if let Ok(blame_output) = blame_result {
@@ -217,11 +213,7 @@ impl<'a> TestFile<'a> {
     }
 
     pub fn assert_blame_snapshot(&self) {
-        let filename = self.file_path
-            .strip_prefix(&self.repo.path)
-            .expect("file path should be within repo")
-            .to_str()
-            .expect("valid path");
+        let filename = self.file_path.to_str().expect("valid path");
         let blame_output = self
             .repo
             .git_ai(&["blame", filename])
@@ -234,12 +226,8 @@ impl<'a> TestFile<'a> {
     pub fn assert_lines_and_blame<T: Into<ExpectedLine>>(&mut self, lines: Vec<T>) {
         let expected_lines: Vec<ExpectedLine> = lines.into_iter().map(|l| l.into()).collect();
 
-        // Get blame output - use relative path from repo root
-        let filename = self.file_path
-            .strip_prefix(&self.repo.path)
-            .expect("file path should be within repo")
-            .to_str()
-            .expect("valid path");
+        // Get blame output
+        let filename = self.file_path.to_str().expect("valid path");
         let blame_output = self
             .repo
             .git_ai(&["blame", filename])
@@ -312,12 +300,8 @@ impl<'a> TestFile<'a> {
     pub fn assert_committed_lines<T: Into<ExpectedLine>>(&mut self, lines: Vec<T>) {
         let expected_lines: Vec<ExpectedLine> = lines.into_iter().map(|l| l.into()).collect();
 
-        // Get blame output - use relative path from repo root
-        let filename = self.file_path
-            .strip_prefix(&self.repo.path)
-            .expect("file path should be within repo")
-            .to_str()
-            .expect("valid path");
+        // Get blame output
+        let filename = self.file_path.to_str().expect("valid path");
         let blame_output = self
             .repo
             .git_ai(&["blame", filename])
@@ -446,12 +430,8 @@ impl<'a> TestFile<'a> {
 
     /// Assert that the file at the given path matches the expected contents and authorship
     pub fn assert_blame_contents_expected(&self) {
-        // Get blame output - use relative path from repo root
-        let filename = self.file_path
-            .strip_prefix(&self.repo.path)
-            .expect("file path should be within repo")
-            .to_str()
-            .expect("valid path");
+        // Get blame output
+        let filename = self.file_path.to_str().expect("valid path");
         let blame_output = self
             .repo
             .git_ai(&["blame", filename])
