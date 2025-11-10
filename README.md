@@ -48,7 +48,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 
 > [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
 
-![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/bot.png)
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/bot.jpg)
 
 ## Goals of `git-ai` project
 
