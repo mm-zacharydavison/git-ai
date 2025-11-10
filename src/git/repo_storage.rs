@@ -3,7 +3,7 @@ use crate::authorship::authorship_log::PromptRecord;
 use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
-use crate::utils::debug_log;
+use crate::utils::{debug_log, normalize_to_posix};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -157,11 +157,21 @@ impl PersistedWorkingLog {
     }
 
     pub fn set_dirty_files(&mut self, dirty_files: Option<HashMap<String, String>>) {
-        self.dirty_files = dirty_files.map(|map| {
+        println!("pre_transform dirty_files: {:?}", dirty_files);
+
+        let normalized_dirty_files = dirty_files.map(|map| {
             map.into_iter()
-                .map(|(file_path, content)| (self.to_repo_relative_path(&file_path), content))
-                .collect()
+                .map(|(file_path, content)| {
+                    let relative_path = self.to_repo_relative_path(&file_path);
+                    let normalized_path = normalize_to_posix(&relative_path);
+                    (normalized_path, content)
+                })
+                .collect::<HashMap<_, _>>()
         });
+
+        self.dirty_files = normalized_dirty_files;
+
+        println!("setdirty_files: {:?}", self.dirty_files);
     }
 
     pub fn reset_working_log(&self) -> Result<(), GitAiError> {

@@ -307,6 +307,9 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
     println!("lib_file_path_str: {}", lib_file_path_str);
     println!("readme_file_path_str: {}", readme_file_path_str);
 
+    let working_logs = repo.current_working_logs();
+    println!("dirty_files: {:?}", working_logs.dirty_files);
+
     // Before edit snapshot includes all dirty files (AI target plus unrelated human edits)
     run_ai_tab_checkpoint(
         &repo,
@@ -329,6 +332,9 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
             .to_string();
     fs::write(&lib_file_path, &ai_content).unwrap();
 
+    let working_logs = repo.current_working_logs();
+    println!("dirty_files: {:?}", working_logs.dirty_files);
+
     run_ai_tab_checkpoint(
         &repo,
         json!({
@@ -344,17 +350,20 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
         }),
     );
 
-    // Debug: Check working logs before commit
+    // // Debug: Check working logs before commit
+    // let working_logs = repo.current_working_logs();
+    // if let Ok(checkpoints) = working_logs.read_all_checkpoints() {
+    //     println!("Checkpoints before commit: {}", checkpoints.len());
+    //     for (i, cp) in checkpoints.iter().enumerate() {
+    //         println!("Checkpoint {}: kind={:?}, entries={}", i, cp.kind, cp.entries.len());
+    //         for entry in &cp.entries {
+    //             println!("  File: {}, attributions={}", entry.file, entry.attributions.len());
+    //         }
+    //     }
+    // }
+
     let working_logs = repo.current_working_logs();
-    if let Ok(checkpoints) = working_logs.read_all_checkpoints() {
-        println!("Checkpoints before commit: {}", checkpoints.len());
-        for (i, cp) in checkpoints.iter().enumerate() {
-            println!("Checkpoint {}: kind={:?}, entries={}", i, cp.kind, cp.entries.len());
-            for entry in &cp.entries {
-                println!("  File: {}, attributions={}", entry.file, entry.attributions.len());
-            }
-        }
-    }
+    println!("dirty_files: {:?}", working_logs.dirty_files);
 
     repo.stage_all_and_commit("Record AI tab completion while other files dirty").unwrap();
 
