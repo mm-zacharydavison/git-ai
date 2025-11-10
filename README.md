@@ -79,7 +79,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 | [Cursor &gt;1.7](https://usegitai.com/docs/cursor)                                         | ✅         | ✅      |
 | [Claude Code](https://usegitai.com/docs/claude-code)                                       | ✅         | ✅      |
 | [GitHub Copilot in VSCode via Extension](https://usegitai.com/docs/vs-code-github-copilot) | ✅         | ✅      |
-| OpenAI Codex (waiting on [openai/codex #2904](https://github.com/openai/codex/pull/2904))  |            |         |
+| OpenAI Codex (waiting on [openai/codex #2109](https://github.com/openai/codex/issues/2109)) |            |         |
 | Sourcegraph Cody + Amp                                                                     |            |         |
 | Windsurf                                                                                   |            |         |
 | RovoDev CLI                                                                                |            |         |
