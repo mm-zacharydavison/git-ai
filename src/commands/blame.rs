@@ -5,6 +5,8 @@ use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
 use crate::git::repository::exec_git;
+#[cfg(windows)]
+use crate::utils::normalize_to_posix;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use std::collections::HashMap;
 use std::fs;
@@ -193,6 +195,12 @@ impl Repository {
         } else {
             file_path.to_string()
         };
+
+        #[cfg(windows)]
+        let relative_file_path = normalize_to_posix(&relative_file_path);
+
+        #[cfg(not(windows))]
+        let relative_file_path = relative_file_path;
 
         let abs_file_path = repo_root.join(&relative_file_path);
 
