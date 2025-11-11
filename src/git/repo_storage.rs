@@ -227,21 +227,44 @@ impl PersistedWorkingLog {
         }
         let path = Path::new(file_path);
 
-        // Try canonical comparison first (most reliable, especially on Windows)
-        if let Ok(canonical_path) = path.canonicalize() {
-            if canonical_path.starts_with(&self.canonical_workdir) {
-                return canonical_path
-                    .strip_prefix(&self.canonical_workdir)
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-            }
-        }
-
-        // Fallback: try with non-canonical paths
+        // Try without canonicalizing first
         if path.starts_with(&self.repo_workdir) {
             return path
                 .strip_prefix(&self.repo_workdir)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+        }
+
+        // If we couldn't match yet, try canonicalizing both repo_workdir and the input path
+        // On Windows, this uses the canonical_workdir that was pre-computed
+        #[cfg(windows)]
+        let canonical_workdir = &self.canonical_workdir;
+        
+        #[cfg(not(windows))]
+        let canonical_workdir = match self.repo_workdir.canonicalize() {
+            Ok(p) => p,
+            Err(_) => self.repo_workdir.clone(),
+        };
+        
+        let canonical_path = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => path.to_path_buf(),
+        };
+        
+        #[cfg(windows)]
+        if canonical_path.starts_with(canonical_workdir) {
+            return canonical_path
+                .strip_prefix(canonical_workdir)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+        }
+        
+        #[cfg(not(windows))]
+        if canonical_path.starts_with(&canonical_workdir) {
+            return canonical_path
+                .strip_prefix(&canonical_workdir)
                 .unwrap()
                 .to_string_lossy()
                 .to_string();
@@ -332,6 +355,7 @@ impl PersistedWorkingLog {
         Ok(touched_files)
     }
 
+    #[allow(dead_code)]
     pub fn all_ai_touched_files(&self) -> Result<HashSet<String>, GitAiError> {
         let checkpoints = self.read_all_checkpoints()?;
         let mut touched_files = HashSet::new();

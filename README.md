@@ -8,6 +8,8 @@
 </div>
 <p align="left">Track the AI Code in your repositories</p>
 
+<video src="https://github.com/user-attachments/assets/68304ca6-b262-4638-9fb6-0a26f55c7986" muted loop controls autoplay></video>
+
 ## Quick Start
 
 #### Mac, Linux, Windows (WSL)
@@ -48,7 +50,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 
 > [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
 
-![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/bot.png)
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/bot.jpg)
 
 ## Goals of `git-ai` project
 
@@ -77,7 +79,7 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 | [Cursor &gt;1.7](https://usegitai.com/docs/cursor)                                         | ✅         | ✅      |
 | [Claude Code](https://usegitai.com/docs/claude-code)                                       | ✅         | ✅      |
 | [GitHub Copilot in VSCode via Extension](https://usegitai.com/docs/vs-code-github-copilot) | ✅         | ✅      |
-| OpenAI Codex (waiting on [openai/codex #2904](https://github.com/openai/codex/pull/2904))  |            |         |
+| OpenAI Codex (waiting on [openai/codex #2109](https://github.com/openai/codex/issues/2109)) |            |         |
 | Sourcegraph Cody + Amp                                                                     |            |         |
 | Windsurf                                                                                   |            |         |
 | RovoDev CLI                                                                                |            |         |
