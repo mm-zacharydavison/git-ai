@@ -727,10 +727,10 @@ impl<'a> TestFile<'a> {
     fn write_and_checkpoint(&self, author_type: &AuthorType) {
         let contents = self.contents();
         fs::write(&self.file_path, contents).unwrap();
-        let _ = if author_type == &AuthorType::Ai {
-            self.repo.git_ai(&["checkpoint", "mock_ai"])
+        if author_type == &AuthorType::Ai {
+            self.repo.git_ai(&["checkpoint", "mock_ai"]).unwrap();
         } else {
-            self.repo.git_ai(&["checkpoint"])
+            self.repo.git_ai(&["checkpoint"]).unwrap();
         };
     }
 

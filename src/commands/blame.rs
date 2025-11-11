@@ -5,6 +5,8 @@ use crate::error::GitAiError;
 use crate::git::refs::get_reference_as_authorship_log_v3;
 use crate::git::repository::Repository;
 use crate::git::repository::exec_git;
+#[cfg(windows)]
+use crate::utils::normalize_to_posix;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use std::collections::HashMap;
 use std::fs;
@@ -192,6 +194,26 @@ impl Repository {
                 .to_string()
         } else {
             file_path.to_string()
+        };
+
+        // Normalize the file path before use
+        #[cfg(windows)]
+        let relative_file_path = {
+            let normalized = normalize_to_posix(&relative_file_path);
+            // Strip leading ./ or .\ if present
+            normalized
+                .strip_prefix("./")
+                .unwrap_or(&normalized)
+                .to_string()
+        };
+
+        #[cfg(not(windows))]
+        let relative_file_path = {
+            // Also strip leading ./ on non-Windows for consistency
+            relative_file_path
+                .strip_prefix("./")
+                .unwrap_or(&relative_file_path)
+                .to_string()
         };
 
         // Read file content either from a specific commit or from working directory

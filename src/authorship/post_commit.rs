@@ -54,6 +54,7 @@ pub fn post_commit(
         .flat_map(|cp| cp.entries.iter().map(|e| e.file.clone()))
         .collect();
 
+
     // Split VirtualAttributions into committed (authorship log) and uncommitted (INITIAL)
     let (mut authorship_log, initial_attributions) = working_va
         .to_authorship_log_and_initial_working_log(

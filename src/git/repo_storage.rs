@@ -3,7 +3,7 @@ use crate::authorship::authorship_log::PromptRecord;
 use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
-use crate::utils::debug_log;
+use crate::utils::{debug_log, normalize_to_posix};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -73,7 +73,17 @@ impl RepoStorage {
     pub fn working_log_for_base_commit(&self, sha: &str) -> PersistedWorkingLog {
         let working_log_dir = self.working_logs.join(sha);
         fs::create_dir_all(&working_log_dir).unwrap();
-        PersistedWorkingLog::new(working_log_dir, sha, self.repo_workdir.clone(), None)
+        let canonical_workdir = self
+            .repo_workdir
+            .canonicalize()
+            .unwrap_or_else(|_| self.repo_workdir.clone());
+        PersistedWorkingLog::new(
+            working_log_dir,
+            sha,
+            self.repo_workdir.clone(),
+            canonical_workdir,
+            None,
+        )
     }
 
     #[allow(dead_code)]
@@ -123,6 +133,9 @@ pub struct PersistedWorkingLog {
     #[allow(dead_code)]
     pub base_commit: String,
     pub repo_workdir: PathBuf,
+    /// Canonical (absolute, resolved) version of workdir for reliable path comparisons
+    /// On Windows, this uses the \\?\ UNC prefix format
+    pub canonical_workdir: PathBuf,
     pub dirty_files: Option<HashMap<String, String>>,
 }
 
@@ -131,22 +144,30 @@ impl PersistedWorkingLog {
         dir: PathBuf,
         base_commit: &str,
         repo_root: PathBuf,
+        canonical_workdir: PathBuf,
         dirty_files: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
             dir,
             base_commit: base_commit.to_string(),
             repo_workdir: repo_root,
+            canonical_workdir,
             dirty_files,
         }
     }
 
     pub fn set_dirty_files(&mut self, dirty_files: Option<HashMap<String, String>>) {
-        self.dirty_files = dirty_files.map(|map| {
+        let normalized_dirty_files = dirty_files.map(|map| {
             map.into_iter()
-                .map(|(file_path, content)| (self.to_repo_relative_path(&file_path), content))
-                .collect()
+                .map(|(file_path, content)| {
+                    let relative_path = self.to_repo_relative_path(&file_path);
+                    let normalized_path = normalize_to_posix(&relative_path);
+                    (normalized_path, content)
+                })
+                .collect::<HashMap<_, _>>()
         });
+
+        self.dirty_files = normalized_dirty_files;
     }
 
     pub fn reset_working_log(&self) -> Result<(), GitAiError> {
@@ -212,14 +233,31 @@ impl PersistedWorkingLog {
         }
 
         // If we couldn't match yet, try canonicalizing both repo_workdir and the input path
+        // On Windows, this uses the canonical_workdir that was pre-computed
+        #[cfg(windows)]
+        let canonical_workdir = &self.canonical_workdir;
+
+        #[cfg(not(windows))]
         let canonical_workdir = match self.repo_workdir.canonicalize() {
             Ok(p) => p,
             Err(_) => self.repo_workdir.clone(),
         };
+
         let canonical_path = match path.canonicalize() {
             Ok(p) => p,
             Err(_) => path.to_path_buf(),
         };
+
+        #[cfg(windows)]
+        if canonical_path.starts_with(canonical_workdir) {
+            return canonical_path
+                .strip_prefix(canonical_workdir)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+        }
+
+        #[cfg(not(windows))]
         if canonical_path.starts_with(&canonical_workdir) {
             return canonical_path
                 .strip_prefix(&canonical_workdir)
@@ -227,6 +265,7 @@ impl PersistedWorkingLog {
                 .to_string_lossy()
                 .to_string();
         }
+
         return file_path.to_string();
     }
 

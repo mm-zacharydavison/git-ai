@@ -76,6 +76,12 @@ pub fn _print_diff(diff: &Diff, old_label: &str, new_label: &str) {
     }
 }
 
+
+#[inline]
+pub fn normalize_to_posix(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 pub fn current_git_ai_exe() -> Result<PathBuf, GitAiError> {
     let path = std::env::current_exe()?;
     

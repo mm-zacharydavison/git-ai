@@ -7,7 +7,7 @@ use crate::error::GitAiError;
 use crate::git::repo_storage::{PersistedWorkingLog, RepoStorage};
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::debug_log;
+use crate::utils::{debug_log, normalize_to_posix};
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{HashMap, HashSet};
@@ -73,45 +73,45 @@ pub fn run(
 
         paths.and_then(|p| {
             let repo_workdir = repo.workdir().ok()?;
+
             let filtered: Vec<String> = p
                 .iter()
                 .filter_map(|path| {
-                    // Check if path is absolute and outside repo
-                    if std::path::Path::new(path).is_absolute() {
-                        // For absolute paths, check if they start with repo_workdir
-                        if !std::path::Path::new(path).starts_with(&repo_workdir) {
-                            return None;
-                        }
+                    let path_buf = if std::path::Path::new(path).is_absolute() {
+                        // Absolute path - check directly
+                        std::path::PathBuf::from(path)
                     } else {
-                        // For relative paths, join with workdir and canonicalize to check
-                        let joined = repo_workdir.join(path);
-                        // Try to canonicalize to resolve .. and . components
-                        if let Ok(canonical) = joined.canonicalize() {
-                            if !canonical.starts_with(&repo_workdir) {
-                                return None;
+                        // Relative path - join with workdir
+                        repo_workdir.join(path)
+                    };
+
+                    // Use centralized path comparison (handles Windows canonical paths correctly)
+                    if repo.path_is_in_workdir(&path_buf) {
+                        // Convert to relative path for git operations
+                        if std::path::Path::new(path).is_absolute() {
+                            if let Ok(relative) = path_buf.strip_prefix(&repo_workdir) {
+                                // Normalize path separators to forward slashes for git
+                                Some(normalize_to_posix(&relative.to_string_lossy()))
+                            } else {
+                                // Fallback: try with canonical paths
+                                let canonical_workdir = repo_workdir.canonicalize().ok()?;
+                                let canonical_path = path_buf.canonicalize().ok()?;
+                                if let Ok(relative) =
+                                    canonical_path.strip_prefix(&canonical_workdir)
+                                {
+                                    // Normalize path separators to forward slashes for git
+                                    Some(normalize_to_posix(&relative.to_string_lossy()))
+                                } else {
+                                    None
+                                }
                             }
                         } else {
-                            // If we can't canonicalize (file doesn't exist), check the joined path
-                            // Convert both to canonical form if possible, otherwise use as-is
-                            let normalized_joined = joined.components().fold(
-                                std::path::PathBuf::new(),
-                                |mut acc, component| {
-                                    match component {
-                                        std::path::Component::ParentDir => {
-                                            acc.pop();
-                                        }
-                                        std::path::Component::CurDir => {}
-                                        _ => acc.push(component),
-                                    }
-                                    acc
-                                },
-                            );
-                            if !normalized_joined.starts_with(&repo_workdir) {
-                                return None;
-                            }
+                            // Normalize path separators to forward slashes for git
+                            Some(normalize_to_posix(path))
                         }
+                    } else {
+                        None
                     }
-                    Some(path.clone())
                 })
                 .collect();
 
@@ -372,18 +372,22 @@ fn get_all_tracked_files(
         .unwrap_or_default();
 
     for file in working_log.read_initial_attributions().files.keys() {
-        if is_text_file(working_log, &file) {
-            files.insert(file.clone());
+        // Normalize path separators to forward slashes
+        let normalized_path = normalize_to_posix(file);
+        if is_text_file(working_log, &normalized_path) {
+            files.insert(normalized_path);
         }
     }
 
     if let Ok(working_log_data) = working_log.read_all_checkpoints() {
         for checkpoint in &working_log_data {
             for entry in &checkpoint.entries {
-                if !files.contains(&entry.file) {
+                // Normalize path separators to forward slashes
+                let normalized_path = normalize_to_posix(&entry.file);
+                if !files.contains(&normalized_path) {
                     // Check if it's a text file before adding
-                    if is_text_file(working_log, &entry.file) {
-                        files.insert(entry.file.clone());
+                    if is_text_file(working_log, &normalized_path) {
+                        files.insert(normalized_path);
                     }
                 }
             }
@@ -407,11 +411,13 @@ fn get_all_tracked_files(
     // Ensure to always include all dirty files
     if let Some(ref dirty_files) = working_log.dirty_files {
         for file_path in dirty_files.keys() {
+            // Normalize path separators to forward slashes
+            let normalized_path = normalize_to_posix(file_path);
             // Only add if not already in the files list
-            if !results_for_tracked_files.contains(&file_path) {
+            if !results_for_tracked_files.contains(&normalized_path) {
                 // Check if it's a text file before adding
-                if is_text_file(working_log, &file_path) {
-                    results_for_tracked_files.push(file_path.clone());
+                if is_text_file(working_log, &normalized_path) {
+                    results_for_tracked_files.push(normalized_path);
                 }
             }
         }
@@ -453,7 +459,9 @@ fn get_checkpoint_entry_for_file(
     initial_attributions: Arc<HashMap<String, Vec<LineAttribution>>>,
     ts: u128,
 ) -> Result<Option<WorkingLogEntry>, GitAiError> {
-    let current_content = working_log.read_current_file_content(&file_path).unwrap_or_default();
+    let current_content = working_log
+        .read_current_file_content(&file_path)
+        .unwrap_or_default();
 
     // Try to get previous state from checkpoints first
     let from_checkpoint = previous_checkpoints.iter().rev().find_map(|checkpoint| {
@@ -1237,14 +1245,17 @@ mod tests {
 }
 
 fn is_text_file(working_log: &PersistedWorkingLog, path: &str) -> bool {
+    // Normalize path for dirty_files lookup
+    let normalized_path = normalize_to_posix(path);
     let skip_metadata_check = working_log
         .dirty_files
         .as_ref()
-        .map(|m| m.contains_key(path))
+        .map(|m| m.contains_key(&normalized_path))
         .unwrap_or(false);
 
     if !skip_metadata_check {
-        if let Ok(metadata) = std::fs::metadata(working_log.to_repo_absolute_path(path)) {
+        if let Ok(metadata) = std::fs::metadata(working_log.to_repo_absolute_path(&normalized_path))
+        {
             if !metadata.is_file() {
                 return false;
             }
@@ -1254,7 +1265,7 @@ fn is_text_file(working_log: &PersistedWorkingLog, path: &str) -> bool {
     }
 
     working_log
-        .read_current_file_content(path)
+        .read_current_file_content(&normalized_path)
         .map(|content| !content.chars().any(|c| c == '\0'))
         .unwrap_or(false)
 }

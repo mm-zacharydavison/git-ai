@@ -23,7 +23,6 @@ fn test_amend_add_lines_at_top() {
     );
 
     // Amend the commit WITHOUT staging the AI lines
-    // repo.git(&["add", "-A"]).unwrap();
     repo.git(&["commit", "--amend", "-m", "Initial commit (amended)"])
         .unwrap();
 

@@ -39,6 +39,12 @@ impl TestRepo {
         &self.path
     }
 
+    pub fn canonical_path(&self) -> PathBuf {
+        self.path
+            .canonicalize()
+            .expect("failed to canonicalize test repo path")
+    }
+
     pub fn stats(&self) -> Result<CommitStats, String> {
         let mut stats = self.git_ai(&["stats", "--json"]).unwrap();
         stats = stats.split("}}}").next().unwrap().to_string() + "}}}";
