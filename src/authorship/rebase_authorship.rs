@@ -703,13 +703,9 @@ pub fn rewrite_authorship_after_commit_amend(
     let changed_files = repo.list_commit_files(amended_commit, None)?;
     let mut pathspecs: HashSet<String> = changed_files.into_iter().collect();
 
-    // println!("changed_files: {:?}", changed_files);
-
     let working_log = repo.storage.working_log_for_base_commit(original_commit);
     let touched_files = working_log.all_touched_files()?;
     pathspecs.extend(touched_files);
-
-    println!("pathspecs: {:?}", pathspecs);
 
     // Check if original commit has an authorship log with prompts
     let has_existing_log = get_reference_as_authorship_log_v3(repo, original_commit).is_ok();
@@ -757,9 +753,6 @@ pub fn rewrite_authorship_after_commit_amend(
             Some(&pathspecs_set),
         )?;
 
-
-    println!("authorship_log: {:?}", authorship_log);
-    println!("initial_attributions: {:?}", initial_attributions);
     // Update base commit SHA
     authorship_log.metadata.base_commit_sha = amended_commit.to_string();
 

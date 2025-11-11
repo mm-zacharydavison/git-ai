@@ -157,8 +157,6 @@ impl PersistedWorkingLog {
     }
 
     pub fn set_dirty_files(&mut self, dirty_files: Option<HashMap<String, String>>) {
-        println!("pre_transform dirty_files: {:?}", dirty_files);
-
         let normalized_dirty_files = dirty_files.map(|map| {
             map.into_iter()
                 .map(|(file_path, content)| {
@@ -170,8 +168,6 @@ impl PersistedWorkingLog {
         });
 
         self.dirty_files = normalized_dirty_files;
-
-        println!("setdirty_files: {:?}", self.dirty_files);
     }
 
     pub fn reset_working_log(&self) -> Result<(), GitAiError> {

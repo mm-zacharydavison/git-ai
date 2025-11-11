@@ -135,10 +135,7 @@ fn test_ai_tab_after_edit_checkpoint_includes_dirty_files_and_paths() {
     let edited = result
         .edited_filepaths
         .expect("after_edit should include edited filepaths");
-    assert_eq!(
-        edited,
-        vec!["/Users/test/project/src/main.rs".to_string()]
-    );
+    assert_eq!(edited, vec!["/Users/test/project/src/main.rs".to_string()]);
 
     let dirty_files = result
         .dirty_files
@@ -173,7 +170,10 @@ fn test_ai_tab_rejects_invalid_hook_event() {
                 message
             );
         }
-        other => panic!("expected PresetError for invalid hook_event_name, got {:?}", other),
+        other => panic!(
+            "expected PresetError for invalid hook_event_name, got {:?}",
+            other
+        ),
     }
 }
 
@@ -252,7 +252,9 @@ fn test_ai_tab_e2e_marks_ai_lines() {
     );
 
     // AI tab inserts new lines alongside the existing content
-    let ai_content = "console.log(\"hello world\");\n// Log hello world\nconsole.log(\"hello from ai\");\n".to_string();
+    let ai_content =
+        "console.log(\"hello world\");\n// Log hello world\nconsole.log(\"hello from ai\");\n"
+            .to_string();
     fs::write(&file_path, &ai_content).unwrap();
 
     run_ai_tab_checkpoint(
@@ -269,7 +271,8 @@ fn test_ai_tab_e2e_marks_ai_lines() {
         }),
     );
 
-    repo.stage_all_and_commit("Accept AI tab completion").unwrap();
+    repo.stage_all_and_commit("Accept AI tab completion")
+        .unwrap();
 
     let mut file = repo.filename(relative_path);
     file.assert_lines_and_blame(lines![
@@ -304,11 +307,7 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
     let lib_file_path_str = lib_file_path.to_string_lossy().to_string();
     let readme_file_path_str = readme_file_path.to_string_lossy().to_string();
 
-    println!("lib_file_path_str: {}", lib_file_path_str);
-    println!("readme_file_path_str: {}", readme_file_path_str);
-
     let working_logs = repo.current_working_logs();
-    println!("dirty_files: {:?}", working_logs.dirty_files);
 
     // Before edit snapshot includes all dirty files (AI target plus unrelated human edits)
     run_ai_tab_checkpoint(
@@ -333,7 +332,6 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
     fs::write(&lib_file_path, &ai_content).unwrap();
 
     let working_logs = repo.current_working_logs();
-    println!("dirty_files: {:?}", working_logs.dirty_files);
 
     run_ai_tab_checkpoint(
         &repo,
@@ -350,13 +348,11 @@ fn test_ai_tab_e2e_handles_dirty_files_map() {
         }),
     );
 
-
     let working_logs = repo.current_working_logs();
-    println!("dirty_files: {:?}", working_logs.dirty_files);
 
-    let commit_result = repo.stage_all_and_commit("Record AI tab completion while other files dirty").unwrap();
-    println!("COMMIT OUTPUT: {}", commit_result.stdout);
-
+    let commit_result = repo
+        .stage_all_and_commit("Record AI tab completion while other files dirty")
+        .unwrap();
 
     commit_result.print_authorship();
 

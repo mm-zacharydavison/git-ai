@@ -24,8 +24,6 @@ pub fn run(
     agent_run_result: Option<AgentRunResult>,
     is_pre_commit: bool,
 ) -> Result<(usize, usize, usize), GitAiError> {
-
-
     // Robustly handle zero-commit repos
     let base_commit = match repo.head() {
         Ok(head) => match head.target() {
@@ -75,7 +73,7 @@ pub fn run(
 
         paths.and_then(|p| {
             let repo_workdir = repo.workdir().ok()?;
-            
+
             let filtered: Vec<String> = p
                 .iter()
                 .filter_map(|path| {
@@ -86,7 +84,7 @@ pub fn run(
                         // Relative path - join with workdir
                         repo_workdir.join(path)
                     };
-                    
+
                     // Use centralized path comparison (handles Windows canonical paths correctly)
                     if repo.path_is_in_workdir(&path_buf) {
                         // Convert to relative path for git operations
@@ -98,7 +96,9 @@ pub fn run(
                                 // Fallback: try with canonical paths
                                 let canonical_workdir = repo_workdir.canonicalize().ok()?;
                                 let canonical_path = path_buf.canonicalize().ok()?;
-                                if let Ok(relative) = canonical_path.strip_prefix(&canonical_workdir) {
+                                if let Ok(relative) =
+                                    canonical_path.strip_prefix(&canonical_workdir)
+                                {
                                     // Normalize path separators to forward slashes for git
                                     Some(normalize_to_posix(&relative.to_string_lossy()))
                                 } else {
@@ -124,8 +124,6 @@ pub fn run(
         })
     });
 
-
-    println!("pathspec_filter: {:?}", pathspec_filter);
     let files = get_all_tracked_files(
         repo,
         &base_commit,
@@ -133,8 +131,6 @@ pub fn run(
         pathspec_filter,
         is_pre_commit,
     )?;
-
-    println!("files: {:?}", files);
 
     let mut checkpoints = if reset {
         // If reset flag is set, start with an empty working log
@@ -463,7 +459,9 @@ fn get_checkpoint_entry_for_file(
     initial_attributions: Arc<HashMap<String, Vec<LineAttribution>>>,
     ts: u128,
 ) -> Result<Option<WorkingLogEntry>, GitAiError> {
-    let current_content = working_log.read_current_file_content(&file_path).unwrap_or_default();
+    let current_content = working_log
+        .read_current_file_content(&file_path)
+        .unwrap_or_default();
 
     // Try to get previous state from checkpoints first
     let from_checkpoint = previous_checkpoints.iter().rev().find_map(|checkpoint| {
@@ -1256,7 +1254,8 @@ fn is_text_file(working_log: &PersistedWorkingLog, path: &str) -> bool {
         .unwrap_or(false);
 
     if !skip_metadata_check {
-        if let Ok(metadata) = std::fs::metadata(working_log.to_repo_absolute_path(&normalized_path)) {
+        if let Ok(metadata) = std::fs::metadata(working_log.to_repo_absolute_path(&normalized_path))
+        {
             if !metadata.is_file() {
                 return false;
             }
