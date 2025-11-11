@@ -193,6 +193,10 @@ PATH_CMD="export PATH=\"$INSTALL_DIR:\$PATH\""
 success "Successfully installed git-ai into ${INSTALL_DIR}"
 success "You can now run 'git-ai' from your terminal"
 
+# Print installed version
+INSTALLED_VERSION=$(${INSTALL_DIR}/git-ai --version 2>&1 || echo "unknown")
+echo "Installed git-ai ${INSTALLED_VERSION}"
+
 # Install hooks
 echo "Setting up IDE/agent hooks..."
 if ! ${INSTALL_DIR}/git-ai install-hooks; then
