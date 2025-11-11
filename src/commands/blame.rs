@@ -201,13 +201,19 @@ impl Repository {
         let relative_file_path = {
             let normalized = normalize_to_posix(&relative_file_path);
             // Strip leading ./ or .\ if present
-            normalized.strip_prefix("./").unwrap_or(&normalized).to_string()
+            normalized
+                .strip_prefix("./")
+                .unwrap_or(&normalized)
+                .to_string()
         };
 
         #[cfg(not(windows))]
         let relative_file_path = {
             // Also strip leading ./ on non-Windows for consistency
-            relative_file_path.strip_prefix("./").unwrap_or(&relative_file_path).to_string()
+            relative_file_path
+                .strip_prefix("./")
+                .unwrap_or(&relative_file_path)
+                .to_string()
         };
 
         // Read file content either from a specific commit or from working directory

@@ -240,18 +240,18 @@ impl PersistedWorkingLog {
         // On Windows, this uses the canonical_workdir that was pre-computed
         #[cfg(windows)]
         let canonical_workdir = &self.canonical_workdir;
-        
+
         #[cfg(not(windows))]
         let canonical_workdir = match self.repo_workdir.canonicalize() {
             Ok(p) => p,
             Err(_) => self.repo_workdir.clone(),
         };
-        
+
         let canonical_path = match path.canonicalize() {
             Ok(p) => p,
             Err(_) => path.to_path_buf(),
         };
-        
+
         #[cfg(windows)]
         if canonical_path.starts_with(canonical_workdir) {
             return canonical_path
@@ -260,7 +260,7 @@ impl PersistedWorkingLog {
                 .to_string_lossy()
                 .to_string();
         }
-        
+
         #[cfg(not(windows))]
         if canonical_path.starts_with(&canonical_workdir) {
             return canonical_path

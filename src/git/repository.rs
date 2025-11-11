@@ -931,11 +931,11 @@ impl Repository {
         if let Ok(canonical_path) = path.canonicalize() {
             return canonical_path.starts_with(&self.canonical_workdir);
         }
-        
+
         // Fallback for paths that don't exist yet: normalize by resolving .. and .
-        let normalized = path.components().fold(
-            std::path::PathBuf::new(),
-            |mut acc, component| {
+        let normalized = path
+            .components()
+            .fold(std::path::PathBuf::new(), |mut acc, component| {
                 match component {
                     std::path::Component::ParentDir => {
                         acc.pop();
@@ -944,8 +944,7 @@ impl Repository {
                     _ => acc.push(component),
                 }
                 acc
-            },
-        );
+            });
         normalized.starts_with(&self.workdir)
     }
 
@@ -1776,6 +1775,8 @@ pub fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
         .to_path_buf();
     let global_args = vec!["-C".to_string(), git_dir.to_string_lossy().to_string()];
 
+    let canonical_workdir = workdir.canonicalize().unwrap_or_else(|_| workdir.clone());
+
     Ok(Repository {
         global_args,
         storage: RepoStorage::for_repo_path(git_dir, &workdir),
@@ -1783,6 +1784,7 @@ pub fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
         pre_command_base_commit: None,
         pre_command_refname: None,
         workdir,
+        canonical_workdir,
     })
 }
 
